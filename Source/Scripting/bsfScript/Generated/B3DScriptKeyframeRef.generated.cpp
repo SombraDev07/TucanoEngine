@@ -1,0 +1,23 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#include "B3DScriptKeyframeRef.generated.h"
+#include "B3DMonoMethod.h"
+#include "B3DMonoClass.h"
+#include "B3DMonoUtil.h"
+
+namespace b3d
+{
+	ScriptKeyframeRef::ScriptKeyframeRef()
+	{ }
+
+	MonoObject* ScriptKeyframeRef::Box(const KeyframeRef& value)
+	{
+		return MonoUtil::Box(sInteropMetaData.ScriptClass->GetInternalClass(), (void*)&value);
+	}
+
+	KeyframeRef ScriptKeyframeRef::Unbox(MonoObject* value)
+	{
+		return *(KeyframeRef*)MonoUtil::Unbox(value);
+	}
+
+}

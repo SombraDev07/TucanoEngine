@@ -1,0 +1,12 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index ef34603..7d16371 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -49,4 +49,6 @@ link_directories(${CMAKE_INSTALL_PREFIX}/lib)
+ # Recursively look for CMakeLists.txt in subdirs.
+ add_subdirectory("build/xinclude")
+ add_subdirectory("libmetis")
+-add_subdirectory("programs")
++if(NOT MSVC)
++  add_subdirectory("programs")
++endif()

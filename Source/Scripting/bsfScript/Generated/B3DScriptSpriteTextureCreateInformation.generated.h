@@ -1,0 +1,36 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#pragma once
+
+#include "B3DScriptEnginePrerequisites.h"
+#include "B3DScriptObjectWrapper.h"
+#include "../../../Engine/Core/Image/B3DSpriteTexture.h"
+#include "../../../Engine/Utility/Math/B3DArea2.h"
+#include "../../../Engine/Core/Image/B3DSpriteImage.h"
+#include "../../../Engine/Core/Image/B3DSpriteImage.h"
+
+namespace b3d
+{
+	struct __SpriteTextureCreateInformationInterop
+	{
+		MonoObject* AtlasTexture;
+		TArea2<float, float> UVRange;
+		SpriteAnimationPlayback AnimationPlayback;
+		SpriteSheetGridAnimation Animation;
+	};
+
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptSpriteTextureCreateInformation : public TScriptTypeDefinition<ScriptSpriteTextureCreateInformation>
+	{
+	public:
+		B3D_SCRIPT_TYPE_DEFINITION(kEngineAssembly, kEngineNs, "SpriteTextureCreateInformation")
+
+		static MonoObject* Box(const __SpriteTextureCreateInformationInterop& value);
+		static __SpriteTextureCreateInformationInterop Unbox(MonoObject* value);
+		static SpriteTextureCreateInformation FromInterop(const __SpriteTextureCreateInformationInterop& value);
+		static __SpriteTextureCreateInformationInterop ToInterop(const SpriteTextureCreateInformation& value);
+
+	private:
+		ScriptSpriteTextureCreateInformation();
+
+	};
+}

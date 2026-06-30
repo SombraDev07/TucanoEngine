@@ -1,0 +1,47 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#include "B3DScriptLimitLinear.generated.h"
+#include "B3DMonoMethod.h"
+#include "B3DMonoClass.h"
+#include "B3DMonoUtil.h"
+#include "../../../Engine/Core/Components/B3DJoint.h"
+#include "B3DScriptSpring.generated.h"
+
+namespace b3d
+{
+	ScriptLimitLinear::ScriptLimitLinear()
+	{ }
+
+	MonoObject* ScriptLimitLinear::Box(const __LimitLinearInterop& value)
+	{
+		return MonoUtil::Box(sInteropMetaData.ScriptClass->GetInternalClass(), (void*)&value);
+	}
+
+	__LimitLinearInterop ScriptLimitLinear::Unbox(MonoObject* value)
+	{
+		return *(__LimitLinearInterop*)MonoUtil::Unbox(value);
+	}
+
+	LimitLinear ScriptLimitLinear::FromInterop(const __LimitLinearInterop& value)
+	{
+		LimitLinear output;
+		output.Extent = value.Extent;
+		output.ContactDist = value.ContactDist;
+		output.Restitution = value.Restitution;
+		output.Spring = value.Spring;
+
+		return output;
+	}
+
+	__LimitLinearInterop ScriptLimitLinear::ToInterop(const LimitLinear& value)
+	{
+		__LimitLinearInterop output;
+		output.Extent = value.Extent;
+		output.ContactDist = value.ContactDist;
+		output.Restitution = value.Restitution;
+		output.Spring = value.Spring;
+
+		return output;
+	}
+
+}

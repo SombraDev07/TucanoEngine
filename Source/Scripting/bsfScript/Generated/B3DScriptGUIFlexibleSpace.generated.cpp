@@ -1,0 +1,44 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#include "B3DScriptGUIFlexibleSpace.generated.h"
+#include "B3DMonoMethod.h"
+#include "B3DMonoClass.h"
+#include "B3DMonoUtil.h"
+#include "../../../Engine/Core/GUI/B3DGUISpace.h"
+#include "B3DScriptGUIFlexibleSpace.generated.h"
+
+namespace b3d
+{
+	ScriptGUIFlexibleSpace::ScriptGUIFlexibleSpace(GUIFlexibleSpace* nativeObject)
+		:TScriptGUIElementWrapper(nativeObject)
+	{
+		RegisterEvents();
+	}
+
+	ScriptGUIFlexibleSpace::~ScriptGUIFlexibleSpace()
+	{
+		UnregisterEvents();
+	}
+
+	void ScriptGUIFlexibleSpace::SetupScriptBindings()
+	{
+		sInteropMetaData.ScriptClass->AddInternalCall("Internal_Create", (void*)&ScriptGUIFlexibleSpace::InternalCreate);
+
+	}
+
+	MonoObject* ScriptGUIFlexibleSpace::CreateScriptObject(bool construct)
+	{
+		bool dummy = false;
+		void* ctorParams[1] = { &dummy };
+
+		if(construct)
+			return sInteropMetaData.ScriptClass->CreateInstance("bool", ctorParams);
+
+		return sInteropMetaData.ScriptClass->CreateInstance(false);
+	}
+	void ScriptGUIFlexibleSpace::InternalCreate(MonoObject* scriptObject)
+	{
+		GUIFlexibleSpace* nativeObject = GUIFlexibleSpace::Create();
+		ScriptObjectWrapper::Create<ScriptGUIFlexibleSpace>(nativeObject, scriptObject);
+	}
+}

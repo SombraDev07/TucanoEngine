@@ -1,0 +1,182 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace b3d
+{
+	/** @addtogroup Math
+	 *  @{
+	 */
+
+	/// <summary>
+	/// Generates pseudo random numbers using the Xorshift128 algorithm. Suitable for high performance requirements.
+	/// </summary>
+	[ShowInInspector]
+	public partial class Random : ScriptObject
+	{
+		private Random(bool __dummy0) { }
+		protected Random() { }
+
+		/// <summary>Initializes a new generator using the specified seed.</summary>
+		public Random(int seed = 0)
+		{
+			Internal_Random(this, seed);
+		}
+
+		/// <summary>Changes the seed of the generator to the specified value.</summary>
+		public void SetSeed(int seed)
+		{
+			Internal_SetSeed(mCachedPtr, seed);
+		}
+
+		/// <summary>Returns a random value in range [0, std::numeric_limits&lt;uint32_t&gt;::max()].</summary>
+		public int Get()
+		{
+			return Internal_Get(mCachedPtr);
+		}
+
+		/// <summary>Returns a random value in range [min, max].</summary>
+		public int GetRange(int min, int max)
+		{
+			return Internal_GetRange(mCachedPtr, min, max);
+		}
+
+		/// <summary>Returns a random value in range [0, 1].</summary>
+		public float GetUNorm()
+		{
+			return Internal_GetUNorm(mCachedPtr);
+		}
+
+		/// <summary>Returns a random value in range [-1, 1].</summary>
+		public float GetSNorm()
+		{
+			return Internal_GetSNorm(mCachedPtr);
+		}
+
+		/// <summary>Returns a random unit vector in three dimensions.</summary>
+		public Vector3 GetUnitVector()
+		{
+			Vector3 temp;
+			Internal_GetUnitVector(mCachedPtr, out temp);
+			return temp;
+		}
+
+		/// <summary>Returns a random unit vector in two dimensions.</summary>
+		public TVector2<float> GetUnitVector2D()
+		{
+			TVector2<float> temp;
+			Internal_GetUnitVector2D(mCachedPtr, out temp);
+			return temp;
+		}
+
+		/// <summary>Returns a random point inside a unit sphere.</summary>
+		public Vector3 GetPointInSphere()
+		{
+			Vector3 temp;
+			Internal_GetPointInSphere(mCachedPtr, out temp);
+			return temp;
+		}
+
+		/// <summary>
+		/// Returns a random point inside the specified range in a sphere shell of unit radius, with the specified thickness, in 
+		/// range [0, 1]. Thickness of 0 will generate points on the sphere surface, while thickness of 1 will generate points 
+		/// within the entire sphere volume. Intermediate values represent the shell, which is a volume between two concentric 
+		/// spheres.
+		/// </summary>
+		public Vector3 GetPointInSphereShell(float thickness)
+		{
+			Vector3 temp;
+			Internal_GetPointInSphereShell(mCachedPtr, thickness, out temp);
+			return temp;
+		}
+
+		/// <summary>Returns a random point inside a unit circle.</summary>
+		public TVector2<float> GetPointInCircle()
+		{
+			TVector2<float> temp;
+			Internal_GetPointInCircle(mCachedPtr, out temp);
+			return temp;
+		}
+
+		/// <summary>
+		/// Returns a random point inside the specified range in a circle shell of unit radius, with the specified thickness, in 
+		/// range [0, 1]. Thickness of 0 will generate points on the circle edge, while thickness of 1 will generate points 
+		/// within the entire circle surface. Intermediate values represent the shell, which is the surface between two 
+		/// concentric circles.
+		/// </summary>
+		public TVector2<float> GetPointInCircleShell(float thickness)
+		{
+			TVector2<float> temp;
+			Internal_GetPointInCircleShell(mCachedPtr, thickness, out temp);
+			return temp;
+		}
+
+		/// <summary>
+		/// Returns a random point on a unit arc with the specified length (angle). Angle of 360 represents a circle.
+		/// </summary>
+		public TVector2<float> GetPointInArc(Degree angle)
+		{
+			TVector2<float> temp;
+			Internal_GetPointInArc(mCachedPtr, ref angle, out temp);
+			return temp;
+		}
+
+		/// <summary>
+		/// Returns a random point inside the specified range in an arc shell of unit radius, with the specified length (angle) 
+		/// and thickness in range [0, 1]. Angle of 360 represents a circle shell. Thickness of 0 will generate points on the arc 
+		/// edge, while thickness of 1 will generate points on the entire arc &apos;slice&apos;. Intermediate vlaues represent 
+		/// the shell, which is the surface between two concentric circles.
+		/// </summary>
+		public TVector2<float> GetPointInArcShell(Degree angle, float thickness)
+		{
+			TVector2<float> temp;
+			Internal_GetPointInArcShell(mCachedPtr, ref angle, thickness, out temp);
+			return temp;
+		}
+
+		/// <summary>
+		/// Returns a random set of Barycentric coordinates that may be used for generating random points on a triangle.
+		/// </summary>
+		public Vector3 GetBarycentric()
+		{
+			Vector3 temp;
+			Internal_GetBarycentric(mCachedPtr, out temp);
+			return temp;
+		}
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_Random(Random managedInstance, int seed);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_SetSeed(IntPtr thisPtr, int seed);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern int Internal_Get(IntPtr thisPtr);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern int Internal_GetRange(IntPtr thisPtr, int min, int max);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern float Internal_GetUNorm(IntPtr thisPtr);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern float Internal_GetSNorm(IntPtr thisPtr);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetUnitVector(IntPtr thisPtr, out Vector3 __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetUnitVector2D(IntPtr thisPtr, out TVector2<float> __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetPointInSphere(IntPtr thisPtr, out Vector3 __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetPointInSphereShell(IntPtr thisPtr, float thickness, out Vector3 __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetPointInCircle(IntPtr thisPtr, out TVector2<float> __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetPointInCircleShell(IntPtr thisPtr, float thickness, out TVector2<float> __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetPointInArc(IntPtr thisPtr, ref Degree angle, out TVector2<float> __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetPointInArcShell(IntPtr thisPtr, ref Degree angle, float thickness, out TVector2<float> __output);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_GetBarycentric(IntPtr thisPtr, out Vector3 __output);
+	}
+
+	/** @} */
+}

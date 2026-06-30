@@ -1,0 +1,27 @@
+set(codegenExecutable ${CMAKE_ARGV4})
+set(runCodegenCommand ${codegenExecutable}
+	@runCodegenCommandArguments@
+)
+
+message(STATUS ${runCodegenCommand})
+
+if(APPLE)
+	list(APPEND ${runCodegenCommand}
+		-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1)
+	list(APPEND ${runCodegenCommand}
+		-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include)
+	list(APPEND ${runCodegenCommand} -stdlib=libc++)
+endif()
+
+message(STATUS "Generating script bindings, please wait...")
+execute_process(
+	COMMAND ${runCodegenCommand}
+	WORKING_DIRECTORY @GenScriptBinding_WORKING_DIR@
+	RESULT_VARIABLE codegenReturnValue
+)
+
+if (NOT codegenReturnValue EQUAL 0)
+	message(FATAL_ERROR "Failed to generate script bindings.")
+else()
+	message(STATUS "...scripting binding generation OK.")
+endif()

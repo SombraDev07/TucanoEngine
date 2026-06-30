@@ -1,0 +1,31 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#pragma once
+
+#include "B3DScriptEnginePrerequisites.h"
+#include "B3DScriptObjectWrapper.h"
+#include "../../../Engine/Core/Particles/B3DParticleEmitter.h"
+#include "../../../Engine/Utility/Math/B3DVector2.h"
+
+namespace b3d
+{
+	struct __ParticleRectangleShapeSettingsInterop
+	{
+		TVector2<float> Extents;
+	};
+
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptParticleRectShapeSettings : public TScriptTypeDefinition<ScriptParticleRectShapeSettings>
+	{
+	public:
+		B3D_SCRIPT_TYPE_DEFINITION(kEngineAssembly, kEngineNs, "ParticleRectShapeSettings")
+
+		static MonoObject* Box(const __ParticleRectangleShapeSettingsInterop& value);
+		static __ParticleRectangleShapeSettingsInterop Unbox(MonoObject* value);
+		static ParticleRectangleShapeSettings FromInterop(const __ParticleRectangleShapeSettingsInterop& value);
+		static __ParticleRectangleShapeSettingsInterop ToInterop(const ParticleRectangleShapeSettings& value);
+
+	private:
+		ScriptParticleRectShapeSettings();
+
+	};
+}

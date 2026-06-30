@@ -1,0 +1,13 @@
+# Ignored files
+*~
+*.suo
+*.sdf
+*.opensdf
+bin
+lib
+Build
+Data/*
+!Data/**/.reqversion
+B3DExampleConfig.h
+Source/Experimental
+ExperimentalData

@@ -1,0 +1,33 @@
+#pragma once
+
+#define B3D_RENDERER "@RENDERER_MODULE_LIB@"
+#define B3D_GPU_BACKEND "@GPU_BACKEND_MODULE_LIB@"
+#define B3D_AUDIO_BACKEND "@AUDIO_MODULE_LIB@"
+#define B3D_PHYSICS_BACKEND "@PHYSICS_MODULE_LIB@"
+#define B3D_IS_SCRIPTING_ENABLED @B3D_IS_SCRIPTING_ENABLED@
+
+/** Path to the framework source directory. */
+static constexpr const char* kRawAppRoot = "@APP_ROOT_DIR@/";
+
+/** Path to the framework build directory. */
+static constexpr const char* kBuildAppRoot = "@PROJECT_BINARY_DIR@/";
+
+/** Path to the binaries when files haven't been packaged yet (e.g. running from debugger). */
+#if B3D_CONFIG == B3D_CONFIG_ID_DEBUG
+static constexpr const char* kBinariesPath = "@CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG@";
+#elif B3D_CONFIG == B3D_CONFIG_ID_RELWITHDEBINFO
+static constexpr const char* kBinariesPath = "@CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO@";
+#elif B3D_CONFIG == B3D_CONFIG_ID_MINSIZEREL
+static constexpr const char* kBinariesPath = "@CMAKE_RUNTIME_OUTPUT_DIRECTORY_MINSIZEREL@";
+#elif B3D_CONFIG == B3D_CONFIG_ID_RELEASE
+static constexpr const char* kBinariesPath = "@CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE@";
+#endif
+
+/** Banshee 3D related version stuff*/
+#if B3D_IS_ENGINE
+#define B3D_VERSION_MAJOR @B3D_VERSION_MAJOR@
+#define B3D_VERSION_MINOR @B3D_VERSION_MINOR@
+#define B3D_VERSION_PATCH @B3D_VERSION_PATCH@
+#define B3D_CURRENT_RELEASE_YEAR @B3D_CURRENT_RELEASE_YEAR@
+#define B3D_VERSION_STRING _MKSTR(B3D_VERSION_MAJOR) "." _MKSTR(B3D_VERSION_MINOR) "." _MKSTR(B3D_VERSION_PATCH) ".0"
+#endif

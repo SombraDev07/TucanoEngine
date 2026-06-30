@@ -1,0 +1,1 @@
+Modified for the purposes of the Banshee 3D engine project. Most files were stripped and only the low-level fiber functionality from the Marl project was kept. The high-level scheduler built into Banshee is written based on the Marl's scheduler.

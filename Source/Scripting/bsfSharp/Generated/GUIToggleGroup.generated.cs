@@ -1,0 +1,39 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace b3d
+{
+	/** @addtogroup GUI
+	 *  @{
+	 */
+
+	/// <summary>
+	/// Object that allows you to group multiple GUI toggle buttons. Only one button among the grouped ones can be active.
+	/// </summary>
+	[ShowInInspector]
+	public partial class GUIToggleGroup : ScriptObject
+	{
+		private GUIToggleGroup(bool __dummy0, bool __dummy1) { }
+		protected GUIToggleGroup() { }
+
+		/// <summary>
+		/// Creates a toggle group that you may provide to GUIToggleable upon construction. Toggles sharing the same group will 
+		/// only have a single element active at a time.
+		/// </summary>
+		/// <param name="allowAllOff">
+		/// If true all of the toggle buttons can be turned off, if false one will always be turned on.
+		/// </param>
+		public GUIToggleGroup(bool allowAllOff = false)
+		{
+			Internal_Create(this, allowAllOff);
+		}
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_Create(GUIToggleGroup managedInstance, bool allowAllOff);
+	}
+
+	/** @} */
+}

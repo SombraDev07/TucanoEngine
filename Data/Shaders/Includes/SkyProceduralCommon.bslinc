@@ -1,0 +1,40 @@
+// Port of FidelityFX skydomecommon.h (ProceduralCBData) for the B3D BSL shader language.
+// Copyright (c) 2024 Advanced Micro Devices, Inc. (original HLSL). MIT-licensed.
+// Adapted for the TucanoEngine/B3DFramework renderer.
+
+#ifndef SKY_PROCEDURAL_COMMON_BSLINC
+#define SKY_PROCEDURAL_COMMON_BSLINC
+
+mixin SkyProceduralBuffers
+{
+	code
+	{
+		// Constants bound to the procedural sky compute shader. Mirrors ProceduralCBData
+		// from Dependencies/FidelityFX/.../skydome/shaders/skydomecommon.h (register b2).
+		[internal]
+		cbuffer ProceduralSkyParams
+		{
+			float4 gSunDirection;		// xyz = normalized sun direction, w unused
+
+			float gRayleigh;
+			float gTurbidity;
+			float gMieCoefficient;
+			float gLuminance;
+
+			float gMieDirectionalG;
+			float3 gPad;
+		}
+
+		// Cube face dimensions for the environment/irradiance/prefiltered dispatches.
+		[internal]
+		cbuffer SkyCubeDims
+		{
+			uint gCubeFaceSize;			// Width/height of each cube face
+			uint gCubeFaceIndex;		// Current face being written [0,5]
+			uint gMipWidth;				// Width of the current prefiltered mip
+			uint gSampleCount;			// Number of importance samples (prefilter pass)
+		}
+	};
+};
+
+#endif // SKY_PROCEDURAL_COMMON_BSLINC

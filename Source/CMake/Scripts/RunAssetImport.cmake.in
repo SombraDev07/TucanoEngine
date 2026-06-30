@@ -1,0 +1,32 @@
+set(RunAssetImport_EXECUTABLE ${CMAKE_ARGV4})
+
+function(run_import_tool _PREFIX _INPUT_FOLDER _OUTPUT_FOLDER _ARGS)
+	message(STATUS "Checking built-in assets for modifications for '${_PREFIX}'...")
+	message(STATUS "Running: ${RunAssetImport_EXECUTABLE} ${_INPUT_FOLDER}/ ${_OUTPUT_FOLDER}/ ${_ARGS}")
+
+	execute_process(
+		COMMAND ${RunAssetImport_EXECUTABLE} ${_INPUT_FOLDER}/ ${_OUTPUT_FOLDER}/ ${_ARGS}
+		COMMENT "...importing files, please wait."
+		WORKING_DIRECTORY ""
+		RESULT_VARIABLE IMPORT_STATUS_CODE
+	)
+	
+	if((NOT IMPORT_STATUS_CODE EQUAL 0) AND (NOT IMPORT_STATUS_CODE EQUAL 1))
+		message("Failed to import built-in assets. Error code: ${IMPORT_STATUS_CODE}")
+		message(STATUS "...aborting data file packaging.")
+		return()
+	endif()
+	
+	if(IMPORT_STATUS_CODE EQUAL 0)
+		message(STATUS "...done, no built-in assets modifications detected.")
+		return()
+	endif()
+	
+	message(STATUS "...built-in asset import successful.")
+endfunction()
+
+run_import_tool(
+	@RunAssetImport_PREFIX@
+	@RunAssetImport_INPUT_FOLDER@
+	@RunAssetImport_OUTPUT_FOLDER@
+	"@RunAssetImport_CMD_ARGS@")

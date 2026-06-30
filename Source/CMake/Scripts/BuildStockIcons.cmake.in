@@ -1,0 +1,131 @@
+cmake_policy(VERSION 3.12)
+
+# Cleans up the provided name so it can be used as a C++ enum name.
+function(B3DMakeEnumName input output)
+	string(LENGTH ${input} inputLength)
+
+	math(EXPR inputRangeStop "${inputLength} - 1")
+	set(nextCharacterIsUpperCase ON)
+	foreach(characterIndex RANGE ${inputRangeStop})
+		string(SUBSTRING ${input} ${characterIndex} 1 character)
+
+		if(${nextCharacterIsUpperCase})
+			string(TOUPPER ${character} character)
+		endif()
+
+		if(${character} STREQUAL "-")
+			set(nextCharacterIsUpperCase ON)
+		else()
+			set(nextCharacterIsUpperCase OFF)
+			string(APPEND name ${character})
+		endif()
+	endforeach()
+
+	set(${output} ${name} PARENT_SCOPE)
+endfunction()
+
+# Parses the FontAwesome icons.json meta-data file and outputs information about the icons.
+#
+# @param	iconsJSONPath		Absolute path to the icons JSON file.
+# @param	outIconIds			ID for each icon.
+# @param	outIconIdentifiers	Name of the icon usable as a unique C++ identifier. This will be the ID of the icon
+#								with unsupported characters removed, and capitalization adjusted. If an icon has
+#								multiple styles, the style name will be appended to the identifier name.
+# @param	outIconUnicodes		Unicode for each icon.
+# @param	outIconLabels		Label for each icon.
+# @param	outIconStyles		Style for each icon. If an icon has multiple styles, multiple entries for the icon
+#								will be generated in all output lists.
+function(B3DParseFontAwesomeIcons iconsJSONPath outIconIds outIconIdentifiers outIconUnicodes outIconLabels outIconStyles)
+	file(READ ${iconsJSONPath} iconsJSONString)
+
+	macro(B3DCheckJSONError)
+		if(error)
+			message(SEND_ERROR "JSON parse error \"${error}\"")
+		endif()
+	endmacro()
+
+	string(JSON iconCount ERROR_VARIABLE error LENGTH ${iconsJSONString})
+	B3DCheckJSONError()
+
+	math(EXPR iconRangeStop "${iconCount} - 1")
+
+	foreach(iconIndex RANGE ${iconRangeStop})
+		string(JSON iconId ERROR_VARIABLE error MEMBER ${iconsJSONString} ${iconIndex})
+		B3DCheckJSONError()
+
+		string(JSON iconJSONString ERROR_VARIABLE error GET ${iconsJSONString} ${iconId})
+		B3DCheckJSONError()
+
+		string(JSON iconLabel ERROR_VARIABLE error GET ${iconJSONString} "label")
+		B3DCheckJSONError()
+
+		string(JSON iconUnicode ERROR_VARIABLE error GET ${iconJSONString} "unicode")
+		B3DCheckJSONError()
+
+		string(JSON iconStylesJSONString ERROR_VARIABLE error GET ${iconJSONString} "styles")
+		B3DCheckJSONError()
+
+		string(JSON iconStyleCount ERROR_VARIABLE error LENGTH ${iconStylesJSONString})
+		B3DCheckJSONError()
+
+		math(EXPR styleRangeStop "${iconStyleCount} - 1")
+		foreach(styleIndex RANGE ${styleRangeStop})
+			string(JSON iconStyle ERROR_VARIABLE error GET ${iconJSONString} "styles" ${styleIndex})
+			B3DCheckJSONError()
+
+			list(APPEND iconIds ${iconId})
+			list(APPEND iconUnicodes ${iconUnicode})
+			list(APPEND iconLabels "${iconLabel}")
+			list(APPEND iconStyles ${iconStyle})
+
+			if(${iconStyleCount} GREATER 1)
+				B3DMakeEnumName("${iconId}-${iconStyle}" iconIdentifier)
+			else()
+				B3DMakeEnumName(${iconId} iconIdentifier)
+			endif()
+
+			list(APPEND iconIdentifiers ${iconIdentifier})
+		endforeach()
+	endforeach()
+
+	set(${outIconIds} ${iconIds} PARENT_SCOPE)
+	set(${outIconUnicodes} ${iconUnicodes} PARENT_SCOPE)
+	set(${outIconLabels} ${iconLabels} PARENT_SCOPE)
+	set(${outIconStyles} ${iconStyles} PARENT_SCOPE)
+	set(${outIconIdentifiers} ${iconIdentifiers} PARENT_SCOPE)
+endfunction()
+
+set(FONT_AWESOME_INSTALL_DIR ${B3D_FRAMEWORK_ROOT_FOLDER}/Dependencies/FontAwesome CACHE PATH "")
+mark_as_advanced(FONT_AWESOME_INSTALL_DIR)
+
+# Generates a file containing a list of all stock icons, that can be included in C++ code.
+function(B3DGenerateStockIconList fontAwesomeDirectory outputDirectory)
+	set(fontAwesomeIconsJSON ${fontAwesomeDirectory}/metadata/icons.json)
+	B3DParseFontAwesomeIcons(${fontAwesomeIconsJSON}
+			fontAwesomeIconIds
+			fontAwesomeIconIdentifiers
+			fontAwesomeIconUnicodes
+			fontAwesomeIconLabels
+			fontAwesomeIconStyles)
+
+	set(stockIconFileContents "")
+	foreach(iconId iconIdentifier iconUnicode iconLabel iconStyle IN ZIP_LISTS fontAwesomeIconIds fontAwesomeIconIdentifiers fontAwesomeIconUnicodes fontAwesomeIconLabels fontAwesomeIconStyles)
+		list(APPEND stockIconFileContents "B3D_STOCK_ICON(\"fa-${iconId}\", FontAwesome${iconIdentifier}, 0x${iconUnicode}, \"${iconLabel}\", \"fa-${iconStyle}.otf\")\n")
+	endforeach()
+
+	file(WRITE ${outputDirectory}/B3DStockIcons.generated.inc ${stockIconFileContents})
+endfunction()
+
+# Copies any fonts required by stock icons from the corresponding Dependencies folder into the Data folder.
+function(B3DInstallStockIconFontsToDataFolder fontAwesomeDirectory outputDirectory)
+	file(COPY_FILE "${fontAwesomeDirectory}/otfs/Font Awesome 6 Brands-Regular-400.otf" "${outputDirectory}/fa-brands.otf")
+	file(COPY_FILE "${fontAwesomeDirectory}/otfs/Font Awesome 6 Free-Regular-400.otf" "${outputDirectory}/fa-regular.otf")
+	file(COPY_FILE "${fontAwesomeDirectory}/otfs/Font Awesome 6 Free-Solid-900.otf" "${outputDirectory}/fa-solid.otf")
+endfunction()
+
+message(STATUS "Building stock icons...")
+
+B3DGenerateStockIconList(@BuildStockIcons_FONTAWESOME_DIRECTORY@ @BuildStockIcons_ICON_LIST_OUTPUT_DIRECTORY@)
+B3DInstallStockIconFontsToDataFolder(@BuildStockIcons_FONTAWESOME_DIRECTORY@ @BuildStockIcons_FONT_OUTPUT_DIRECTORY@)
+
+message(STATUS "...stock icon generation complete.")

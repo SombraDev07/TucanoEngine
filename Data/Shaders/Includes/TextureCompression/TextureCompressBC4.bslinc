@@ -1,0 +1,198 @@
+// BC4 encoder: a 4x4 single-channel block -> a 64-bit block in the 8-value interpolated mode (r0 > r1). Endpoints start
+// at the value extent, are least-squares (Lloyd) refined over the assigned indices, then a joint endpoint-window search
+// escapes the local minimum. Reused by BC3 (alpha) and BC5 (R and G). BCN_REFINE_PASSES comes from
+// TextureCompressLineFit.bslinc (this encoder uses none of that file's mixin code).
+#include "$ENGINE$\TextureCompression\TextureCompressLineFit.bslinc"
+
+mixin TextureCompressBC4
+{
+	code
+	{
+		// Encodes a 4x4 single-channel block into a 64-bit BC4 block using the
+		// 8-value interpolated mode (r0 > r1). Endpoints start at the value extent and are
+		// least-squares-refined over the assigned indices.
+		uint2 CompressBC4(float texels[16])
+		{
+			float minV = texels[0];
+			float maxV = texels[0];
+			[unroll]
+			for (uint i = 1; i < 16; ++i)
+			{
+				minV = min(minV, texels[i]);
+				maxV = max(maxV, texels[i]);
+			}
+
+			// Maps each 3-bit index to its r1 (minV) blend factor.
+			float idxW[8];
+			idxW[0] = 0.0f; idxW[1] = 1.0f;
+			idxW[2] = 1.0f / 7.0f; idxW[3] = 2.0f / 7.0f; idxW[4] = 3.0f / 7.0f;
+			idxW[5] = 4.0f / 7.0f; idxW[6] = 5.0f / 7.0f; idxW[7] = 6.0f / 7.0f;
+
+			uint r0 = 0, r1 = 0;
+			uint idxLo = 0;
+			uint idxHi = 0;
+
+			// Pass 0: assign indices then least-squares-refine the endpoints.
+			// Pass 1: re-assign indices against the refined endpoints and emit.
+			// Runtime loop (not [unroll]), because we're seeing hangs when compiling this shader on AMD
+			for (uint refinePass = 0; refinePass < BCN_REFINE_PASSES; ++refinePass)
+			{
+				r0 = (uint)round(saturate(maxV) * 255.0f);
+				r1 = (uint)round(saturate(minV) * 255.0f);
+				float fr0 = r0 / 255.0f;
+				float fr1 = r1 / 255.0f;
+
+				float palette[8];
+				palette[0] = fr0;
+				palette[1] = fr1;
+				[unroll]
+				for (uint p = 1; p < 7; ++p)
+					palette[p + 1] = ((7 - p) * fr0 + p * fr1) / 7.0f;
+
+				uint idx[16];
+				idxLo = 0;
+				idxHi = 0;
+				[unroll]
+				for (uint j = 0; j < 16; ++j)
+				{
+					float v = texels[j];
+					uint best = 0;
+					float bestDist = 1e20f;
+					[unroll]
+					for (uint k = 0; k < 8; ++k)
+					{
+						float d = v - palette[k];
+						float dist = d * d;
+						if (dist < bestDist)
+						{
+							bestDist = dist;
+							best = k;
+						}
+					}
+					idx[j] = best;
+
+					uint pos = j * 3;
+					if (pos < 32)
+					{
+						idxLo |= best << pos;
+						if (pos + 3 > 32)
+							idxHi |= best >> (32 - pos);
+					}
+					else
+						idxHi |= best << (pos - 32);
+				}
+
+				if (refinePass + 1 < BCN_REFINE_PASSES)
+				{
+					// Solve the 2x2 normal equations for the endpoints that minimise error
+					// given the fixed indices.
+					float A = 0, B = 0, C = 0, sumA = 0, sumB = 0;
+					[unroll]
+					for (uint j = 0; j < 16; ++j)
+					{
+						float w = idxW[idx[j]];
+						float a = 1.0f - w;
+						A += a * a; B += a * w; C += w * w;
+						sumA += a * texels[j];
+						sumB += w * texels[j];
+					}
+					float det = A * C - B * B;
+					if (abs(det) > 1e-7f)
+					{
+						float invDet = 1.0f / det;
+						float e0 = ( C * sumA - B * sumB) * invDet;
+						float e1 = (-B * sumA + A * sumB) * invDet;
+						// Keep r0 >= r1 so pass 1 stays in 8-value mode; indices are
+						// reassigned fresh against the ordered palette, so no remap needed.
+						maxV = saturate(max(e0, e1));
+						minV = saturate(min(e0, e1));
+					}
+				}
+			}
+
+			// Joint endpoint window search (replaces the index-fixed +/-1 polish). For every (r0,r1) candidate in a
+			// window around the Lloyd-refined endpoints, do a *fresh* nearest-level assignment and evaluate the true
+			// squared error. Because each candidate re-derives its own index map, this explores different assignments
+			// globally and escapes the local minimum Lloyd converges to - which is the bulk of the quality gap to CPU
+			// encoders. For evenly-spaced levels the nearest index is closed form (project onto the ramp + round), so
+			// no inner 8-way palette match is needed. The o0/o1 loops are runtime (not [unroll]) to keep the IR small.
+			{
+				const int kW = 8; // +/- search radius in 8-bit endpoint codes
+				int baseR0 = (int)r0, baseR1 = (int)r1;
+				int bestR0 = baseR0, bestR1 = baseR1;
+				float bestErr = 1e30f;
+				[loop]
+				for (int o0 = -kW; o0 <= kW; ++o0)
+				{
+					int nc0 = clamp(baseR0 + o0, 0, 255);
+					float q0 = nc0 / 255.0f;
+					[loop]
+					for (int o1 = -kW; o1 <= kW; ++o1)
+					{
+						int nc1 = clamp(baseR1 + o1, 0, 255);
+						float q1 = nc1 / 255.0f;
+						float diff = q1 - q0;
+						float invd = (abs(diff) > 1e-6f) ? (7.0f / diff) : 0.0f;
+						float se = 0;
+						[unroll]
+						for (uint t = 0; t < 16; ++t)
+						{
+							float v = texels[t];
+							float kf = clamp(round((v - q0) * invd), 0.0f, 7.0f);
+							float recon = q0 + kf * diff / 7.0f;
+							float e = v - recon;
+							se += e * e;
+						}
+						if (se < bestErr) { bestErr = se; bestR0 = nc0; bestR1 = nc1; }
+					}
+				}
+				r0 = (uint)bestR0; r1 = (uint)bestR1;
+			}
+
+			// 8-value mode requires r0 >= r1; the palette set is identical under a swap, so reorder and let the final
+			// re-assignment below pick fresh indices (no remap needed).
+			if (r0 < r1) { uint tmp = r0; r0 = r1; r1 = tmp; }
+
+			// Final index assignment + pack against the polished, ordered endpoints.
+			{
+				float fr0 = r0 / 255.0f;
+				float fr1 = r1 / 255.0f;
+				float pal[8];
+				pal[0] = fr0; pal[1] = fr1;
+				[unroll]
+				for (uint p = 1; p < 7; ++p)
+					pal[p + 1] = ((7 - p) * fr0 + p * fr1) / 7.0f;
+
+				idxLo = 0;
+				idxHi = 0;
+				[unroll]
+				for (uint j = 0; j < 16; ++j)
+				{
+					uint best = 0;
+					float bestDist = 1e20f;
+					[unroll]
+					for (uint k = 0; k < 8; ++k)
+					{
+						float d = texels[j] - pal[k];
+						float dist = d * d;
+						if (dist < bestDist) { bestDist = dist; best = k; }
+					}
+					uint pos = j * 3;
+					if (pos < 32)
+					{
+						idxLo |= best << pos;
+						if (pos + 3 > 32)
+							idxHi |= best >> (32 - pos);
+					}
+					else
+						idxHi |= best << (pos - 32);
+				}
+			}
+
+			// Block layout (little-endian): byte0 = r0, byte1 = r1, then 48 index bits.
+			uint lo = r0 | (r1 << 8) | (idxLo << 16);
+			uint hi = (idxLo >> 16) | (idxHi << 16);
+			return uint2(lo, hi);
+		}
+	};
+};

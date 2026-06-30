@@ -1,0 +1,59 @@
+set(codegenExecutable ${CMAKE_ARGV4})
+set(runCodegenCommand ${codegenExecutable}
+	@runDocGenCommandArguments@
+)
+
+if(APPLE)
+	list(APPEND ${runCodegenCommand}
+		-isystem /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include/c++/v1)
+	list(APPEND ${runCodegenCommand}
+		-isystem /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include)
+	list(APPEND ${runCodegenCommand} -stdlib=libc++)
+endif()
+
+message(STATUS "Generating documentation, please wait...")
+execute_process(
+	COMMAND ${runCodegenCommand}
+	WORKING_DIRECTORY @GenDocGen_WORKING_DIR@
+	RESULT_VARIABLE codegenReturnValue
+	OUTPUT_VARIABLE codegenStdout
+	ERROR_VARIABLE codegenStderr
+)
+
+if(codegenStdout)
+	message(STATUS "${codegenStdout}")
+endif()
+if(codegenStderr)
+	message(STATUS "${codegenStderr}")
+endif()
+
+if (NOT codegenReturnValue EQUAL 0)
+	message(FATAL_ERROR "Failed to generate documentation (exit code ${codegenReturnValue}).")
+endif()
+
+set(pythonExecutable "@B3D_DOCGEN_PYTHON_EXECUTABLE@")
+if("${pythonExecutable}" STREQUAL "")
+	message(FATAL_ERROR "Python3 interpreter was not found at configure time; cannot run BansheeDocGenerator. Re-run CMake after installing Python 3.")
+endif()
+
+execute_process(
+	COMMAND "${pythonExecutable}" -m bansheedocgenerator build
+	WORKING_DIRECTORY @B3D_DOCGEN_PY_WORKING_DIR@
+	RESULT_VARIABLE docGenReturnValue
+	OUTPUT_VARIABLE docGenStdout
+	ERROR_VARIABLE docGenStderr
+)
+
+# Forward captured output so it appears in the build log even when MSBuild drops child stdout.
+if(docGenStdout)
+	message(STATUS "${docGenStdout}")
+endif()
+if(docGenStderr)
+	message(STATUS "${docGenStderr}")
+endif()
+
+if (NOT docGenReturnValue EQUAL 0)
+	message(FATAL_ERROR "Failed to generate documentation (exit code ${docGenReturnValue}).")
+endif()
+
+message(STATUS "...documentation generation OK.")

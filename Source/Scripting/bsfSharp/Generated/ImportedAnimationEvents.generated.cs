@@ -1,0 +1,55 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace b3d
+{
+#if !IS_B3D
+	/** @addtogroup Importer
+	 *  @{
+	 */
+
+	/// <summary>A set of animation events that will be added to an animation clip during animation import.</summary>
+	[ShowInInspector]
+	public partial class ImportedAnimationEvents : ScriptObject
+	{
+		private ImportedAnimationEvents(bool __dummy0) { }
+
+		public ImportedAnimationEvents()
+		{
+			Internal_ImportedAnimationEvents(this);
+		}
+
+		[ShowInInspector]
+		[NativeWrapper]
+		public string Name
+		{
+			get { return Internal_GetName(mCachedPtr); }
+			set { Internal_SetName(mCachedPtr, value); }
+		}
+
+		[ShowInInspector]
+		[NativeWrapper]
+		public AnimationEvent[] Events
+		{
+			get { return Internal_GetEvents(mCachedPtr); }
+			set { Internal_SetEvents(mCachedPtr, value); }
+		}
+
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_ImportedAnimationEvents(ImportedAnimationEvents managedInstance);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern string Internal_GetName(IntPtr thisPtr);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_SetName(IntPtr thisPtr, string value);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern AnimationEvent[] Internal_GetEvents(IntPtr thisPtr);
+		[MethodImpl(MethodImplOptions.InternalCall)]
+		private static extern void Internal_SetEvents(IntPtr thisPtr, AnimationEvent[] value);
+	}
+
+	/** @} */
+#endif
+}

@@ -1,0 +1,1159 @@
+//************************************* B3D Framework - Copyright 2026 Marko Pintera *************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#include "B3DVulkanGpuDevice.h"
+
+#include <algorithm>
+#include "B3DVulkanGpuQueue.h"
+#include "B3DVulkanGpuCommandBuffer.h"
+#include "B3DVulkanGpuTimelineFence.h"
+#include "B3DVulkanHeapBackend.h"
+#include "B3DVulkanUtility.h"
+#include "B3DVulkanGpuBackend.h"
+#include "B3DVulkanSubmitThread.h"
+#include "CoreObject/B3DRenderThread.h"
+#include "Managers/B3DVulkanDescriptorManager.h"
+#include "Managers/B3DVulkanQueries.h"
+
+#if B3D_PLATFORM_WIN32
+#	include "Private/Win32/B3DWin32VideoModeInfo.h"
+#elif B3D_PLATFORM_LINUX
+#	include "Private/Linux/B3DLinuxVideoModeInfo.h"
+#elif B3D_PLATFORM_MACOS
+#	include "Private/MacOS/B3DMacOSVideoModeInfo.h"
+#else
+static_assert(false, "Other platform includes go here.");
+#endif
+
+#include "B3DVulkanEventQuery.h"
+#include "B3DVulkanGpuBuffer.h"
+#include "B3DVulkanGpuParameterSetPool.h"
+#include "B3DVulkanGpuParameterSet.h"
+#include "B3DVulkanGpuPipelineParameterLayout.h"
+#include "B3DVulkanGpuProgram.h"
+#include "B3DVulkanSamplerState.h"
+#include "B3DVulkanTexture.h"
+#include "GpuBackend/B3DGpuProgramParameterDescription.h"
+#include "GpuBackend/B3DGpuBackendUtility.h"
+#include "Utility/B3DBitwise.h"
+
+using namespace b3d;
+using namespace b3d::render;
+
+namespace
+{
+	/**
+	 * Builds a VkMappedMemoryRange for @p [offset, offset+size) within @p allocation, expanding
+	 * the range outward so the resulting offset and size satisfy
+	 * - offset must be a multiple of nonCoherentAtomSize
+	 * - size must be a multiple of nonCoherentAtomSize, OR offset+size must equal the device memory size.
+	 *
+	 * The allocator places allocations at offsets driven by the resource's required alignment, which
+	 * is generally smaller than nonCoherentAtomSize (typically 64–256 bytes). Rounding the offset
+	 * down and the end up always stays within the bounds of the parent device memory because the heap
+	 * itself is sized to whole multiples of nonCoherentAtomSize per Vulkan spec.
+	 */
+	VkMappedMemoryRange BuildNonCoherentMappedMemoryRange(const VulkanAllocationResult& allocation, VkDeviceSize offset, VkDeviceSize size, VkDeviceSize atom)
+	{
+		const VkDeviceSize absOffset = allocation.Location.Offset + offset;
+		const VkDeviceSize absEnd = (size == VK_WHOLE_SIZE) ? (allocation.Location.Offset + allocation.Location.Size) : (absOffset + size);
+
+		const VkDeviceSize atomMask = atom - 1;
+		const VkDeviceSize alignedOffset = atom > 1 ? (absOffset & ~atomMask) : absOffset;
+		VkDeviceSize alignedEnd = atom > 1 ? ((absEnd + atomMask) & ~atomMask) : absEnd;
+
+		const VulkanGpuHeap& heap = ToVulkanGpuHeap(allocation.Location.Heap);
+
+		// Clamp the end against the underlying device memory in case the upward round overruns its tail.
+		alignedEnd = std::min(alignedEnd, heap.Size);
+
+		VkMappedMemoryRange range = {};
+		range.sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE;
+		range.memory = heap.Memory;
+		range.offset = alignedOffset;
+		range.size = alignedEnd - alignedOffset;
+
+		return range;
+	}
+}
+
+VulkanGpuDevice::VulkanGpuDevice(VkPhysicalDevice device)
+	: mPhysicalDevice(device), mQueueInfos(), mBuiltinResources(*this)
+{
+	// Set to default
+	for(u32 i = 0; i < GQT_COUNT; i++)
+		mQueueInfos[i].FamilyIndex = (u32)-1;
+
+	vkGetPhysicalDeviceProperties(device, &mDeviceProperties);
+	vkGetPhysicalDeviceFeatures(device, &mDeviceFeatures);
+	vkGetPhysicalDeviceMemoryProperties(device, &mMemoryProperties);
+
+	uint32_t numQueueFamilies;
+	vkGetPhysicalDeviceQueueFamilyProperties(device, &numQueueFamilies, nullptr);
+
+	Vector<VkQueueFamilyProperties> queueFamilyProperties(numQueueFamilies);
+	vkGetPhysicalDeviceQueueFamilyProperties(device, &numQueueFamilies, queueFamilyProperties.data());
+
+	// Create queues
+	const float defaultQueuePriorities[B3D_MAX_QUEUES_PER_TYPE] = { 0.0f };
+	Vector<VkDeviceQueueCreateInfo> queueCreateInfos;
+
+	auto fnPopulateQueueInfo = [&](GpuQueueType type, uint32_t familyIdx)
+	{
+		queueCreateInfos.push_back(VkDeviceQueueCreateInfo());
+
+		VkDeviceQueueCreateInfo& createInfo = queueCreateInfos.back();
+		createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+		createInfo.pNext = nullptr;
+		createInfo.flags = 0;
+		createInfo.queueFamilyIndex = familyIdx;
+		createInfo.queueCount = std::min(queueFamilyProperties[familyIdx].queueCount, (uint32_t)B3D_MAX_QUEUES_PER_TYPE);
+		createInfo.pQueuePriorities = defaultQueuePriorities;
+
+		mQueueInfos[type].FamilyIndex = familyIdx;
+		mQueueInfos[type].Queues.resize(createInfo.queueCount, nullptr);
+	};
+
+	auto fnFindQueueWithMinimalMatchingSubset = [this, &queueFamilyProperties](VkQueueFlags requiredFlags)
+	{
+		static constexpr VkQueueFlags kAllQueueFlags = VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT | VK_QUEUE_PROTECTED_BIT;
+
+		u32 bestScore = Bitwise::CountSetBits(kAllQueueFlags) + 1; // Lower is better
+		u32 bestScoreFamilyIndex = ~0u;
+
+		// Look for dedicated compute queues
+		for(u32 i = 0; i < (u32)queueFamilyProperties.size(); i++)
+		{
+			// Skip queue families that don't have the minimum set of required flags
+			if(Bitwise::CountSetBits(queueFamilyProperties[i].queueFlags & requiredFlags) != Bitwise::CountSetBits(requiredFlags))
+				continue;
+
+			// Skip already assigned queue families
+			bool familyAlreadyInUse = false;
+			for(u32 queueUsageIndex = 0; queueUsageIndex < GQT_COUNT; ++queueUsageIndex)
+			{
+				if(mQueueInfos[queueUsageIndex].FamilyIndex == i)
+				{
+					familyAlreadyInUse = true;
+					break;
+				}
+			}
+
+			if (familyAlreadyInUse)
+				continue;
+
+			const VkQueueFlags kExtraFlags = kAllQueueFlags & ~requiredFlags;
+			const u32 score = Bitwise::CountSetBits(queueFamilyProperties[i].queueFlags & kExtraFlags);
+
+			if(score < bestScore)
+			{
+				bestScore = score;
+				bestScoreFamilyIndex = i;
+			}
+		}
+
+		return bestScoreFamilyIndex;
+	};
+
+	const u32 graphicsQueueFamilyIndex = fnFindQueueWithMinimalMatchingSubset(VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
+	if(B3D_ENSURE(graphicsQueueFamilyIndex != ~0u))
+		fnPopulateQueueInfo(GQT_GRAPHICS, graphicsQueueFamilyIndex);
+
+	const u32 computeQueueFamilyIndex = fnFindQueueWithMinimalMatchingSubset(VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT);
+	if(computeQueueFamilyIndex != ~0u)
+		fnPopulateQueueInfo(GQT_COMPUTE, computeQueueFamilyIndex);
+
+	const u32 transferQueueFamilyIndex = fnFindQueueWithMinimalMatchingSubset(VK_QUEUE_TRANSFER_BIT);
+	if(transferQueueFamilyIndex != ~0u)
+		fnPopulateQueueInfo(GQT_TRANSFER, transferQueueFamilyIndex);
+
+	// Set up extensions. Required: swapchain, maintenance1, maintenance2, maintenance4. Plus optional ones
+	// discovered below (shader_viewport_index_layer, timeline_semaphore).
+	const char* extensions[12];
+	uint32_t extensionCount = 0;
+
+	extensions[extensionCount++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+	extensions[extensionCount++] = VK_KHR_MAINTENANCE1_EXTENSION_NAME;
+	extensions[extensionCount++] = VK_KHR_MAINTENANCE2_EXTENSION_NAME;
+	extensions[extensionCount++] = VK_KHR_MAINTENANCE_4_EXTENSION_NAME;
+
+#if B3D_BUILD_TYPE_DEVELOPMENT
+	// Diagnostics: optional, only enabled for the gpu.DumpPipelineStats occupancy dump (development builds only).
+	bool supportsPipelineExecutableProperties = false;
+#endif
+
+	// Enumerate supported extensions
+	uint32_t availableExtensionCount = 0;
+	vkEnumerateDeviceExtensionProperties(device, nullptr, &availableExtensionCount, nullptr);
+	if(availableExtensionCount > 0)
+	{
+		Vector<VkExtensionProperties> availableExtensions(availableExtensionCount);
+		if(vkEnumerateDeviceExtensionProperties(device, nullptr, &availableExtensionCount, availableExtensions.data()) == VK_SUCCESS)
+		{
+			for(auto entry : availableExtensions)
+			{
+				if(strcmp(entry.extensionName, VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME) == 0)
+				{
+					extensions[extensionCount++] = VK_EXT_SHADER_VIEWPORT_INDEX_LAYER_EXTENSION_NAME;
+				}
+				else if(strcmp(entry.extensionName, VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME) == 0)
+				{
+					extensions[extensionCount++] = VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME;
+					mSupportsTimelineSemaphore = true;
+				}
+#if B3D_BUILD_TYPE_DEVELOPMENT
+				else if(strcmp(entry.extensionName, VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME) == 0)
+				{
+					extensions[extensionCount++] = VK_KHR_PIPELINE_EXECUTABLE_PROPERTIES_EXTENSION_NAME;
+					supportsPipelineExecutableProperties = true;
+				}
+#endif
+			}
+		}
+	}
+
+#if !B3D_PLATFORM_MACOS
+	if(mSupportsTimelineSemaphore)
+	{
+		VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeatureProbe = {};
+		timelineFeatureProbe.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+
+		VkPhysicalDeviceFeatures2 features2 = {};
+		features2.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+		features2.pNext = &timelineFeatureProbe;
+
+		vkGetPhysicalDeviceFeatures2(device, &features2);
+
+		if(timelineFeatureProbe.timelineSemaphore != VK_TRUE)
+			mSupportsTimelineSemaphore = false;
+	}
+#endif
+
+	// Build the enabled-feature pNext chain. Maintenance4 is required and enabled unconditionally; if the
+	// physical device lacks the extension/feature, the vkCreateDevice below fails its assert.
+	void* featureChain = nullptr;
+
+	VkPhysicalDeviceTimelineSemaphoreFeaturesKHR timelineFeatures = {};
+	if(mSupportsTimelineSemaphore)
+	{
+		timelineFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES_KHR;
+		timelineFeatures.pNext = featureChain;
+		timelineFeatures.timelineSemaphore = VK_TRUE;
+		featureChain = &timelineFeatures;
+	}
+
+	VkPhysicalDeviceMaintenance4FeaturesKHR maintenance4Features = {};
+	maintenance4Features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MAINTENANCE_4_FEATURES_KHR;
+	maintenance4Features.pNext = featureChain;
+	maintenance4Features.maintenance4 = VK_TRUE;
+	featureChain = &maintenance4Features;
+
+#if B3D_BUILD_TYPE_DEVELOPMENT
+	VkPhysicalDevicePipelineExecutablePropertiesFeaturesKHR pipelineExecutableFeatures = {};
+	if(supportsPipelineExecutableProperties)
+	{
+		pipelineExecutableFeatures.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PIPELINE_EXECUTABLE_PROPERTIES_FEATURES_KHR;
+		pipelineExecutableFeatures.pNext = featureChain;
+		pipelineExecutableFeatures.pipelineExecutableInfo = VK_TRUE;
+		featureChain = &pipelineExecutableFeatures;
+	}
+#endif
+
+	VkDeviceCreateInfo deviceInfo;
+	deviceInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+	deviceInfo.pNext = featureChain;
+	deviceInfo.flags = 0;
+	deviceInfo.queueCreateInfoCount = (uint32_t)queueCreateInfos.size();
+	deviceInfo.pQueueCreateInfos = queueCreateInfos.data();
+	deviceInfo.pEnabledFeatures = &mDeviceFeatures;
+	deviceInfo.enabledExtensionCount = extensionCount;
+	deviceInfo.ppEnabledExtensionNames = extensions;
+	deviceInfo.enabledLayerCount = 0;
+	deviceInfo.ppEnabledLayerNames = nullptr;
+
+	VkResult result = vkCreateDevice(device, &deviceInfo, gVulkanAllocator, &mLogicalDevice);
+	B3D_ASSERT(result == VK_SUCCESS);
+
+	if(mSupportsTimelineSemaphore)
+	{
+		GET_DEVICE_PROC_ADDR(mLogicalDevice, GetSemaphoreCounterValueKHR)
+		GET_DEVICE_PROC_ADDR(mLogicalDevice, WaitSemaphoresKHR)
+	}
+
+	GET_DEVICE_PROC_ADDR(mLogicalDevice, GetDeviceBufferMemoryRequirementsKHR)
+	B3D_ASSERT(vkGetDeviceBufferMemoryRequirementsKHR != nullptr && "VK_KHR_maintenance4 is required.");
+
+#if B3D_BUILD_TYPE_DEVELOPMENT
+	if(supportsPipelineExecutableProperties)
+	{
+		GET_DEVICE_PROC_ADDR(mLogicalDevice, GetPipelineExecutablePropertiesKHR)
+		GET_DEVICE_PROC_ADDR(mLogicalDevice, GetPipelineExecutableStatisticsKHR)
+	}
+#endif
+
+	// Retrieve queues
+	for(u32 i = 0; i < GQT_COUNT; i++)
+	{
+		u32 queueCount = (u32)mQueueInfos[i].Queues.size();
+		for(u32 j = 0; j < queueCount; j++)
+		{
+			VkQueue queue;
+			vkGetDeviceQueue(mLogicalDevice, mQueueInfos[i].FamilyIndex, j, &queue);
+
+			mQueueInfos[i].Queues[j] = B3DMakeSharedFromExisting(new (B3DAllocate<VulkanGpuQueue>()) VulkanGpuQueue(*this, (GpuQueueType)i, j, queue));
+		}
+	}
+
+	mHeapBackend = B3DMakeUnique<VulkanHeapBackend>(*this);
+
+	// Initialize capabilities
+	InitializeCapabilities();
+
+	mDescriptorManager = B3DNew<VulkanDescriptorManager>(*this);
+	mResourceManager = B3DNew<VulkanResourceManager>(*this);
+	mBuiltinResources.Initialize();
+
+	// Initialize video mode information
+#if B3D_PLATFORM_WIN32
+	mVideoModeInfo = B3DMakeShared<Win32VideoModeInfo>();
+#elif B3D_PLATFORM_LINUX
+	mVideoModeInfo = B3DMakeShared<LinuxVideoModeInfo>();
+#elif B3D_PLATFORM_MACOS
+	mVideoModeInfo = B3DMakeShared<MacOSVideoModeInfo>();
+#else
+	static_assert(false, "mVideoModeInfo needs to be created.");
+#endif
+
+}
+
+VulkanGpuDevice::~VulkanGpuDevice()
+{
+	mCachedSamplerStates.clear();
+	mBuiltinResources.Cleanup();
+
+	for (u32 queueUsageIndex = 0; queueUsageIndex < GQT_COUNT; queueUsageIndex++)
+	{
+		for (auto& queue : mQueueInfos[queueUsageIndex].Queues)
+			queue = nullptr;
+	}
+
+	B3DDelete(mDescriptorManager);
+
+	// Needs to happen after query pool & command buffer pool shutdown, to ensure their resources are destroyed
+	B3DDelete(mResourceManager);
+
+	// Drain every per-memory-type allocator before tearing down the heap backend; the allocator
+	// destructor releases all owned heaps via mHeapBackend, so the heap backend must outlive it.
+	for (u32 typeIndex = 0; typeIndex < VK_MAX_MEMORY_TYPES; typeIndex++)
+	{
+		TUnique<TGpuTlsfAllocator<VulkanHeapBackend>>& allocator = mGpuMemoryAllocators[typeIndex];
+		if (allocator != nullptr)
+		{
+			allocator->ReclaimUnused(true);
+			allocator.reset();
+		}
+	}
+
+	// The transient linear allocators live on GpuWorkContexts (the renderer's render-thread context and
+	// per-operation worker contexts), all destroyed before the device; their drained pages returned to
+	// these shared pools. Destroy the pools before the heap backend, since each pool releases its
+	// retained pages through mHeapBackend.
+	for (u32 typeIndex = 0; typeIndex < VK_MAX_MEMORY_TYPES; typeIndex++)
+		mLinearPagePools[typeIndex].reset();
+
+	mHeapBackend.reset();
+
+	vkDestroyDevice(mLogicalDevice, gVulkanAllocator);
+}
+
+TShared<GpuQueue> VulkanGpuDevice::GetQueue(GpuQueueType type, u32 index) const
+{
+	if (index >= GetQueueCount(type))
+		return nullptr;
+
+	return mQueueInfos[(u32)type].Queues[index];
+}
+
+TShared<GpuCommandBufferPool> VulkanGpuDevice::CreateGpuCommandBufferPool(const render::GpuCommandBufferPoolCreateInformation& createInformation)
+{
+	return B3DMakeSharedFromExisting(new(B3DAllocate<VulkanGpuCommandBufferPool>()) VulkanGpuCommandBufferPool(*this, createInformation));
+}
+
+TShared<render::Texture> VulkanGpuDevice::CreateTexture(const TextureCreateInformation& createInformation, GpuObjectCreateFlags flags)
+{
+	VulkanTexture* rawTexture = new(B3DAllocate<VulkanTexture>()) VulkanTexture(*this, createInformation);
+
+	TShared<Texture> output = flags.IsSet(GpuObjectCreateFlag::RenderThreadDestroy)
+		? B3DMakeSharedFromExisting(rawTexture)
+		: MakeSharedStandalone<Texture>(rawTexture);
+
+	output->SetShared(output);
+
+	if(!flags.IsSet(GpuObjectCreateFlag::DeferredInitialize))
+		output->Initialize();
+
+	return output;
+}
+
+TShared<render::GpuBuffer> VulkanGpuDevice::CreateGpuBuffer(const GpuBufferCreateInformation& createInformation, GpuObjectCreateFlags flags)
+{
+	const u32 memoryTypeIndex = PickBufferMemoryType(createInformation);
+	IGpuAllocator& allocator = GetOrCreateGpuMemoryAllocator(memoryTypeIndex);
+
+	return CreateGpuBuffer(createInformation, allocator, flags);
+}
+
+TShared<render::GpuBuffer> VulkanGpuDevice::CreateGpuBuffer(const GpuBufferCreateInformation& createInformation, IGpuAllocator& allocator, GpuObjectCreateFlags flags)
+{
+	VulkanGpuBuffer* rawBuffer = new(B3DAllocate<VulkanGpuBuffer>()) VulkanGpuBuffer(*this, createInformation, allocator);
+
+	TShared<GpuBuffer> output = flags.IsSet(GpuObjectCreateFlag::RenderThreadDestroy)
+		? B3DMakeSharedFromExisting(rawBuffer)
+		: MakeSharedStandalone<GpuBuffer>(rawBuffer);
+
+	output->SetShared(output);
+
+	if(!flags.IsSet(GpuObjectCreateFlag::DeferredInitialize))
+		output->Initialize();
+
+	return output;
+}
+
+TShared<GpuQueryPool> VulkanGpuDevice::CreateQueryPool(const GpuQueryPoolCreateInformation& createInformation)
+{
+	return B3DMakeShared<VulkanGpuQueryPool>(GetResourceManager(), createInformation);
+}
+
+TShared<SamplerState> VulkanGpuDevice::CreateSamplerState(const SamplerStateCreateInformation& createInformation, GpuObjectCreateFlags flags)
+{
+	TShared<SamplerState> output = B3DMakeSharedFromExisting(new (B3DAllocate<VulkanSamplerState>()) VulkanSamplerState(*this, createInformation));
+
+	if(!flags.IsSet(GpuObjectCreateFlag::DeferredInitialize))
+		output->Initialize();
+
+	return output;
+}
+
+TShared<EventQuery> VulkanGpuDevice::CreateEventQuery()
+{
+	return B3DMakeSharedFromExisting(new (B3DAllocate<VulkanEventQuery>()) VulkanEventQuery(*this));
+}
+
+TShared<GpuProgram> VulkanGpuDevice::CreateGpuProgram(const GpuProgramCreateInformation& createInformation, GpuObjectCreateFlags flags)
+{
+	TShared<GpuProgram> output = B3DMakeSharedFromExisting(new(B3DAllocate<VulkanGpuProgram>()) VulkanGpuProgram(*this, createInformation));
+
+	if(!flags.IsSet(GpuObjectCreateFlag::DeferredInitialize))
+		output->Initialize();
+
+	return output;
+}
+
+TShared<GpuGraphicsPipelineState> VulkanGpuDevice::CreateGpuGraphicsPipelineState(const GpuGraphicsPipelineStateCreateInformation& createInformation, GpuObjectCreateFlags flags)
+{
+	TShared<VulkanGpuGraphicsPipelineState> output = B3DMakeSharedFromExisting<VulkanGpuGraphicsPipelineState>(new(B3DAllocate<VulkanGpuGraphicsPipelineState>()) VulkanGpuGraphicsPipelineState(*this, createInformation));
+
+	if(!flags.IsSet(GpuObjectCreateFlag::DeferredInitialize))
+		output->Initialize();
+
+	return output;
+}
+
+TShared<GpuComputePipelineState> VulkanGpuDevice::CreateGpuComputePipelineState(const GpuComputePipelineStateCreateInformation& createInformation, GpuObjectCreateFlags flags)
+{
+	TShared<VulkanGpuComputePipelineState> output = B3DMakeSharedFromExisting<VulkanGpuComputePipelineState>(new(B3DAllocate<VulkanGpuComputePipelineState>()) VulkanGpuComputePipelineState(*this, createInformation));
+
+	if(!flags.IsSet(GpuObjectCreateFlag::DeferredInitialize))
+		output->Initialize();
+
+	return output;
+}
+
+TShared<GpuPipelineParameterLayout> VulkanGpuDevice::CreateGpuPipelineParameterLayout(const GpuPipelineParameterLayoutCreateInformation& createInformation)
+{
+	return B3DMakeSharedFromExisting<VulkanGpuPipelineParameterLayout>(new(B3DAllocate<VulkanGpuPipelineParameterLayout>()) VulkanGpuPipelineParameterLayout(*this, createInformation));
+}
+
+TShared<GpuPipelineParameterSetLayout> VulkanGpuDevice::CreateGpuPipelineParameterSetLayout(const GpuProgramParameterDescription& parameterDescription)
+{
+	return B3DMakeShared<VulkanGpuPipelineParameterSetLayout>(*this, parameterDescription);
+}
+
+TUnique<GpuParameterSetPool> VulkanGpuDevice::CreateParameterSetPool(const GpuParameterSetPoolCreateInformation& createInformation)
+{
+	return B3DMakeUnique<VulkanGpuParameterSetPool>(*this, createInformation);
+}
+
+TShared<GpuTimelineFence> VulkanGpuDevice::CreateTimelineFence()
+{
+	return B3DMakeShared<VulkanGpuTimelineFence>(*this);
+}
+
+void VulkanGpuDevice::WaitUntilIdle()
+{
+	GetVulkanSubmitThread().WaitUntilIdle();
+}
+
+void VulkanGpuDevice::BeginFrame()
+{
+	ASSERT_IF_NOT_RENDER_THREAD
+}
+
+void VulkanGpuDevice::EndFrame()
+{
+	ASSERT_IF_NOT_RENDER_THREAD
+
+	// Signal end-of-frame to submit thread. This blocks until the previous frame's resources are safe to reuse.
+	GetVulkanSubmitThread().QueueEndFrameAndWaitForPreviousFrame();
+}
+
+void VulkanGpuDevice::RunDefragPass(GpuWorkContext& gpuContext)
+{
+	if (!mDefragEnabled)
+		return;
+
+	const TShared<render::GpuCommandBuffer>& transferCb = gpuContext.GetTransferCommandBuffer();
+	if (transferCb == nullptr)
+		return;
+
+	typename TGpuTlsfAllocator<VulkanHeapBackend>::DefragmentationInfo info;
+	info.MaxBytesPerCall = mDefragBudgetBytes;
+	info.MaxAllocationsPerCall = mDefragBudgetAllocations;
+
+	Lock lock(mGpuMemoryAllocatorMutex);
+	for (TUnique<TGpuTlsfAllocator<VulkanHeapBackend>>& allocator : mGpuMemoryAllocators)
+	{
+		if (allocator != nullptr)
+			allocator->Defrag(*transferCb, info);
+	}
+}
+
+void VulkanGpuDevice::PresentRenderWindow(const TShared<render::RenderWindow>& renderWindow, GpuQueueMask syncMask)
+{
+	TShared<GpuQueue> queue = GetQueue(GQT_GRAPHICS, 0);
+	if (!B3D_ENSURE(queue))
+		return;
+
+	queue->PresentRenderWindow(renderWindow, syncMask);
+}
+
+void VulkanGpuDevice::ConvertProjectionMatrix(const Matrix4& input, Matrix4& output)
+{
+	output = input;
+
+	// Flip Y axis
+	output[1][1] = -output[1][1];
+
+	// Convert depth range from [-1,1] to [0,1]
+	output[2][0] = (output[2][0] + output[3][0]) / 2;
+	output[2][1] = (output[2][1] + output[3][1]) / 2;
+	output[2][2] = (output[2][2] + output[3][2]) / 2;
+	output[2][3] = (output[2][3] + output[3][3]) / 2;
+}
+
+GpuUniformBufferInformation VulkanGpuDevice::GenerateUniformBufferInformation(const String& name, TArray<GpuUniformBufferMemberInformation>& inOutUniforms)
+{
+	GpuUniformBufferInformation uniformBufferInformation;
+	uniformBufferInformation.Size = 0;
+	uniformBufferInformation.IsShareable = true;
+	uniformBufferInformation.Name = name;
+	uniformBufferInformation.Slot = 0;
+	uniformBufferInformation.Set = 0;
+
+	for(auto& member : inOutUniforms)
+	{
+		u32 size;
+		if(member.Type == GPDT_STRUCT)
+		{
+			// Structs are always aligned and rounded up to vec4
+			size = Math::DivideAndRoundUp(member.ElementSize, 16U) * 4;
+			uniformBufferInformation.Size = Math::DivideAndRoundUp(uniformBufferInformation.Size, 4U) * 4;
+		}
+		else
+			size = GpuBackendUtility::CalcStd140MemberSizeAndOffset(member.Type, member.ArraySize, uniformBufferInformation.Size);
+
+		member.ElementSize = size;
+		member.ArrayElementStride = size;
+		member.CpuOffset = uniformBufferInformation.Size;
+		member.GpuOffset = 0;
+		uniformBufferInformation.Size += size * member.ArraySize;
+		member.ParentUniformBufferSlot = 0;
+		member.ParentUniformBufferSet = 0;
+	}
+
+	// Uniform buffer size must always be a multiple of 16
+	if(uniformBufferInformation.Size % 4 != 0)
+		uniformBufferInformation.Size += (4 - (uniformBufferInformation.Size % 4));
+
+	return uniformBufferInformation;
+}
+
+float VulkanGpuDevice::ConvertTimestampToMilliseconds(u64 timestamp)
+{
+	const double timestampToMs = (double)GetDeviceProperties().limits.timestampPeriod / 1e6; // Nano to milli
+	return (float)((double)timestamp * timestampToMs);
+}
+
+void VulkanGpuDevice::DoForEachQueue(const std::function<void(VulkanGpuQueue&)>&& callback) const
+{
+	for(u32 queueTypeIndex = 0; queueTypeIndex < GQT_COUNT; queueTypeIndex++)
+	{
+		GpuQueueType queueType = (GpuQueueType)queueTypeIndex;
+
+		const u32 queueCount = GetQueueCount(queueType);
+		for(u32 queueIndex = 0; queueIndex < queueCount; queueIndex++)
+		{
+			const TShared<VulkanGpuQueue>& queue = std::static_pointer_cast<VulkanGpuQueue>(GetQueue(queueType, queueIndex));
+			callback(*queue);
+		}
+	}
+}
+
+SurfaceFormat VulkanGpuDevice::GetSurfaceFormat(const VkSurfaceKHR& surface, bool useHardwareSRGB) const
+{
+	uint32_t numFormats;
+	VkResult result = vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysicalDevice, surface, &numFormats, nullptr);
+	B3D_ASSERT(result == VK_SUCCESS);
+	B3D_ASSERT(numFormats > 0);
+
+	VkSurfaceFormatKHR* surfaceFormats = B3DStackAllocate<VkSurfaceFormatKHR>(numFormats);
+	result = vkGetPhysicalDeviceSurfaceFormatsKHR(mPhysicalDevice, surface, &numFormats, surfaceFormats);
+	B3D_ASSERT(result == VK_SUCCESS);
+
+	SurfaceFormat output;
+	output.ColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+	output.ColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+
+	PixelFormat depthFormat = VulkanUtility::GetClosestSupportedPixelFormat(*this, PF_D24S8, TEX_TYPE_2D, TextureUsageFlag::DepthStencil, true, false);
+
+	output.DepthFormat = VulkanUtility::GetPixelFormat(depthFormat);
+
+	// If there is no preferred format, use standard RGBA
+	if((numFormats == 1) && (surfaceFormats[0].format == VK_FORMAT_UNDEFINED))
+	{
+		if(useHardwareSRGB)
+			output.ColorFormat = VK_FORMAT_R8G8B8A8_SRGB;
+		else
+			output.ColorFormat = VK_FORMAT_B8G8R8A8_UNORM;
+
+		output.ColorSpace = surfaceFormats[0].colorSpace;
+	}
+	else
+	{
+		bool foundFormat = false;
+
+		VkFormat wantedFormatsUNORM[] = {
+			VK_FORMAT_R8G8B8A8_UNORM,
+			VK_FORMAT_B8G8R8A8_UNORM,
+			VK_FORMAT_A8B8G8R8_UNORM_PACK32,
+			VK_FORMAT_A8B8G8R8_UNORM_PACK32,
+			VK_FORMAT_R8G8B8_UNORM,
+			VK_FORMAT_B8G8R8_UNORM
+		};
+
+		VkFormat wantedFormatsSRGB[] = {
+			VK_FORMAT_R8G8B8A8_SRGB,
+			VK_FORMAT_B8G8R8A8_SRGB,
+			VK_FORMAT_A8B8G8R8_SRGB_PACK32,
+			VK_FORMAT_A8B8G8R8_SRGB_PACK32,
+			VK_FORMAT_R8G8B8_SRGB,
+			VK_FORMAT_B8G8R8_SRGB
+		};
+
+		u32 numWantedFormats;
+		VkFormat* wantedFormats;
+		if(useHardwareSRGB)
+		{
+			numWantedFormats = sizeof(wantedFormatsSRGB) / sizeof(wantedFormatsSRGB[0]);
+			wantedFormats = wantedFormatsSRGB;
+		}
+		else
+		{
+			numWantedFormats = sizeof(wantedFormatsUNORM) / sizeof(wantedFormatsUNORM[0]);
+			wantedFormats = wantedFormatsUNORM;
+		}
+
+		for(u32 i = 0; i < numWantedFormats; i++)
+		{
+			for(u32 j = 0; j < numFormats; j++)
+			{
+				if(surfaceFormats[j].format == wantedFormats[i])
+				{
+					output.ColorFormat = surfaceFormats[j].format;
+					output.ColorSpace = surfaceFormats[j].colorSpace;
+
+					foundFormat = true;
+					break;
+				}
+			}
+
+			if(foundFormat)
+				break;
+		}
+
+		// If we haven't found anything, fall back to first available
+		if(!foundFormat)
+		{
+			output.ColorFormat = surfaceFormats[0].format;
+			output.ColorSpace = surfaceFormats[0].colorSpace;
+
+			if(useHardwareSRGB)
+			{
+				B3D_LOG(Error, LogRenderBackend, "Cannot find a valid sRGB format for a render window surface, "
+											 "falling back to a default format.");
+			}
+		}
+	}
+
+	B3DStackFree(surfaceFormats);
+	return output;
+}
+
+VulkanBuffer* VulkanGpuDevice::CreateBuffer(const VulkanBufferCreateInformation& createInformation, IGpuAllocator& allocator, VulkanGpuBuffer* parent)
+{
+	B3D_ASSERT(parent == nullptr || allocator.SupportsDefragmentation());
+
+	VkBuffer buffer;
+	const VkResult createResult = vkCreateBuffer(mLogicalDevice, &createInformation.VkCreateInfo, gVulkanAllocator, &buffer);
+	B3D_ASSERT(createResult == VK_SUCCESS);
+	(void)createResult;
+
+	// The memory type was already picked when @p allocator was resolved (PickBufferMemoryType uses the
+	// same usage flags, so requirements.memoryTypeBits is guaranteed to include it); only size and
+	// alignment are needed here.
+	VkMemoryRequirements requirements = {};
+	vkGetBufferMemoryRequirements(mLogicalDevice, buffer, &requirements);
+
+	VulkanAllocationResult allocation;
+	const bool ok = allocator.TryAllocate(requirements.size, (u32)requirements.alignment, GpuResourceKind::Linear, nullptr, allocation.Location);
+	B3D_ASSERT(ok && "Allocator failed to satisfy buffer allocation request.");
+	(void)ok;
+
+	const VulkanGpuHeap& heap = ToVulkanGpuHeap(allocation.Location.Heap);
+	if (heap.Mapped != nullptr)
+		allocation.MappedMemory = static_cast<u8*>(heap.Mapped) + allocation.Location.Offset;
+
+	return BindBufferToAllocation(createInformation, buffer, allocation, parent);
+}
+
+VulkanBuffer* VulkanGpuDevice::CreateBuffer(const VulkanBufferCreateInformation& createInformation, const VulkanAllocationResult& allocation, VulkanGpuBuffer* parent)
+{
+	B3D_ASSERT(allocation.IsValid());
+
+	VkBuffer buffer;
+	const VkResult createResult = vkCreateBuffer(mLogicalDevice, &createInformation.VkCreateInfo, gVulkanAllocator, &buffer);
+	B3D_ASSERT(createResult == VK_SUCCESS);
+	(void)createResult;
+
+	return BindBufferToAllocation(createInformation, buffer, allocation, parent);
+}
+
+VulkanBuffer* VulkanGpuDevice::BindBufferToAllocation(const VulkanBufferCreateInformation& createInformation, VkBuffer buffer, VulkanAllocationResult allocation, VulkanGpuBuffer* parent)
+{
+	B3D_ASSERT(buffer != VK_NULL_HANDLE);
+	B3D_ASSERT(allocation.IsValid());
+
+	const VkResult bindResult = vkBindBufferMemory(mLogicalDevice, buffer, ToVulkanGpuHeap(allocation.Location.Heap).Memory, allocation.Location.Offset);
+	B3D_ASSERT(bindResult == VK_SUCCESS);
+	(void)bindResult;
+
+	VulkanBuffer* wrapper = mResourceManager->Create<VulkanBuffer>(createInformation, buffer, allocation, parent);
+
+	if (parent != nullptr)
+		SetAllocationOwner(allocation, wrapper);
+
+	return wrapper;
+}
+
+VulkanImage* VulkanGpuDevice::CreateImage(const VulkanImageCreateInformation& createInformation, VkMemoryPropertyFlags requiredFlags, VkMemoryPropertyFlags preferredFlags, GpuResourceKind kind, VulkanTexture* parent)
+{
+	VkImage image;
+	const VkResult createResult = vkCreateImage(mLogicalDevice, &createInformation.CreateInfo, gVulkanAllocator, &image);
+	B3D_ASSERT(createResult == VK_SUCCESS);
+	(void)createResult;
+
+	const VulkanAllocationResult allocation = AllocateMemory(image, requiredFlags, preferredFlags, kind);
+
+	return BindBufferToAllocation(createInformation, image, allocation, parent);
+}
+
+VulkanImage* VulkanGpuDevice::CreateImage(const VulkanImageCreateInformation& createInformation, const VulkanAllocationResult& allocation, VulkanTexture* parent)
+{
+	B3D_ASSERT(allocation.IsValid());
+
+	VkImage image;
+	const VkResult createResult = vkCreateImage(mLogicalDevice, &createInformation.CreateInfo, gVulkanAllocator, &image);
+	B3D_ASSERT(createResult == VK_SUCCESS);
+	(void)createResult;
+
+	return BindBufferToAllocation(createInformation, image, allocation, parent);
+}
+
+VulkanImage* VulkanGpuDevice::BindBufferToAllocation(const VulkanImageCreateInformation& info, VkImage image, VulkanAllocationResult allocation, VulkanTexture* parent)
+{
+	B3D_ASSERT(image != VK_NULL_HANDLE);
+	B3D_ASSERT(allocation.IsValid());
+
+	const VkResult bindResult = vkBindImageMemory(mLogicalDevice, image, ToVulkanGpuHeap(allocation.Location.Heap).Memory, allocation.Location.Offset);
+	B3D_ASSERT(bindResult == VK_SUCCESS);
+	(void)bindResult;
+
+	VulkanImage* wrapper = mResourceManager->Create<VulkanImage>(info, image, allocation, parent);
+
+	if (parent != nullptr)
+		SetAllocationOwner(allocation, wrapper);
+
+	return wrapper;
+}
+
+void VulkanGpuDevice::SetAllocationOwner(const VulkanAllocationResult& allocation, IGpuResource* owner)
+{
+	if (!allocation.IsValid())
+		return;
+
+	auto& allocator = *static_cast<TGpuTlsfAllocator<VulkanHeapBackend>*>(allocation.Location.Allocator);
+	allocator.SetAllocationOwner(allocation.Location, owner);
+}
+
+VulkanAllocationResult VulkanGpuDevice::AllocateMemory(VkImage image, VkMemoryPropertyFlags requiredFlags, VkMemoryPropertyFlags preferredFlags, GpuResourceKind kind)
+{
+	VkMemoryRequirements requirements = {};
+	vkGetImageMemoryRequirements(mLogicalDevice, image, &requirements);
+
+	const u32 memoryTypeIndex = PickMemoryTypeIndex(requirements.memoryTypeBits, requiredFlags, preferredFlags);
+	B3D_ASSERT(memoryTypeIndex != VK_MAX_MEMORY_TYPES && "No Vulkan memory type satisfies the requested image allocation flags.");
+
+	TGpuTlsfAllocator<VulkanHeapBackend>& allocator = GetOrCreateGpuMemoryAllocator(memoryTypeIndex);
+
+	VulkanAllocationResult output;
+	const bool ok = allocator.TryAllocate(requirements.size, (u32)requirements.alignment, kind, output.Location);
+	B3D_ASSERT(ok && "TLSF allocator failed to satisfy image allocation request.");
+	(void)ok;
+
+	const VulkanGpuHeap& heap = ToVulkanGpuHeap(output.Location.Heap);
+	if (heap.Mapped != nullptr)
+		output.MappedMemory = static_cast<u8*>(heap.Mapped) + output.Location.Offset;
+
+	return output;
+}
+
+u32 VulkanGpuDevice::PickBufferMemoryType(const GpuBufferCreateInformation& createInformation) const
+{
+	const VkBufferUsageFlags usageFlags = VulkanGpuBuffer::GetVkBufferUsageFlags(createInformation);
+	VkMemoryPropertyFlags requiredFlags = 0;
+	VkMemoryPropertyFlags preferredFlags = 0;
+	VulkanGpuBuffer::GetVkMemoryPropertyFlags(createInformation, requiredFlags, preferredFlags);
+
+	// VK_KHR_maintenance4: query the buffer's memory requirements straight from the create-info, with no
+	// VkBuffer object. memoryTypeBits depends only on usage, not size, so the size here is nominal.
+	VkBufferCreateInfo bufferInfo{};
+	bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	bufferInfo.size = 1;
+	bufferInfo.usage = usageFlags;
+	bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+	VkDeviceBufferMemoryRequirementsKHR query{};
+	query.sType = VK_STRUCTURE_TYPE_DEVICE_BUFFER_MEMORY_REQUIREMENTS_KHR;
+	query.pCreateInfo = &bufferInfo;
+
+	VkMemoryRequirements2 requirements{};
+	requirements.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2;
+
+	vkGetDeviceBufferMemoryRequirementsKHR(mLogicalDevice, &query, &requirements);
+
+	const u32 memoryTypeIndex = PickMemoryTypeIndex(requirements.memoryRequirements.memoryTypeBits, requiredFlags, preferredFlags);
+	B3D_ASSERT(memoryTypeIndex != VK_MAX_MEMORY_TYPES && "No Vulkan memory type satisfies the requested buffer allocation flags.");
+
+	return memoryTypeIndex;
+}
+
+void VulkanGpuDevice::FreeMemory(VulkanAllocationResult& allocation)
+{
+	if (!allocation.IsValid())
+		return;
+
+	allocation.Location.Allocator->FreeAndReclaim(allocation.Location);
+	allocation.MappedMemory = nullptr;
+}
+
+u8* VulkanGpuDevice::MapMemory(const VulkanAllocationResult& allocation, VkDeviceSize offset) const
+{
+	B3D_ASSERT(allocation.MappedMemory != nullptr && "Allocation does not live in a host-visible / persistently-mapped heap.");
+	return static_cast<u8*>(allocation.MappedMemory) + offset;
+}
+
+void VulkanGpuDevice::UnmapMemory(const VulkanAllocationResult& /*allocation*/) const
+{
+	// No-op: heaps backing host-visible memory types are persistently mapped at heap creation.
+}
+
+void VulkanGpuDevice::InvalidateMemory(const VulkanAllocationResult& allocation, VkDeviceSize offset, VkDeviceSize size) const
+{
+	if (!allocation.IsValid())
+		return;
+
+	const VkMappedMemoryRange range = BuildNonCoherentMappedMemoryRange(allocation, offset, size, mDeviceProperties.limits.nonCoherentAtomSize);
+
+	const VkResult result = vkInvalidateMappedMemoryRanges(mLogicalDevice, 1, &range);
+	B3D_ASSERT(result == VK_SUCCESS);
+	(void)result;
+}
+
+void VulkanGpuDevice::FlushMemory(const VulkanAllocationResult& allocation, VkDeviceSize offset, VkDeviceSize size) const
+{
+	if (!allocation.IsValid())
+		return;
+
+	const VkMappedMemoryRange range = BuildNonCoherentMappedMemoryRange(allocation, offset, size, mDeviceProperties.limits.nonCoherentAtomSize);
+
+	const VkResult result = vkFlushMappedMemoryRanges(mLogicalDevice, 1, &range);
+	B3D_ASSERT(result == VK_SUCCESS);
+	(void)result;
+}
+
+u32 VulkanGpuDevice::PickMemoryTypeIndex(u32 typeBits, VkMemoryPropertyFlags required, VkMemoryPropertyFlags preferred) const
+{
+	u32 bestIndex = VK_MAX_MEMORY_TYPES;
+	u32 bestScore = 0;
+	bool bestIsValid = false;
+
+	for (u32 typeIndex = 0; typeIndex < mMemoryProperties.memoryTypeCount; typeIndex++)
+	{
+		if ((typeBits & (1u << typeIndex)) == 0)
+			continue;
+
+		const VkMemoryPropertyFlags flags = mMemoryProperties.memoryTypes[typeIndex].propertyFlags;
+		if ((flags & required) != required)
+			continue;
+
+		// Score by number of preferred bits matched; ties resolved by lowest index.
+		const u32 score = Bitwise::CountSetBits(flags & preferred);
+		if (!bestIsValid || score > bestScore)
+		{
+			bestIsValid = true;
+			bestScore = score;
+			bestIndex = typeIndex;
+		}
+	}
+
+	return bestIndex;
+}
+
+TGpuTlsfAllocator<VulkanHeapBackend>& VulkanGpuDevice::GetOrCreateGpuMemoryAllocator(u32 memoryTypeIndex)
+{
+	B3D_ASSERT(memoryTypeIndex < mMemoryProperties.memoryTypeCount);
+
+	{
+		Lock lock(mGpuMemoryAllocatorMutex);
+		TUnique<TGpuTlsfAllocator<VulkanHeapBackend>>& slot = mGpuMemoryAllocators[memoryTypeIndex];
+		if (slot != nullptr)
+			return *slot;
+
+		const VkMemoryPropertyFlags flags = mMemoryProperties.memoryTypes[memoryTypeIndex].propertyFlags;
+		const bool isHostVisible = (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+		const bool isDeviceLocalOnly = (flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0 && !isHostVisible;
+
+		TGpuTlsfAllocator<VulkanHeapBackend>::Configuration configuration;
+		configuration.InitialHeapSize = isDeviceLocalOnly ? (64ull * 1024 * 1024) : (16ull * 1024 * 1024);
+		configuration.MaxHeapSize = 256ull * 1024 * 1024;
+		configuration.GrowthFactor = 2;
+		configuration.MaxEmptyHeapCount = 1;
+		configuration.MinAllocationSize = 16;
+		configuration.BufferImageGranularity = mDeviceProperties.limits.bufferImageGranularity;
+		configuration.DeferralMode = GpuAllocatorFreeDeferralMode::ResourceLifecycle;
+		configuration.HeapCreateInfo.MemoryTypeBits = (1u << memoryTypeIndex);
+		configuration.HeapCreateInfo.PropertyFlags = flags;
+		configuration.HeapCreateInfo.MapPersistently = isHostVisible;
+
+		slot = B3DMakeUnique<TGpuTlsfAllocator<VulkanHeapBackend>>(mHeapBackend.get(), nullptr, configuration);
+		return *slot;
+	}
+}
+
+TGpuLinearPagePool<VulkanHeapBackend>& VulkanGpuDevice::GetOrCreateLinearPagePool(u32 memoryTypeIndex)
+{
+	B3D_ASSERT(memoryTypeIndex < mMemoryProperties.memoryTypeCount);
+
+	Lock lock(mLinearPagePoolMutex);
+	TUnique<TGpuLinearPagePool<VulkanHeapBackend>>& slot = mLinearPagePools[memoryTypeIndex];
+	if (slot != nullptr)
+		return *slot;
+
+	const VkMemoryPropertyFlags flags = mMemoryProperties.memoryTypes[memoryTypeIndex].propertyFlags;
+	const bool isHostVisible = (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+
+	TGpuLinearPagePool<VulkanHeapBackend>::Configuration configuration;
+	configuration.PageSize = 8ull * 1024 * 1024;
+	configuration.MaxRetainedPages = 4;
+	configuration.HeapCreateInfo.MemoryTypeBits = (1u << memoryTypeIndex);
+	configuration.HeapCreateInfo.PropertyFlags = flags;
+	configuration.HeapCreateInfo.MapPersistently = isHostVisible;
+
+	slot = B3DMakeUnique<TGpuLinearPagePool<VulkanHeapBackend>>(mHeapBackend.get(), configuration);
+	return *slot;
+}
+
+TUnique<IGpuAllocator> VulkanGpuDevice::CreateTransientAllocator(u32 memoryType, IGpuCompletionTracker& completionTracker)
+{
+	B3D_ASSERT(memoryType < mMemoryProperties.memoryTypeCount);
+
+	TGpuLinearPagePool<VulkanHeapBackend>& pool = GetOrCreateLinearPagePool(memoryType);
+
+	const VkMemoryPropertyFlags flags = mMemoryProperties.memoryTypes[memoryType].propertyFlags;
+	const bool isHostVisible = (flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+
+	TGpuLinearAllocator<VulkanHeapBackend>::Configuration configuration;
+	configuration.PageSize = pool.GetPageSize(); // Match the pool so normal pages share one size; also the oversize threshold.
+	configuration.HeapCreateInfo.MemoryTypeBits = (1u << memoryType);
+	configuration.HeapCreateInfo.PropertyFlags = flags;
+	configuration.HeapCreateInfo.MapPersistently = isHostVisible;
+
+	return B3DMakeUnique<TGpuLinearAllocator<VulkanHeapBackend>>(mHeapBackend.get(), &completionTracker, configuration, &pool);
+}
+
+void VulkanGpuDevice::InitializeCapabilities()
+{
+	const VkPhysicalDeviceProperties& deviceProperties = GetDeviceProperties();
+	const VkPhysicalDeviceFeatures& deviceFeatures =GetDeviceFeatures();
+	const VkPhysicalDeviceLimits& deviceLimits = deviceProperties.limits;
+
+	GpuDriverVersion driverVersion;
+	driverVersion.Major = ((uint32_t)(deviceProperties.apiVersion) >> 22);
+	driverVersion.Minor = ((uint32_t)(deviceProperties.apiVersion) >> 12) & 0x3ff;
+	driverVersion.Release = (uint32_t)(deviceProperties.apiVersion) & 0xfff;
+	driverVersion.Build = 0;
+
+	mCapabilities.DriverVersion = driverVersion;
+	mCapabilities.DeviceName = deviceProperties.deviceName;
+
+	// Determine vendor
+	switch(deviceProperties.vendorID)
+	{
+	case 0x10DE:
+		mCapabilities.DeviceVendor = GPU_NVIDIA;
+		break;
+	case 0x1002:
+		mCapabilities.DeviceVendor = GPU_AMD;
+		break;
+	case 0x163C:
+	case 0x8086:
+		mCapabilities.DeviceVendor = GPU_INTEL;
+		break;
+	case 0x106B:
+		mCapabilities.DeviceVendor = GPU_APPLE;
+		break;
+	default:
+		mCapabilities.DeviceVendor = GPU_UNKNOWN;
+		break;
+	};
+
+	mCapabilities.BackendName = "Vulkan";
+
+	if(deviceFeatures.textureCompressionBC)
+		mCapabilities.SetCapability(RSC_TEXTURE_COMPRESSION_BC);
+
+	if(deviceFeatures.textureCompressionETC2)
+		mCapabilities.SetCapability(RSC_TEXTURE_COMPRESSION_ETC2);
+
+	if(deviceFeatures.textureCompressionASTC_LDR)
+		mCapabilities.SetCapability(RSC_TEXTURE_COMPRESSION_ASTC);
+
+	mCapabilities.SetCapability(RSC_COMPUTE_PROGRAM);
+	mCapabilities.SetCapability(RSC_LOAD_STORE);
+	mCapabilities.SetCapability(RSC_LOAD_STORE_MSAA);
+	mCapabilities.SetCapability(RSC_BYTECODE_CACHING);
+	mCapabilities.SetCapability(RSC_TEXTURE_VIEWS);
+	mCapabilities.SetCapability(RSC_RENDER_TARGET_LAYERS);
+	mCapabilities.SetCapability(RSC_MULTI_THREADED_CB);
+
+	mCapabilities.Conventions.NdcYAxis = GpuBackendConventions::Axis::Down;
+	mCapabilities.Conventions.MatrixOrder = GpuBackendConventions::MatrixOrder::ColumnMajor;
+
+	mCapabilities.VertexBufferCount = deviceLimits.maxVertexInputBindings;
+	mCapabilities.RenderTargetCount = deviceLimits.maxColorAttachments;
+
+	mCapabilities.SampledTexturesPerStage[GPT_FRAGMENT_PROGRAM] = deviceLimits.maxPerStageDescriptorSampledImages;
+	mCapabilities.SampledTexturesPerStage[GPT_VERTEX_PROGRAM] = deviceLimits.maxPerStageDescriptorSampledImages;
+	mCapabilities.SampledTexturesPerStage[GPT_COMPUTE_PROGRAM] = deviceLimits.maxPerStageDescriptorSampledImages;
+
+	mCapabilities.UniformBufferCountPerStage[GPT_FRAGMENT_PROGRAM] = deviceLimits.maxPerStageDescriptorUniformBuffers;
+	mCapabilities.UniformBufferCountPerStage[GPT_VERTEX_PROGRAM] = deviceLimits.maxPerStageDescriptorUniformBuffers;
+	mCapabilities.UniformBufferCountPerStage[GPT_COMPUTE_PROGRAM] = deviceLimits.maxPerStageDescriptorUniformBuffers;
+
+	mCapabilities.StorageTexturesPerStage[GPT_FRAGMENT_PROGRAM] = deviceLimits.maxPerStageDescriptorStorageImages;
+	mCapabilities.StorageTexturesPerStage[GPT_COMPUTE_PROGRAM] = deviceLimits.maxPerStageDescriptorStorageImages;
+
+	if(deviceFeatures.geometryShader)
+	{
+		mCapabilities.SetCapability(RSC_GEOMETRY_PROGRAM);
+		mCapabilities.AddShaderProfile("gs_5_0");
+		mCapabilities.SampledTexturesPerStage[GPT_GEOMETRY_PROGRAM] = deviceLimits.maxPerStageDescriptorSampledImages;
+		mCapabilities.UniformBufferCountPerStage[GPT_GEOMETRY_PROGRAM] = deviceLimits.maxPerStageDescriptorUniformBuffers;
+		mCapabilities.GeometryProgramNumOutputVertices = deviceLimits.maxGeometryOutputVertices;
+	}
+
+	if(deviceFeatures.tessellationShader)
+	{
+		mCapabilities.SetCapability(RSC_TESSELLATION_PROGRAM);
+
+		mCapabilities.SampledTexturesPerStage[GPT_HULL_PROGRAM] = deviceLimits.maxPerStageDescriptorSampledImages;
+		mCapabilities.SampledTexturesPerStage[GPT_DOMAIN_PROGRAM] = deviceLimits.maxPerStageDescriptorSampledImages;
+
+		mCapabilities.UniformBufferCountPerStage[GPT_HULL_PROGRAM] = deviceLimits.maxPerStageDescriptorUniformBuffers;
+		mCapabilities.UniformBufferCountPerStage[GPT_DOMAIN_PROGRAM] = deviceLimits.maxPerStageDescriptorUniformBuffers;
+	}
+
+	mCapabilities.TotalSampledTexturesCount = mCapabilities.SampledTexturesPerStage[GPT_FRAGMENT_PROGRAM] + mCapabilities.SampledTexturesPerStage[GPT_VERTEX_PROGRAM] + mCapabilities.SampledTexturesPerStage[GPT_GEOMETRY_PROGRAM] + mCapabilities.SampledTexturesPerStage[GPT_HULL_PROGRAM] + mCapabilities.SampledTexturesPerStage[GPT_DOMAIN_PROGRAM] + mCapabilities.SampledTexturesPerStage[GPT_COMPUTE_PROGRAM];
+
+	mCapabilities.TotalUniformBuffersCount = mCapabilities.UniformBufferCountPerStage[GPT_FRAGMENT_PROGRAM] + mCapabilities.UniformBufferCountPerStage[GPT_VERTEX_PROGRAM] + mCapabilities.UniformBufferCountPerStage[GPT_GEOMETRY_PROGRAM] + mCapabilities.UniformBufferCountPerStage[GPT_HULL_PROGRAM] + mCapabilities.UniformBufferCountPerStage[GPT_DOMAIN_PROGRAM] + mCapabilities.UniformBufferCountPerStage[GPT_COMPUTE_PROGRAM];
+
+	mCapabilities.TotalStorageTexturesCount = mCapabilities.StorageTexturesPerStage[GPT_FRAGMENT_PROGRAM] + mCapabilities.StorageTexturesPerStage[GPT_COMPUTE_PROGRAM];
+	mCapabilities.MinimumUniformBufferOffsetAlignment = (u32)deviceLimits.minUniformBufferOffsetAlignment;
+	mCapabilities.OptimalBufferToBufferCopyOffsetAlignment = (u32)deviceLimits.optimalBufferCopyOffsetAlignment;
+	mCapabilities.OptimalBufferToImageCopyOffsetAlignment = (u32)deviceLimits.optimalBufferCopyRowPitchAlignment;
+}
+
+void VulkanGpuDevice::GetSyncSemaphores(GpuQueueMask syncMask, TInlineArray<VulkanSemaphore*, 8>& outSemaphores) const
+{
+	AssertIfNotVulkanSubmitThread();
+
+	bool semaphoreRequestFailed = false;
+
+	for(u32 queueTypeIndex = 0; queueTypeIndex < GQT_COUNT; queueTypeIndex++)
+	{
+		const GpuQueueType queueType = (GpuQueueType)queueTypeIndex;
+
+		const u32 queueCount = GetQueueCount(queueType);
+		for(u32 queueIndex = 0; queueIndex < queueCount; queueIndex++)
+		{
+			VulkanGpuQueue* queue = static_cast<VulkanGpuQueue*>(GetQueue(queueType, queueIndex).get());
+			TShared<VulkanGpuCommandBuffer> lastCommandBuffer = queue->GetLastCommandBuffer();
+
+			// Check if a buffer is currently executing on the queue
+			if(lastCommandBuffer == nullptr || (!lastCommandBuffer->IsSubmitted() && !lastCommandBuffer->IsDone()))
+				continue;
+
+			// Check if we care about this specific queue
+			const GpuQueueId queueId = GpuQueueId(queueType, queueIndex);
+			if(!syncMask.IsSet(queueId))
+				continue;
+
+			VulkanSemaphore* semaphore = lastCommandBuffer->RequestInterQueueSemaphore();
+			if(semaphore == nullptr)
+			{
+				semaphoreRequestFailed = true;
+				continue;
+			}
+
+			outSemaphores.Add(semaphore);
+		}
+	}
+
+	if(semaphoreRequestFailed)
+	{
+		B3D_LOG(Error, LogRenderBackend, "Failed to allocate semaphores for a command buffer sync. This means some of the "
+									 "dependency requests will not be fulfilled. This happened because a command buffer has too many "
+									 "dependant command buffers. The maximum allowed number is {0} but can be increased by incrementing the "
+									 "value of B3D_MAX_COMMAND_BUFFER_DEPENDENCIES.",
+			   B3D_MAX_COMMAND_BUFFER_DEPENDENCIES);
+	}
+}

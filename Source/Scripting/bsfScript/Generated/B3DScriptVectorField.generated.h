@@ -1,0 +1,31 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#pragma once
+
+#include "B3DScriptEnginePrerequisites.h"
+#include "B3DScriptResourceWrapper.h"
+#include "../../../Engine/Core/Particles/B3DVectorField.h"
+#include "../../../Engine/Utility/Math/B3DVector3.h"
+
+namespace b3d { struct __VECTOR_FIELD_DESCInterop; }
+namespace b3d { class VectorField; }
+namespace b3d
+{
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptVectorField : public TScriptResourceWrapper<VectorField, ScriptVectorField>
+	{
+	public:
+		B3D_SCRIPT_TYPE_DEFINITION(kEngineAssembly, kEngineNs, "VectorField")
+
+		ScriptVectorField(const TResourceHandle<VectorField>& nativeObject);
+		~ScriptVectorField();
+
+		static void SetupScriptBindings();
+
+		static MonoObject* CreateScriptObject(bool construct);
+
+	private:
+		static MonoObject* InternalGetRef(ScriptVectorField* self);
+
+		static void InternalCreate(MonoObject* scriptObject, __VECTOR_FIELD_DESCInterop* desc, MonoArray* values);
+	};
+}

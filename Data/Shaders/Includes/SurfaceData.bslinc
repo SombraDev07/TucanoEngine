@@ -1,0 +1,40 @@
+mixin SurfaceData
+{
+	code
+	{
+		struct SurfaceData
+		{
+			float4 albedo;
+			float4 worldNormal;
+			float depth;
+			float roughness;
+			float metalness;
+			float2 velocity;
+			uint mask;
+		};
+		
+		// Encodes velocity into a format suitable for storing in a 16-bit SNORM texture. 
+		// Velocity range of [-2, 2] is supported (full NDC).
+		float2 encodeVelocity16SNORM(float2 velocity)
+		{
+			return velocity * 0.5f;
+		}
+		
+		// Decodes velocity from an encoded 16-bit SNORM format. See encodeVelocity16SNORM().
+		// Velocity range of [-2, 2] is supported (full NDC).
+		float2 decodeVelocity16SNORM(float2 val)
+		{
+			return val * 2.0f;
+		}
+
+		// Unpacks a tangent-space normal sampled from a normal map. X and Y come from the red and green channels
+		// (stored in [0,1], remapped to [-1,1]); Z is reconstructed from them, so the result is correct for
+		// two-channel formats (e.g. BC5, whose blue channel reads as 0) as well as three-channel ones.
+		float3 unpackNormalMap(float4 packedNormal)
+		{
+			float2 xy = packedNormal.rg * 2.0f - 1.0f; // TODO - Consider using SNORM format, to get rid of the MAD
+			float z = sqrt(saturate(1.0f - dot(xy, xy)));
+			return float3(xy, z);
+		}
+	};
+};

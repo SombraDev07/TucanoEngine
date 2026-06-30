@@ -1,0 +1,24 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#pragma once
+
+#include "B3DScriptEnginePrerequisites.h"
+#include "../../../Engine/Core/GUI/B3DGUIUtility.h"
+#include "B3DScriptTypeDefinition.h"
+#include "../../../Engine/Utility/Math/B3DSize2.h"
+
+namespace b3d
+{
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptGUIUtility : public TScriptTypeDefinition<ScriptGUIUtility>
+	{
+	public:
+		B3D_SCRIPT_TYPE_DEFINITION(kEngineAssembly, kEngineNs, "GUIUtility")
+
+		ScriptGUIUtility();
+
+		static void SetupScriptBindings();
+
+	private:
+		static void InternalCalculateTextBounds(MonoString* text, MonoObject* font, float fontSize, TSize2<int32_t>* __output);
+	};
+}

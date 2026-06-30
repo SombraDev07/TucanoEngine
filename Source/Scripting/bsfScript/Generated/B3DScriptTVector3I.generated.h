@@ -1,0 +1,38 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#pragma once
+
+#include "B3DScriptEnginePrerequisites.h"
+#include "B3DScriptObjectWrapper.h"
+#include "../../../Engine/Utility/Math/B3DVector3I.h"
+#include "B3DScriptObjectWrapper.h"
+#include "../../../Engine/Utility/Math/B3DVector3I.h"
+
+namespace b3d
+{
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptVector3I : public TScriptTypeDefinition<ScriptVector3I>
+	{
+	public:
+		B3D_SCRIPT_TYPE_DEFINITION(kEngineAssembly, kEngineNs, "Vector3I")
+
+		static MonoObject* Box(const TVector3I<int32_t>& value);
+		static TVector3I<int32_t> Unbox(MonoObject* value);
+
+	private:
+		ScriptVector3I();
+
+	};
+
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptVector3UI : public TScriptTypeDefinition<ScriptVector3UI>
+	{
+	public:
+		B3D_SCRIPT_TYPE_DEFINITION(kEngineAssembly, kEngineNs, "Vector3UI")
+
+		static MonoObject* Box(const TVector3I<uint32_t>& value);
+		static TVector3I<uint32_t> Unbox(MonoObject* value);
+
+	private:
+		ScriptVector3UI();
+
+	};
+}

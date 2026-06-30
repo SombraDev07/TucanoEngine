@@ -1,0 +1,1339 @@
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/LowLevel.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/LowLevel.vcxproj
+index 00dcc5de..e92971af 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/LowLevel.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/LowLevel.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../../Externals/nvToolsExt/1/include;./../../PhysXGpu/include;./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/common;./../../../Include/geometry;./../../../Include;./../../../Include/GeomUtils;./../../Common/src;./../../Common/src/windows;./../../PhysXProfile/src;./../../PhysXProfile/include;./../../GeomUtils/headers;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;./../../GeomUtils/src/ccd;./../../GeomUtils/src;./../../LowLevel/API/include;./../../LowLevel/common/include;./../../LowLevel/common/include/collision;./../../LowLevel/common/include/pipeline;./../../LowLevel/common/include/pipeline/windows;./../../LowLevel/common/include/utils;./../../LowLevel/software/include;./../../LowLevel/software/include/windows;./../../LowLevelDynamics/include;./../../LowLevelDynamics/include/windows;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/LowLevelAABB.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/LowLevelAABB.vcxproj
+index 49255384..f83ca3a1 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/LowLevelAABB.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/LowLevelAABB.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../../Externals/nvToolsExt/1/include;./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include;./../../../Include/common;./../../../Include/geometry;./../../../Include/GeomUtils;./../../Common/src/windows;./../../GeomUtils/headers;./../../GeomUtils/src;./../../Common/src;./../../LowLevel/API/include;./../../LowLevel/common/include/utils;./../../LowLevel/common/include/pipeline;./../../LowLevelAABB/include;./../../LowLevelAABB/src;./../../GpuBroadPhase/include;./../../GpuBroadPhase/src;./../../LowLevelAABB/windows/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/LowLevelCloth.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/LowLevelCloth.vcxproj
+index 39d66183..fcf2ebc1 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/LowLevelCloth.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/LowLevelCloth.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include;./../../../Include/common;./../../Common/src;./../../LowLevelCloth/include;./../../LowLevelCloth/src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/LowLevelDynamics.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/LowLevelDynamics.vcxproj
+index f3683b8a..f279281c 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/LowLevelDynamics.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/LowLevelDynamics.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../../Externals/nvToolsExt/1/include;./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/common;./../../../Include/geometry;./../../../Include;./../../../Include/GeomUtils;./../../Common/src;./../../Common/src/windows;./../../PhysXProfile/src;./../../PhysXProfile/include;./../../GeomUtils/src/contact;./../../LowLevel/API/include;./../../LowLevel/common/include;./../../LowLevel/common/include/pipeline;./../../LowLevel/common/include/pipeline/windows;./../../LowLevel/common/include/math;./../../LowLevel/common/include/utils;./../../LowLevel/software/include;./../../LowLevel/software/include/windows;./../../LowLevelDynamics/include;./../../LowLevelDynamics/src;./../../LowLevelDynamics/include/windows;./../../PhysXGpu/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/LowLevelParticles.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/LowLevelParticles.vcxproj
+index c8e1671a..f8e5c27c 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/LowLevelParticles.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/LowLevelParticles.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../PhysXGpu/include;./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include;./../../../Include/common;./../../../Include/geometry;./../../../Include/GeomUtils;./../../Common/src;./../../LowLevelParticles/include;./../../LowLevelParticles/src;./../../LowLevel/API/include;./../../LowLevel/common/include/utils;./../../GeomUtils/src;./../../GeomUtils/src/convex;./../../GeomUtils/src/hf;./../../GeomUtils/src/mesh;./../../GeomUtils/headers;./../../../../Externals/nvToolsExt/1/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/PhysX.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/PhysX.vcxproj
+index 7a969cc7..c5ef43f1 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/PhysX.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/PhysX.vcxproj
+@@ -66,7 +66,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -76,7 +76,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -110,16 +110,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../Include/gpu;./../../PhysXGpu/include;./../../PhysX/src/device;./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../../Externals/nvToolsExt/1/include;./../../../Include/common;./../../../Include/geometry;./../../../Include/GeomUtils;./../../../Include/pvd;./../../../Include/particles;./../../../Include/cloth;./../../../Include;./../../Common/src;./../../GeomUtils/headers;./../../GeomUtils/src;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/sweep;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;./../../GeomUtils/src/ccd;./../../LowLevel/API/include;./../../LowLevel/software/include;./../../LowLevel/common/include/pipeline;./../../LowLevelAABB/include;./../../LowLevelDynamics/include;./../../LowLevelDynamics/src;./../../LowLevelParticles/include;./../../PhysX/src;./../../PhysX/src/buffering;./../../PhysX/src/particles;./../../PhysX/src/cloth;./../../SimulationController/include;./../../SimulationController/src;./../../SimulationController/src/particles;./../../PhysXCooking/src;./../../PhysXCooking/src/mesh;./../../PhysXCooking/src/convex;./../../SceneQuery/include;./../../PhysXMetaData/core/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -153,7 +153,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -162,7 +162,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -196,7 +196,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -205,7 +205,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/PhysXCharacterKinematic.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/PhysXCharacterKinematic.vcxproj
+index 4b1714d1..3798f2bb 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/PhysXCharacterKinematic.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/PhysXCharacterKinematic.vcxproj
+@@ -66,7 +66,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -76,7 +76,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_CHARACTER_EXPORTS;PX_PHYSX_CORE_EXPORTS;PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -110,16 +110,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/characterkinematic;./../../../Include/common;./../../../Include/geometry;./../../../Include/extensions;./../../../Include;./../../GeomUtils/headers;./../../Common/src;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>PX_PHYSX_CHARACTER_EXPORTS;PX_PHYSX_CORE_EXPORTS;PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>PX_PHYSX_CHARACTER_EXPORTS;PX_PHYSX_CORE_EXPORTS;PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -153,7 +153,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -162,7 +162,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_CHARACTER_EXPORTS;PX_PHYSX_CORE_EXPORTS;PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -196,7 +196,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -205,7 +205,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_CHARACTER_EXPORTS;PX_PHYSX_CORE_EXPORTS;PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/PhysXCommon.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/PhysXCommon.vcxproj
+index d8a0b552..58e36b79 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/PhysXCommon.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/PhysXCommon.vcxproj
+@@ -66,7 +66,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -76,7 +76,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_FOUNDATION_DLL=1;PX_PHYSX_COMMON_EXPORTS;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -110,16 +110,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../../Externals/nvToolsExt/1/include;./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/common;./../../../Include;./../../Common/src;./../../Common/src/windows;./../../PhysXProfile/include;./../../PhysXProfile/src;./../../PhysXGpu/include;./../../../Include/geometry;./../../GeomUtils/headers;./../../GeomUtils/src;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/sweep;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;./../../GeomUtils/src/ccd;./../../../Include/GeomUtils;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_FOUNDATION_DLL=1;PX_PHYSX_COMMON_EXPORTS;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_FOUNDATION_DLL=1;PX_PHYSX_COMMON_EXPORTS;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -153,7 +153,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -162,7 +162,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_FOUNDATION_DLL=1;PX_PHYSX_COMMON_EXPORTS;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -196,7 +196,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -205,7 +205,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_FOUNDATION_DLL=1;PX_PHYSX_COMMON_EXPORTS;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/PhysXCooking.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/PhysXCooking.vcxproj
+index 21660029..7d03bc5b 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/PhysXCooking.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/PhysXCooking.vcxproj
+@@ -66,7 +66,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -76,7 +76,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_LOADER_EXPORTS;PX_PHYSX_COOKING_EXPORTS;PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_COOKING;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -110,16 +110,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/common;./../../../Include/geometry;./../../../Include/GeomUtils;./../../../Include/cloth;./../../../Include/cooking;./../../../Include;./../../Common/src;./../../GeomUtils/headers;./../../GeomUtils/src;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/sweep;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;./../../GeomUtils/src/ccd;./../../PhysXCooking/src;./../../PhysXCooking/src/mesh;./../../PhysXCooking/src/convex;./../../PhysXExtensions/src;./../../PhysXGpu/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>PX_PHYSX_LOADER_EXPORTS;PX_PHYSX_COOKING_EXPORTS;PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_COOKING;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>PX_PHYSX_LOADER_EXPORTS;PX_PHYSX_COOKING_EXPORTS;PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_COOKING;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=CHECKED;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -153,7 +153,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -162,7 +162,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_LOADER_EXPORTS;PX_PHYSX_COOKING_EXPORTS;PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_COOKING;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;PX_PHYSX_DLL_NAME_POSTFIX=PROFILE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -196,7 +196,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -205,7 +205,7 @@
+ 			<PreprocessorDefinitions>PX_PHYSX_LOADER_EXPORTS;PX_PHYSX_COOKING_EXPORTS;PX_PHYSX_CORE_EXPORTS;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_COOKING;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/PhysXExtensions.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/PhysXExtensions.vcxproj
+index 6dab7851..c93dd518 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/PhysXExtensions.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/PhysXExtensions.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>PX_BUILD_NUMBER=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/common;./../../../Include/geometry;./../../../Include/GeomUtils;./../../../Include/pvd;./../../../Include/cooking;./../../../Include/extensions;./../../../Include/vehicle;./../../../Include/cloth;./../../../Include;./../../Common/src;./../../GeomUtils/headers;./../../GeomUtils/src;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;./../../PhysXMetaData/core/include;./../../PhysXMetaData/extensions/include;./../../PhysXExtensions/src;./../../PhysXExtensions/src/serialization/Xml;./../../PhysXExtensions/src/serialization/Binary;./../../PhysXExtensions/src/serialization/File;./../../PvdSDK/src;./../../PhysX/src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>PX_BUILD_NUMBER=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>PX_BUILD_NUMBER=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>PX_BUILD_NUMBER=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>PX_BUILD_NUMBER=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/PhysXVehicle.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/PhysXVehicle.vcxproj
+index 91f920ac..3d1a54ee 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/PhysXVehicle.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/PhysXVehicle.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/vehicle;./../../../Include/common;./../../../Include/geometry;./../../../Include/extensions;./../../../Include/cloth;./../../../Include;./../../../Include/pvd;./../../../Include/physxprofilesdk;./../../Common/src;./../../PhysXVehicle/src;./../../PhysXMetaData/extensions/include;./../../PhysXExtensions/src/serialization/Xml;./../../PhysXMetaData/core/include;./../../PhysXVehicle/src/PhysXMetaData/include;./../../PvdSDK/src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/SceneQuery.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/SceneQuery.vcxproj
+index a74fb156..88b8beb1 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/SceneQuery.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/SceneQuery.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../../Externals/nvToolsExt/1/include;./../../../Include/common;./../../../Include/geometry;./../../../Include/GeomUtils;./../../../Include/pvd;./../../../Include;./../../Common/src;./../../Common/src/windows;./../../GeomUtils/headers;./../../GeomUtils/src;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/sweep;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;./../../GeomUtils/src/ccd;./../../SceneQuery/include;./../../SimulationController/include;./../../LowLevel/API/include;./../../PhysX/src;./../../PhysX/src/buffering;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PhysX_3.4/Source/compiler/vc15win64/SimulationController.vcxproj b/PhysX_3.4/Source/compiler/vc15win64/SimulationController.vcxproj
+index 5bfa6007..cab1eeb2 100644
+--- a/PhysX_3.4/Source/compiler/vc15win64/SimulationController.vcxproj
++++ b/PhysX_3.4/Source/compiler/vc15win64/SimulationController.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,16 +105,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../PhysXGpu/include;./../../Common/include;./../../../../PxShared/include;./../../../../PxShared/src/foundation/include;./../../../../PxShared/src/fastxml/include;./../../../../PxShared/src/pvd/include;./../../../Include/common;./../../../Include/geometry;./../../../Include/GeomUtils;./../../../Include/pvd;./../../../Include/particles;./../../../Include/cloth;./../../../Include;./../../Common/src;./../../Common/src/windows;./../../GeomUtils/headers;./../../GeomUtils/src;./../../GeomUtils/src/contact;./../../GeomUtils/src/common;./../../GeomUtils/src/convex;./../../GeomUtils/src/distance;./../../GeomUtils/src/sweep;./../../GeomUtils/src/gjk;./../../GeomUtils/src/intersection;./../../GeomUtils/src/mesh;./../../GeomUtils/src/hf;./../../GeomUtils/src/pcm;./../../GeomUtils/src/ccd;./../../SimulationController/include;./../../SimulationController/src;./../../SimulationController/src/particles;./../../SimulationController/src/cloth;./../../LowLevel/windows/include;./../../LowLevel/API/include;./../../LowLevel/software/include;./../../LowLevel/common/include/math;./../../LowLevel/common/include/utils;./../../LowLevel/common/include/collision;./../../LowLevel/common/include/pipeline;./../../LowLevelCloth/include;./../../LowLevelAABB/include;./../../LowLevelDynamics/include;./../../LowLevelParticles/include;./../../../../Externals/nvToolsExt/1/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;PX_CHECKED=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -144,7 +144,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -153,7 +153,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_PROFILE=1;PX_NVTX=1;PX_SUPPORT_PVD=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4548 /wd4127 /wd4710 /wd4711 /wd4435 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd5038 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PHYSX_STATIC_LIB;NDEBUG;PX_SUPPORT_PVD=0;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PxShared/src/compiler/vc15win64/PsFastXml.vcxproj b/PxShared/src/compiler/vc15win64/PsFastXml.vcxproj
+index fe4e81e1..3c4aac3f 100644
+--- a/PxShared/src/compiler/vc15win64/PsFastXml.vcxproj
++++ b/PxShared/src/compiler/vc15win64/PsFastXml.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>PX_FOUNDATION_DLL=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,7 +105,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -114,7 +114,7 @@
+ 			<PreprocessorDefinitions>PX_FOUNDATION_DLL=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -145,16 +145,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../include;./../../foundation/include;./../../fastxml/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>PX_FOUNDATION_DLL=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>PX_FOUNDATION_DLL=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>PX_FOUNDATION_DLL=0;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_PROFILE=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PxShared/src/compiler/vc15win64/PxFoundation.vcxproj b/PxShared/src/compiler/vc15win64/PxFoundation.vcxproj
+index 3f841e22..c8b1f466 100644
+--- a/PxShared/src/compiler/vc15win64/PxFoundation.vcxproj
++++ b/PxShared/src/compiler/vc15win64/PxFoundation.vcxproj
+@@ -66,7 +66,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -76,7 +76,7 @@
+ 			<PreprocessorDefinitions>PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -109,7 +109,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -118,7 +118,7 @@
+ 			<PreprocessorDefinitions>PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -152,16 +152,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../include;$(WindowsSDK_IncludePath);./../../foundation/include;./../../foundation/include/windows;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -194,7 +194,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -203,7 +203,7 @@
+ 			<PreprocessorDefinitions>PX_FOUNDATION_DLL=1;WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_PROFILE=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PxShared/src/compiler/vc15win64/PxPvdSDK.vcxproj b/PxShared/src/compiler/vc15win64/PxPvdSDK.vcxproj
+index 66a78619..12911076 100644
+--- a/PxShared/src/compiler/vc15win64/PxPvdSDK.vcxproj
++++ b/PxShared/src/compiler/vc15win64/PxPvdSDK.vcxproj
+@@ -66,7 +66,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -76,7 +76,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PVDSDK_DLL=1;PX_FOUNDATION_DLL=1;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -110,7 +110,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -119,7 +119,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PVDSDK_DLL=1;PX_FOUNDATION_DLL=1;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -153,16 +153,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../include;./../../pvd/include;./../../foundation/include;./../../filebuf/include;./../../../../Externals/nvToolsExt/1/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PVDSDK_DLL=1;PX_FOUNDATION_DLL=1;NDEBUG;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PVDSDK_DLL=1;PX_FOUNDATION_DLL=1;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -196,7 +196,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -205,7 +205,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_PVDSDK_DLL=1;PX_FOUNDATION_DLL=1;NDEBUG;PX_PROFILE=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PxShared/src/compiler/vc15win64/PxTask.vcxproj b/PxShared/src/compiler/vc15win64/PxTask.vcxproj
+index 76acd720..f124ff7a 100644
+--- a/PxShared/src/compiler/vc15win64/PxTask.vcxproj
++++ b/PxShared/src/compiler/vc15win64/PxTask.vcxproj
+@@ -65,7 +65,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='debug|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<BasicRuntimeChecks>UninitializedLocalUsageCheck</BasicRuntimeChecks>
+@@ -75,7 +75,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;_DEBUG;PX_DEBUG=1;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -105,7 +105,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='release|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -114,7 +114,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -145,16 +145,16 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='checked|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+ 			<Optimization>Full</Optimization>
+ 			<AdditionalIncludeDirectories>./../../../include;./../../task/include;./../../foundation/include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+-			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
++			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;PX_CHECKED=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+@@ -184,7 +184,7 @@
+ 	</PropertyGroup>
+ 	<ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='profile|x64'">
+ 		<ClCompile>
+-			<TreatWarningAsError>true</TreatWarningAsError>
++			<TreatWarningAsError>false</TreatWarningAsError>
+ 			<BufferSecurityCheck>false</BufferSecurityCheck>
+ 			<FloatingPointModel>Fast</FloatingPointModel>
+ 			<AdditionalOptions>/GR- /GF /MP /Wall /wd4514 /wd4820 /wd4127 /wd4710 /wd4711 /wd4577 /wd4464 /wd4623 /wd4626 /wd5027 /wd4987 /wd4435 /wd5045 /wd4548 /d2Zi+</AdditionalOptions>
+@@ -193,7 +193,7 @@
+ 			<PreprocessorDefinitions>WIN32;WIN64;_CRT_SECURE_NO_DEPRECATE;_CRT_NONSTDC_NO_DEPRECATE;_WINSOCK_DEPRECATED_NO_WARNINGS;NDEBUG;PX_PROFILE=1;PX_NVTX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+ 			<ExceptionHandling>false</ExceptionHandling>
+ 			<WarningLevel>Level4</WarningLevel>
+-			<RuntimeLibrary>MultiThreaded</RuntimeLibrary>
++			<RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+ 			<PrecompiledHeader>NotUsing</PrecompiledHeader>
+ 			<PrecompiledHeaderFile></PrecompiledHeaderFile>
+ 			<ProgramDataBaseFileName>$(TargetDir)\$(TargetName).pdb</ProgramDataBaseFileName>
+diff --git a/PxShared/src/foundation/include/PsAllocator.h b/PxShared/src/foundation/include/PsAllocator.h
+index 42f88470..80a8f229 100644
+--- a/PxShared/src/foundation/include/PsAllocator.h
++++ b/PxShared/src/foundation/include/PsAllocator.h
+@@ -37,7 +37,7 @@
+ 
+ #if(PX_WINDOWS_FAMILY || PX_XBOXONE)
+ #include <exception>
+-#include <typeinfo.h>
++#include <typeinfo>
+ #endif
+ #if(PX_APPLE_FAMILY)
+ #include <typeinfo>

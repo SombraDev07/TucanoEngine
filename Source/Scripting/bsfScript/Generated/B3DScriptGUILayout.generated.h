@@ -1,0 +1,41 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#pragma once
+
+#include "B3DScriptEnginePrerequisites.h"
+#include "B3DScriptGUIElementWrapper.h"
+#include "../../../Engine/Core/GUI/B3DGUIElement.h"
+
+namespace b3d { class GUILayout; }
+namespace b3d
+{
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptGUILayoutWrapperBase : public ScriptGUIElementWrapper
+	{
+	public:
+		using ScriptGUIElementWrapper::ScriptGUIElementWrapper;
+
+	};
+
+	class B3D_SCRIPT_INTEROP_EXPORT ScriptGUILayout : public TScriptGUIElementWrapper<GUILayout, ScriptGUILayout, ScriptGUILayoutWrapperBase>
+	{
+	public:
+		B3D_SCRIPT_TYPE_DEFINITION(kEngineAssembly, kEngineNs, "GUILayout")
+
+		ScriptGUILayout(GUILayout* nativeObject);
+		~ScriptGUILayout();
+
+		static void SetupScriptBindings();
+
+		static MonoObject* CreateScriptObject(bool construct);
+
+	private:
+		static void InternalAddElement(ScriptGUILayoutWrapperBase* self, MonoObject* element);
+		static void InternalRemoveElement(ScriptGUILayoutWrapperBase* self, MonoObject* element);
+		static void InternalRemoveElementAt(ScriptGUILayoutWrapperBase* self, uint32_t index);
+		static void InternalInsertElement(ScriptGUILayoutWrapperBase* self, uint32_t index, MonoObject* element);
+		static uint32_t InternalGetChildCount(ScriptGUILayoutWrapperBase* self);
+		static MonoObject* InternalGetChild(ScriptGUILayoutWrapperBase* self, uint32_t index);
+		static void InternalClear(ScriptGUILayoutWrapperBase* self);
+		static void InternalSetEnableCulling(ScriptGUILayoutWrapperBase* self, bool enable);
+	};
+}

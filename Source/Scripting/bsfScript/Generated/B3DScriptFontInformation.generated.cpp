@@ -1,0 +1,47 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#include "B3DScriptFontInformation.generated.h"
+#include "B3DMonoMethod.h"
+#include "B3DMonoClass.h"
+#include "B3DMonoUtil.h"
+
+namespace b3d
+{
+	ScriptFontInformation::ScriptFontInformation()
+	{ }
+
+	MonoObject* ScriptFontInformation::Box(const __FontInformationInterop& value)
+	{
+		return MonoUtil::Box(sInteropMetaData.ScriptClass->GetInternalClass(), (void*)&value);
+	}
+
+	__FontInformationInterop ScriptFontInformation::Unbox(MonoObject* value)
+	{
+		return *(__FontInformationInterop*)MonoUtil::Unbox(value);
+	}
+
+	FontInformation ScriptFontInformation::FromInterop(const __FontInformationInterop& value)
+	{
+		FontInformation output;
+		String tmpName;
+		tmpName = MonoUtil::MonoToString(value.Name);
+		output.Name = tmpName;
+		output.DPI = value.DPI;
+		output.RenderMode = value.RenderMode;
+
+		return output;
+	}
+
+	__FontInformationInterop ScriptFontInformation::ToInterop(const FontInformation& value)
+	{
+		__FontInformationInterop output;
+		MonoString* tmpName;
+		tmpName = MonoUtil::StringToMono(value.Name);
+		output.Name = tmpName;
+		output.DPI = value.DPI;
+		output.RenderMode = value.RenderMode;
+
+		return output;
+	}
+
+}

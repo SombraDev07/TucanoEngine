@@ -1,0 +1,69 @@
+# List of .NET BCL assemblies deployed with the application
+#
+# One assembly base name per line (no .dll). Blank lines and '#' comments are ignored.
+# System.Private.CoreLib (corlib) is mandatory
+
+# Core runtime
+System.Private.CoreLib
+mscorlib                              # legacy facade forwarding to System.Private.CoreLib
+netstandard
+
+# Basic system libraries
+System.Runtime
+System.Runtime.InteropServices
+System.Runtime.CompilerServices.Unsafe
+System.Runtime.Intrinsics
+System.Reflection
+System.Reflection.Primitives
+System.Reflection.Metadata
+System.Reflection.Emit.ILGeneration
+System.Reflection.Emit.Lightweight
+System.Memory
+System.IO
+System.Diagnostics.Debug
+
+# Collections
+System.Collections
+System.Collections.Concurrent
+System.Collections.Immutable
+System.Collections.NonGeneric
+System.Collections.Specialized
+System.ObjectModel
+
+# Threading
+System.Threading
+System.Threading.Tasks
+System.Threading.Thread
+System.Threading.ThreadPool
+
+# Text / regular expressions
+System.Text.Encoding
+System.Text.Encoding.Extensions
+System.Text.RegularExpressions
+
+# Component model
+System.ComponentModel
+System.ComponentModel.Primitives
+
+# Diagnostics / process
+System.Diagnostics.Process
+System.Diagnostics.FileVersionInfo
+System.Diagnostics.StackTrace
+
+# IO
+System.IO.Compression
+System.IO.MemoryMappedFiles
+
+# Numerics / LINQ / URI
+System.Linq
+System.Numerics.Vectors
+System.Private.Uri
+
+# Security (Windows)
+System.Security.AccessControl
+System.Security.Claims
+System.Security.Principal.Windows
+
+# Win32 (Windows)
+Microsoft.Win32.Primitives
+Microsoft.Win32.Registry

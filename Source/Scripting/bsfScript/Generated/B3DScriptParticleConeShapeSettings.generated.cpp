@@ -1,0 +1,53 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+#include "B3DScriptParticleConeShapeSettings.generated.h"
+#include "B3DMonoMethod.h"
+#include "B3DMonoClass.h"
+#include "B3DMonoUtil.h"
+#include "../../../Engine/Core/Particles/B3DParticleEmitter.h"
+#include "B3DScriptParticleEmissionMode.generated.h"
+
+namespace b3d
+{
+	ScriptParticleConeShapeSettings::ScriptParticleConeShapeSettings()
+	{ }
+
+	MonoObject* ScriptParticleConeShapeSettings::Box(const __ParticleConeShapeSettingsInterop& value)
+	{
+		return MonoUtil::Box(sInteropMetaData.ScriptClass->GetInternalClass(), (void*)&value);
+	}
+
+	__ParticleConeShapeSettingsInterop ScriptParticleConeShapeSettings::Unbox(MonoObject* value)
+	{
+		return *(__ParticleConeShapeSettingsInterop*)MonoUtil::Unbox(value);
+	}
+
+	ParticleConeShapeSettings ScriptParticleConeShapeSettings::FromInterop(const __ParticleConeShapeSettingsInterop& value)
+	{
+		ParticleConeShapeSettings output;
+		output.Type = value.Type;
+		output.Radius = value.Radius;
+		output.Angle = value.Angle;
+		output.Length = value.Length;
+		output.Thickness = value.Thickness;
+		output.Arc = value.Arc;
+		output.Mode = value.Mode;
+
+		return output;
+	}
+
+	__ParticleConeShapeSettingsInterop ScriptParticleConeShapeSettings::ToInterop(const ParticleConeShapeSettings& value)
+	{
+		__ParticleConeShapeSettingsInterop output;
+		output.Type = value.Type;
+		output.Radius = value.Radius;
+		output.Angle = value.Angle;
+		output.Length = value.Length;
+		output.Thickness = value.Thickness;
+		output.Arc = value.Arc;
+		output.Mode = value.Mode;
+
+		return output;
+	}
+
+}

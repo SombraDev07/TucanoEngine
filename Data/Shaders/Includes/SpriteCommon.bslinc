@@ -1,0 +1,224 @@
+mixin SpriteCommon
+{
+	#ifndef ANIMATED
+		#define ANIMATED 0
+	#endif
+
+	#ifndef TRANSPARENCY
+		#define TRANSPARENCY 0
+	#endif
+
+	#ifndef ENABLE_UV
+		#define ENABLE_UV 0
+	#endif
+
+	#ifndef ENABLE_CLIPPING
+	    #define ENABLE_CLIPPING 0
+	#endif
+
+	#if TRANSPARENCY
+	blend
+	{
+		target	
+		{
+			enabled = true;
+			#if TRANSPARENCY == 1
+			color = { srcA, srcIA, add };
+			alpha = { srcA, dstA, max };
+			#else
+			color = { one, srcIA, add };
+			alpha = { one, dstA, max };
+			#endif
+			
+			writemask = RGBA;
+		};
+	};	
+	#endif
+	
+	depth
+	{
+		read = false;
+		write = false;
+	};
+	
+	code
+	{
+		cbuffer GUIParams
+		{
+			float4x4 gWorldTransform;
+			float gInvViewportWidth;
+			float gInvViewportHeight;
+			int2 gViewportOffset;
+			float4 gTint;
+			float4 gUVSizeOffset;
+			float gViewportYFlip;
+			int gClipRegionCount;
+		}
+
+        struct Area2DInt
+        {
+            int2 TopLeft;
+            int2 BottomRight;
+        };
+
+        struct Area2DFloat
+        {
+            float2 TopLeft;
+            float2 BottomRight;
+        };
+
+		struct Vertex
+		{
+		    float2 Position;
+
+		    #if ENABLE_UV
+		    float2 UV;
+		    #endif
+		};
+
+		StructuredBuffer<Vertex> gVertices;
+		StructuredBuffer<Area2DInt> gClipRegions;
+
+		#if ENABLE_CLIPPING
+        bool IsInClipRegion(Area2DInt region, int2 position)
+        {
+            if(position.x < region.TopLeft.x || position.x >= region.BottomRight.x)
+                return false;
+
+            return position.y >= region.TopLeft.y && position.y < region.BottomRight.y;
+        }
+
+        void ClipQuadVertex(
+            Area2DFloat clipRegion, int vertexIndex, inout Area2DFloat quad, out float2 outPosition
+            #if ENABLE_UV
+            , inout Area2DFloat quadUV
+            , out float2 outUV
+            #endif
+            )
+        {
+            if(vertexIndex == 0 || vertexIndex == 2) // Left
+            {
+                const float distanceLeftVertexToLeftPlane = quad.TopLeft.x - clipRegion.TopLeft.x;
+                const float distanceRightVertexToLeftPlane = quad.BottomRight.x - clipRegion.TopLeft.x;
+                const float t = saturate(distanceLeftVertexToLeftPlane / (distanceLeftVertexToLeftPlane - distanceRightVertexToLeftPlane));
+
+                outPosition.x = (1.0f - t) * quad.TopLeft.x + t * quad.BottomRight.x;
+
+                #if ENABLE_UV
+                outUV.x = (1.0f - t) * quadUV.TopLeft.x + t * quadUV.BottomRight.x;
+                #endif
+            }
+            else // Right
+            {
+                const float distanceRightVertexToRightPlane = clipRegion.BottomRight.x - quad.BottomRight.x;
+                const float distanceLeftVertexToRightPlane = clipRegion.BottomRight.x - quad.TopLeft.x;
+                const float t = saturate(distanceRightVertexToRightPlane / (distanceRightVertexToRightPlane - distanceLeftVertexToRightPlane));
+
+                outPosition.x = (1.0f - t) * quad.BottomRight.x + t * quad.TopLeft.x;
+
+                #if ENABLE_UV
+                outUV.x = (1.0f - t) * quadUV.BottomRight.x + t * quadUV.TopLeft.x;
+                #endif
+            }
+
+            if(vertexIndex == 0 || vertexIndex == 1) // Top
+            {
+                const float distanceTopVertexToTopPlane = quad.TopLeft.y - clipRegion.TopLeft.y;
+                const float distanceBottomVertexToTopPlane = quad.BottomRight.y - clipRegion.TopLeft.y;
+                const float t = saturate(distanceTopVertexToTopPlane / (distanceTopVertexToTopPlane - distanceBottomVertexToTopPlane));
+
+                outPosition.y = (1.0f - t) * quad.TopLeft.y + t * quad.BottomRight.y;
+
+                #if ENABLE_UV
+                outUV.y = (1.0f - t) * quadUV.TopLeft.y + t * quadUV.BottomRight.y;
+                #endif
+            }
+            else // Bottom
+            {
+                const float distanceBottomVertexToBottomPlane = clipRegion.BottomRight.y - quad.BottomRight.y;
+                const float distanceTopVertexToBottomPlane = clipRegion.BottomRight.y - quad.TopLeft.y;
+                const float t = saturate(distanceBottomVertexToBottomPlane / (distanceBottomVertexToBottomPlane - distanceTopVertexToBottomPlane));
+
+                outPosition.y = (1.0f - t) * quad.BottomRight.y + t * quad.TopLeft.y;
+
+                #if ENABLE_UV
+                outUV.y = (1.0f - t) * quadUV.BottomRight.y + t * quadUV.TopLeft.y;
+                #endif
+            }
+        }
+		#endif
+
+		void vsmain(
+		    in uint vertexId : SV_VertexID
+		    #if ENABLE_CLIPPING
+		    , in uint instanceId : SV_InstanceID
+		    #endif
+			, out float4 outPosition : SV_Position
+			#if ENABLE_UV
+			, out float2 outUV : TEXCOORD0
+			#endif
+			#if ENABLE_CLIPPING
+			, out uint outInstanceId : TEXCOORD1
+			#endif
+			)
+		{
+            float2 inPosition;
+            float2 inUV;
+
+		    #if ENABLE_CLIPPING
+                const int quadIndex = vertexId / 4;
+                const int localVertexIndex = vertexId % 4;
+
+                const Vertex topLeftVertex = gVertices[quadIndex * 4 + 0];
+                const Vertex bottomRightVertex = gVertices[quadIndex * 4 + 3];
+
+                const Area2DInt clipRegion = gClipRegions[instanceId];
+
+                Area2DFloat clipRegionFloat;
+                clipRegionFloat.TopLeft = (float2)clipRegion.TopLeft;
+                clipRegionFloat.BottomRight = (float2)clipRegion.BottomRight;
+
+                Area2DFloat quad;
+                quad.TopLeft = topLeftVertex.Position;
+                quad.BottomRight = bottomRightVertex.Position;
+
+                #if ENABLE_UV
+                Area2DFloat quadUV;
+                quadUV.TopLeft = topLeftVertex.UV;
+                quadUV.BottomRight = bottomRightVertex.UV;
+                #endif
+
+                ClipQuadVertex(clipRegionFloat, localVertexIndex, quad, inPosition
+                    #if ENABLE_UV
+                    , quadUV, inUV
+                    #endif
+                );
+		    #else
+                Vertex vertex = gVertices[vertexId];
+                inPosition = vertex.Position;
+                #if ENABLE_UV
+                    inUV = vertex.UV;
+                #endif
+		    #endif
+
+			const float4 worldSpacePosition = mul(gWorldTransform, float4(inPosition.xy, 0, 1));
+
+			const float ndcX = -1.0f + ((gViewportOffset.x + worldSpacePosition.x) * gInvViewportWidth);
+			const float ndcY = (1.0f - ((gViewportOffset.y + worldSpacePosition.y) * gInvViewportHeight)) * gViewportYFlip;
+
+			outPosition = float4(ndcX, ndcY, 0, 1);
+
+			#if ENABLE_UV
+			#if ANIMATED
+			outUV = inUV * gUVSizeOffset.xy + gUVSizeOffset.zw;
+			#else
+			outUV = inUV;
+			#endif
+			#endif
+
+			#if ENABLE_CLIPPING
+			outInstanceId = instanceId;
+			#endif
+		}
+	};
+};

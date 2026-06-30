@@ -1,0 +1,104 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace b3d
+{
+	/** @addtogroup Animation
+	 *  @{
+	 */
+
+	/// <summary>Animation keyframe, represented as an endpoint of a cubic hermite spline.</summary>
+	[StructLayout(LayoutKind.Sequential), SerializeObject]
+	public partial struct KeyFrameInt
+	{
+		/// <summary>Value of the key.</summary>
+		public int Value;
+		/// <summary>Position of the key along the animation spline.</summary>
+		public float Time;
+	}
+
+	/** @} */
+
+	/** @addtogroup Animation
+	 *  @{
+	 */
+
+	/// <summary>Animation keyframe, represented as an endpoint of a cubic hermite spline.</summary>
+	[StructLayout(LayoutKind.Sequential), SerializeObject]
+	public partial struct KeyFrame
+	{
+		/// <summary>Value of the key.</summary>
+		public float Value;
+		/// <summary>Input tangent (going from the previous key to this one) of the key.</summary>
+		public float InTangent;
+		/// <summary>Output tangent (going from this key to next one) of the key.</summary>
+		public float OutTangent;
+		/// <summary>Position of the key along the animation spline.</summary>
+		public float Time;
+	}
+
+	/** @} */
+
+	/** @addtogroup Animation
+	 *  @{
+	 */
+
+	/// <summary>Animation keyframe, represented as an endpoint of a cubic hermite spline.</summary>
+	[StructLayout(LayoutKind.Sequential), SerializeObject]
+	public partial struct KeyFrameVec3
+	{
+		/// <summary>Value of the key.</summary>
+		public Vector3 Value;
+		/// <summary>Input tangent (going from the previous key to this one) of the key.</summary>
+		public Vector3 InTangent;
+		/// <summary>Output tangent (going from this key to next one) of the key.</summary>
+		public Vector3 OutTangent;
+		/// <summary>Position of the key along the animation spline.</summary>
+		public float Time;
+	}
+
+	/** @} */
+
+	/** @addtogroup Animation
+	 *  @{
+	 */
+
+	/// <summary>Animation keyframe, represented as an endpoint of a cubic hermite spline.</summary>
+	[StructLayout(LayoutKind.Sequential), SerializeObject]
+	public partial struct KeyFrameVec2
+	{
+		/// <summary>Value of the key.</summary>
+		public TVector2<float> Value;
+		/// <summary>Input tangent (going from the previous key to this one) of the key.</summary>
+		public TVector2<float> InTangent;
+		/// <summary>Output tangent (going from this key to next one) of the key.</summary>
+		public TVector2<float> OutTangent;
+		/// <summary>Position of the key along the animation spline.</summary>
+		public float Time;
+	}
+
+	/** @} */
+
+	/** @addtogroup Animation
+	 *  @{
+	 */
+
+	/// <summary>Animation keyframe, represented as an endpoint of a cubic hermite spline.</summary>
+	[StructLayout(LayoutKind.Sequential), SerializeObject]
+	public partial struct KeyFrameQuat
+	{
+		/// <summary>Value of the key.</summary>
+		public Quaternion Value;
+		/// <summary>Input tangent (going from the previous key to this one) of the key.</summary>
+		public Quaternion InTangent;
+		/// <summary>Output tangent (going from this key to next one) of the key.</summary>
+		public Quaternion OutTangent;
+		/// <summary>Position of the key along the animation spline.</summary>
+		public float Time;
+	}
+
+	/** @} */
+}

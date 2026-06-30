@@ -1,0 +1,67 @@
+//************************************ B3D Framework - Copyright 2025 Marko Pintera **************************************//
+//*********** Licensed under the MIT license. See LICENSE.md for full terms. This notice is not to be removed. ***********//
+using System;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+
+namespace b3d
+{
+#if !IS_B3D
+	/** @addtogroup GpuBackend
+	 *  @{
+	 */
+
+	/// <summary>
+	/// Video mode contains information about how a render window presents its information to an output device like a monitor.
+	/// </summary>
+	[StructLayout(LayoutKind.Sequential), SerializeObject]
+	public partial struct VideoMode
+	{
+		/// <summary>Initializes the struct with default values.</summary>
+		public static VideoMode Default()
+		{
+			VideoMode value = new VideoMode();
+			value.Width = 1280;
+			value.Height = 720;
+			value.RefreshRate = 60f;
+			value.OutputIdx = 0;
+			value.IsCustom = true;
+
+			return value;
+		}
+
+		/// <summary>Creates a new video mode.</summary>
+		/// <param name="width">Width of the frame buffer in pixels.</param>
+		/// <param name="height">Height of the frame buffer in pixels.</param>
+		/// <param name="refreshRate">How often should the output device refresh the output image in hertz.</param>
+		/// <param name="outputIdx">
+		/// Output index of the output device. Normally this means output monitor. 0th index always represents the primary device 
+		/// while order of others is undefined.
+		/// </param>
+		public VideoMode(int width, int height, float refreshRate = 60f, int outputIdx = 0)
+		{
+			this.Width = width;
+			this.Height = height;
+			this.RefreshRate = refreshRate;
+			this.OutputIdx = outputIdx;
+			this.IsCustom = true;
+		}
+
+		/// <summary>Width of the front/back buffer in pixels.</summary>
+		public int Width;
+		/// <summary>Height of the front/back buffer in pixels.</summary>
+		public int Height;
+		/// <summary>Refresh rate in hertz.</summary>
+		public float RefreshRate;
+		/// <summary>Index of the parent video output.</summary>
+		public int OutputIdx;
+		/// <summary>
+		/// Determines was video mode user created or provided by the API/OS. API/OS created video modes can contain additional 
+		/// information that allows the video mode to be used more accurately and you should use them when possible.
+		/// </summary>
+		public bool IsCustom;
+	}
+
+	/** @} */
+#endif
+}
