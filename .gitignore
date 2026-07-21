@@ -1,0 +1,48 @@
+# Build & IDE
+/build/
+/out/
+/.vs/
+/.idea/
+/cache/
+CMakeUserPresets.json
+*.user
+*.pdb
+*.ilk
+*.suo
+*.VC.db
+
+# Captures / local screenshots
+/captures/*.png
+!/captures/.gitkeep
+
+# Third-party engine trees (reference only — never ship)
+/DagorEngine/
+/-CRYENGINE-Community-Edition--main/
+/-CRYENGINE*/
+/CRYENGINE*/
+
+# Dagor / CryEngine documentation (local reference)
+/docs/DAGOR_PARITY.md
+/ROADMAP-old.md
+**/*DAGOR*.md
+**/*Dagor*.md
+**/*CRYENGINE*.md
+**/*CryEngine*.md
+
+# Package managers / tools
+/Tools/vcpkg/
+/tools/vcpkg/
+
+# Large / regenerable content
+/Assets/Sponza/
+/Assets/_gltf_tmp/
+/Assets/sponza.zip
+*.tif
+*.TIF
+
+# Runtime caches
+/cache/dx12_pso.cache
+*.cache
+
+/captures/*.txt
+/captures/*.dot

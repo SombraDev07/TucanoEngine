@@ -1,0 +1,72 @@
+add_library(TucanoRuntime STATIC
+  Platform/Window.cpp
+  Platform/Input.cpp
+  Platform/FileSystem.cpp
+  RHI/DX12/DX12Common.cpp
+  RHI/DX12/DX12Device.cpp
+  RHI/DX12/DX12CommandList.cpp
+  RHI/DX12/DX12SwapChain.cpp
+  RHI/DX12/DX12DescriptorHeap.cpp
+  RHI/DX12/DX12Pipeline.cpp
+  RHI/DX12/DX12Upload.cpp
+  RHI/DX12/BarrierBatcher.cpp
+  RHI/DX12/BindlessManager.cpp
+  RHI/DX12/PipelineCache.cpp
+  RHI/DX12/GpuCrashRecovery.cpp
+  RHI/DX12/SplitTransitionTracker.cpp
+  Renderer/Camera.cpp
+  Renderer/Mesh.cpp
+  Renderer/Material.cpp
+  Renderer/Texture.cpp
+  Renderer/Scene.cpp
+  Renderer/Deferred/GBufferPass.cpp
+  Renderer/Deferred/LightingPass.cpp
+  Renderer/Deferred/ShadowPass.cpp
+  Renderer/PostFX/TonemapPass.cpp
+  Renderer/PostFX/BloomPass.cpp
+  Renderer/PostFX/AOPass.cpp
+  Renderer/GI/IBL.cpp
+  Renderer/GI/VoxelGI.cpp
+  Renderer/Shadows/ToroidalShadows.cpp
+  Renderer/Shadows/OctahedralShadows.cpp
+  Renderer/Weather/RainSystem.cpp
+  Renderer/RenderGraph/RenderGraph.cpp
+  Renderer/Renderer.cpp
+  AssetPipeline/GLTFLoader.cpp
+  AssetPipeline/ImageLoader.cpp
+  AssetPipeline/DdsLoader.cpp
+  AssetPipeline/AssetCooker.cpp
+  AssetPipeline/ResourceFactory.cpp
+  AssetPipeline/AssetPack.cpp
+  Runtime/Screenshot.cpp
+  Runtime/DebugUI.cpp
+  Runtime/StbImpl.cpp
+)
+
+target_include_directories(TucanoRuntime
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(TucanoRuntime
+  PUBLIC
+    glfw
+    glm::glm
+    stb_headers
+    cgltf_headers
+    meshoptimizer
+    imgui_lib
+    tracy_stub
+    d3d12
+    dxgi
+    dxguid
+    d3dcompiler
+)
+
+target_compile_definitions(TucanoRuntime
+  PUBLIC
+    TUCANO_SHADER_DIR="${CMAKE_BINARY_DIR}/shaders"
+    TUCANO_ENGINE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/EngineAssets"
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_FORCE_LEFT_HANDED
+)
