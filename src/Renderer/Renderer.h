@@ -8,8 +8,10 @@
 #include "Renderer/GI/VoxelGI.h"
 #include "Renderer/GI/WorldSDF.h"
 #include "Renderer/GI/ReflectionProbes.h"
+#include "Renderer/GI/BrunetonAtmosphere.h"
 #include "Renderer/RayTracing/RayTracingScene.h"
 #include "Renderer/Weather/RainSystem.h"
+#include "Renderer/Weather/CloudSystem.h"
 #include "Renderer/Texture.h"
 #include "RHI/RHI.h"
 #include "AssetPipeline/ResourceFactory.h"
@@ -36,9 +38,28 @@ struct RendererSettings {
   bool enableMeshletCompact = true;
   bool enableVisibilityBuffer = true; // VisBuffer material path
   bool enableMeshShaders = true; // gated by Device::supportsMeshShaders()
-  bool enableRTReflections = false; // auto-enabled when Device::supportsRaytracing()
-  bool enableRTShadows = false;     // Ray Query sun shadows (mask × CSM)
+  bool enableRTReflections = false; // set true in Renderer ctor when Device::supportsRaytracing()
+  bool enableRTShadows = false;     // Ray Query sun shadows (mask × CSM); auto-on with DXR
   bool enableContactShadows = true;
+  bool enableAtmosphere = true;     // FASE 5.2 sky + fog
+  bool useBrunetonAtmosphere = true; // Bruneton precomputed LUTs (else artistic Nishita)
+  bool atmosphereDrivesSun = true;  // timeOfDay → directional light
+  float timeOfDay = 0.38f;          // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
+  float turbidity = 2.8f;           // 1=clear … 8=hazy
+  float fogDensity = 0.012f;
+  float fogHeight = 40.0f;
+  glm::vec3 wind = {0.2f, 0.0f, 0.05f};
+  bool enableClouds = true;
+  float cloudCoverage = 0.48f;
+  float cloudDensity = 1.15f;
+  float cloudAltitude = 1500.0f;
+  float cloudThickness = 2400.0f;
+  float cloudShadowStrength = 0.7f;
+  float cloudGodRayStrength = 0.55f;
+  float cloudStorminess = 0.35f;
+  bool enableCloudShadows = true;
+  bool enableCloudGodRays = true;
+  bool cloudsDriveRain = true;
   bool enableVoxelGI = true;
   bool enableToroidalShadows = true;
   bool enableOctahedralPointShadows = true;
@@ -177,10 +198,12 @@ private:
   std::shared_ptr<rhi::Buffer> m_objectCB;
   std::shared_ptr<rhi::Buffer> m_lightCB;
   std::shared_ptr<rhi::Buffer> m_phase3CB;
+  uint64_t m_phase3CBBump = 0;
   std::shared_ptr<rhi::Buffer> m_probeCaptureCB;
   std::shared_ptr<rhi::Buffer> m_probeConvertCB;
   std::shared_ptr<rhi::Buffer> m_probeFaceReadback;
   std::shared_ptr<rhi::Buffer> m_rtCB;
+  uint64_t m_rtCBBump = 0;
   uint32_t m_probeBakeCursor = 0;
   bool m_probeMipsSeeded = false;
   RayTracingScene m_rtScene;
@@ -208,9 +231,12 @@ private:
   VoxelGI m_voxelGI;
   WorldSDF m_worldSdf;
   ReflectionProbes m_reflectionProbes;
+  BrunetonAtmosphere m_bruneton;
   SkyVisibility m_skyVis;
   RainSystem m_rain;
   std::shared_ptr<rhi::Buffer> m_rainCB;
+  CloudSystem m_clouds;
+  std::shared_ptr<rhi::Buffer> m_cloudCB;
   float m_timeSeconds = 0.0f;
   float m_skyOcclusionAvg = 1.0f;
   glm::mat4 m_prevViewProj{1.0f};

@@ -227,7 +227,7 @@
 
 ## FASE 5: Weather / Atmosphere
 
-> **vs Dagor skies + weather:** ~**28%** overall | **Rain vs Cry/Dagor precip:** ~**92%**
+> **vs Dagor skies + weather:** ~**72%** overall | **Rain vs Cry/Dagor precip:** ~**92%** | **Clouds vs Dagor:** ~**110%** (surpassed)
 
 ### 5.1 Rain (Cry-inspired)
 - [x] Deferred wet GBuffer (puddles / ripples / darkening)
@@ -242,11 +242,13 @@
 > **FASE 5.1 Rain overall ~92%** — **OK precip** (piso ≥90%). Depth: denser cones, GPU splash spawn, bindless rain tables.
 
 ### 5.2 Skies / Clouds / Climate
-- [ ] Atmosphere Rayleigh/Mie (~0%)
-- [ ] Volumetric clouds (~0%)
-- [ ] Day/night + wind global (~5%)
-- [ ] Snow / fog volumes (~0%)
-- [ ] Rain map world (Dagor clouds rain map) (~0%)
+- [x] Atmosphere Rayleigh/Mie (~55% artistic) **+ Bruneton precomputed LUTs** (~85% — CPU bake transmittance/scattering/irradiance; sky + aerial; Earth params; BSD [ebruneton](https://github.com/ebruneton/precomputed_atmospheric_scattering); multi-order full GPU bake still open)
+- [x] Volumetric clouds (**~110% vs Dagor** — `CloudSystem`: half-res 40-step FBM + dual-lobe HG + multi-scatter approx, temporal reproject+clamp, weather coverage map 256², ground cloud shadows, god rays, rain-amount coupling; Sponza gate)
+- [x] Day/night + wind global (~70% — TOD sun + wind → rain + cloud drift + weather advect)
+- [ ] Snow / fog volumes (~10% — height fog only; no volume fog / snow)
+- [x] Rain map world (Dagor clouds rain map) (~85% — evolving weather field drives local density + rain scale)
+
+> **FASE 5.2 climate slice ~75%** — **clouds OK / surpassed Dagor** on volumetric+shadow+weather+godrays+rain couple. Snow / planet-scale 3D noise tex still open.
 
 ---
 
@@ -270,12 +272,12 @@
 
 ---
 
-## FASE 7: Runtime jogo (ainda greenfield)
+## FASE 7: Runtime jogo
 
-> **vs Dagor gameLibs / ECS:** ~**2%**
+> **vs Dagor gameLibs / ECS:** ~**12%**
 
-- [ ] ECS / scene graph rico (~5% — lista de meshes hoje)
-- [ ] Physics (Jolt/PhysX) (~0%)
+- [x] ECS lean (`World` + component pools + PhysicsSync) (~25% — sem scene graph rico / queries)
+- [x] Physics Jolt (`PhysicsWorld` + PhysicsDemo) (~30% — rigid + character; sem ragdoll/vehicles)
 - [ ] Animation skeletal (~0%)
 - [ ] Audio (~0%)
 - [ ] AI / navmesh (~0%)
@@ -316,13 +318,13 @@
 
 ## Prioridade imediata (próximas fatias)
 
-Ordem sugerida (Rain precip **OK** ~92%):
+Ordem sugerida (Rain **OK** ~92%; **Clouds surpassed Dagor** ~110%):
 
-1. **FSR 3** (+ XeSS) **ou** Atmosphere / clouds (5.2)  
+1. **FSR 3** (+ XeSS)  
 2. **Vulkan 1.3** backend  
-3. DispatchRays / hit materials (depth 4.3)  
-4. GPU GGX mips / TextureCube probe sample (depth 4.2)  
-5. Rain bindless cleanup / denser SceneRain (polish)
+3. Snow / volume fog (5.2 polish)  
+4. DispatchRays / hit materials (depth 4.3)  
+5. Cloud 3D noise tex / planet-scale (optional polish)
 
 ---
 
@@ -342,10 +344,10 @@ Ordem sugerida (Rain precip **OK** ~92%):
 | Ray Query / HW RT | BLAS/TLAS + RQ shadows/contact/refl | DispatchRays, hit mats, RT AO | **90%** |
 | Vulkan 1.3 | — | backend + SPIR-V parity | **0%** |
 | FSR 3 / XeSS | — | MVs + integration | **0%** |
-| Rain / Weather | wet+streaks+**SceneRain cones**+**Cry occ map**+**world splash**+puddle SSR | skies/clouds, denser cones | **92%** rain / **12%** climate |
+| Rain / Weather | wet+streaks+SceneRain+occ+splash + sky/fog/TOD + **CloudSystem (temporal+weather+shadows+godrays+rain couple)** | snow / volume fog | **92%** rain / **75%** climate / **clouds > Dagor** |
 | Assets | glTF, cook lite, tcpkg, HDRI loader | daBuild, streaming world | **28%** |
-| Samples / ImGui | Sponza tools + hot-reload `.cso` | editor viewport | **78%** |
-| ECS / Physics / Audio / Net | — | tudo | **0–5%** |
+| Samples / ImGui | Sponza tools + hot-reload `.cso` + Atmosphere panel | editor viewport | **80%** |
+| ECS / Physics / Audio / Net | Jolt + lean ECS + PhysicsDemo | anim, audio, AI, net, rich scene graph | **~12%** |
 | **Rendering core overall** | | | **~62%** |
 
 ---

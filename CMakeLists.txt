@@ -25,6 +25,13 @@ file(MAKE_DIRECTORY "${TUCANO_SHADER_OUT}")
 function(tucano_compile_shader SHADER_FILE ENTRY PROFILE)
   get_filename_component(SHADER_NAME "${SHADER_FILE}" NAME_WE)
   set(OUT_FILE "${TUCANO_SHADER_OUT}/${SHADER_NAME}_${ENTRY}.cso")
+  set(EXTRA_DEPS "")
+  if(SHADER_FILE STREQUAL "DeferredLighting.hlsl" OR SHADER_FILE STREQUAL "Clouds.hlsl")
+    list(APPEND EXTRA_DEPS "${TUCANO_SHADER_DIR}/Atmosphere.hlsl")
+  endif()
+  if(SHADER_FILE STREQUAL "DeferredLighting.hlsl")
+    list(APPEND EXTRA_DEPS "${TUCANO_SHADER_DIR}/BrunetonAtmosphere.hlsl")
+  endif()
   add_custom_command(
     OUTPUT "${OUT_FILE}"
     COMMAND "${DXC_EXECUTABLE}"
@@ -33,7 +40,7 @@ function(tucano_compile_shader SHADER_FILE ENTRY PROFILE)
       -Fo "${OUT_FILE}"
       -I "${TUCANO_SHADER_DIR}"
       "${TUCANO_SHADER_DIR}/${SHADER_FILE}"
-    DEPENDS "${TUCANO_SHADER_DIR}/${SHADER_FILE}" "${TUCANO_SHADER_DIR}/Common.hlsl"
+    DEPENDS "${TUCANO_SHADER_DIR}/${SHADER_FILE}" "${TUCANO_SHADER_DIR}/Common.hlsl" ${EXTRA_DEPS}
     COMMENT "DXC ${SHADER_FILE}:${ENTRY}"
     VERBATIM)
   list(APPEND TUCANO_COMPILED_SHADERS "${OUT_FILE}")
@@ -104,8 +111,25 @@ tucano_compile_shader(Rain.hlsl PSMist ps_6_0)
 tucano_compile_shader(Rain.hlsl PSDrops ps_6_0)
 tucano_compile_shader(Rain.hlsl VSSplash vs_6_0)
 tucano_compile_shader(Rain.hlsl PSSplash ps_6_0)
+tucano_compile_shader(Clouds.hlsl VSMain vs_6_0)
+tucano_compile_shader(Clouds.hlsl PSCloudMarch ps_6_0)
+tucano_compile_shader(Clouds.hlsl PSCloudTemporal ps_6_0)
+tucano_compile_shader(Clouds.hlsl PSWeatherMap ps_6_0)
+tucano_compile_shader(Clouds.hlsl PSCloudComposite ps_6_0)
 
 add_custom_target(TucanoShaders ALL DEPENDS ${TUCANO_COMPILED_SHADERS})
+
+# Deploy selected test exes into repo TestPlay/ (clean sky lab + editor only).
+set(TUCANO_TESTPLAY_DIR "${CMAKE_SOURCE_DIR}/TestPlay")
+function(tucano_deploy_testplay TARGET_NAME)
+  add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${TUCANO_TESTPLAY_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${TUCANO_TESTPLAY_DIR}/shaders"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:${TARGET_NAME}>" "${TUCANO_TESTPLAY_DIR}/"
+    COMMAND ${CMAKE_COMMAND} -E copy_directory "${CMAKE_BINARY_DIR}/shaders" "${TUCANO_TESTPLAY_DIR}/shaders"
+    COMMENT "Deploy ${TARGET_NAME} → TestPlay/"
+    VERBATIM)
+endfunction()
 
 add_subdirectory(src)
 add_subdirectory(Samples/HelloTriangle)
@@ -113,6 +137,8 @@ add_subdirectory(Samples/PBRTest)
 add_subdirectory(Samples/SponzaViewer)
 add_subdirectory(Samples/PhysicsDemo)
 add_subdirectory(Samples/SponzaPhysics)
+add_subdirectory(Samples/SkyLab)
+add_subdirectory(Samples/TestEditor)
 add_subdirectory(Tools/Benchmark)
 
 add_dependencies(TucanoRuntime TucanoShaders)
@@ -121,4 +147,6 @@ add_dependencies(PBRTest TucanoShaders)
 add_dependencies(SponzaViewer TucanoShaders)
 add_dependencies(PhysicsDemo TucanoShaders)
 add_dependencies(SponzaPhysics TucanoShaders)
+add_dependencies(SkyLab TucanoShaders)
+add_dependencies(TestEditor TucanoShaders)
 add_dependencies(TucanoBenchmark TucanoShaders)

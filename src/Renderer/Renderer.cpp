@@ -1,4 +1,8 @@
 #include "Renderer/Renderer.h"
+
+#include <cmath>
+#include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 #include "Platform/FileSystem.h"
 #include "Renderer/Deferred/GBufferPass.h"
 #include "Renderer/Deferred/LightingPass.h"
@@ -102,6 +106,22 @@ void updateUploadCB(rhi::Buffer& buffer, const void* data, size_t size) {
   std::memcpy(mapped, data, size);
 }
 
+// Upload-heap CBs are read at GPU execute time — never reuse offset 0 across draws in one list.
+uint64_t pushUploadCB(rhi::Buffer& buffer, uint64_t& bump, const void* data, size_t size) {
+  void* mapped = buffer.mapped();
+  if (!mapped) {
+    throw std::runtime_error("pushUploadCB: buffer is not CPU-mapped");
+  }
+  const uint64_t aligned = (static_cast<uint64_t>(size) + 255ull) & ~255ull;
+  if (bump + aligned > buffer.size()) {
+    bump = 0;
+  }
+  std::memcpy(static_cast<char*>(mapped) + bump, data, size);
+  const uint64_t off = bump;
+  bump += aligned;
+  return off;
+}
+
 ::tucano::rhi::DX12Texture& asDxTex(rhi::Texture& t) { return static_cast<::tucano::rhi::DX12Texture&>(t); }
 ::tucano::rhi::DX12Buffer& asDxBuf(rhi::Buffer& b) { return static_cast<::tucano::rhi::DX12Buffer&>(b); }
 uint32_t bindlessOf(rhi::Texture& t) { return t.bindlessIndex(); }
@@ -159,13 +179,15 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   cb.size = 256 * 16; // octa view-projs + light arrays
   cb.debugName = "LightCB";
   m_lightCB = m_device.createBuffer(cb, nullptr);
-  cb.size = 256;
+  cb.size = 256ull * 32ull; // Phase3 SSR/Compose/DDGI ring (must not share offset 0)
   cb.debugName = "Phase3CB";
   m_phase3CB = m_device.createBuffer(cb, nullptr);
+  cb.size = 256;
   cb.debugName = "ProbeCaptureCB";
   m_probeCaptureCB = m_device.createBuffer(cb, nullptr);
   cb.debugName = "ProbeConvertCB";
   m_probeConvertCB = m_device.createBuffer(cb, nullptr);
+  cb.size = 256ull * 16ull; // RT shadows/reflections/contact ring
   cb.debugName = "RTCB";
   m_rtCB = m_device.createBuffer(cb, nullptr);
   {
@@ -181,6 +203,9 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   cb.size = 512;
   cb.debugName = "RainCB";
   m_rainCB = m_device.createBuffer(cb, nullptr);
+  cb.size = 512ull * 16ull;
+  cb.debugName = "CloudCB";
+  m_cloudCB = m_device.createBuffer(cb, nullptr);
   cb.size = 256;
   cb.debugName = "MeshletCullCB";
   m_meshletCullCB = m_device.createBuffer(cb, nullptr);
@@ -208,14 +233,16 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   m_rain.init(m_device);
   m_rain.resize(m_device, m_width, m_height);
   m_rain.params().enabled = false;
+  m_clouds.init(m_device);
+  m_clouds.resize(m_device, m_width, m_height);
 
   m_rtScene.init(m_device);
   if (m_device.supportsRaytracing()) {
-    // Keep RT opt-in until Ray Query path is stable on all scenes (page-fault TDR risk).
-    m_settings.enableRTReflections = false;
-    m_settings.enableRTShadows = false;
+    m_settings.enableRTReflections = true;
+    m_settings.enableRTShadows = true;
+    m_settings.enableSSR = true; // Phase3 compose needed for RT reflections buffer
     if (!m_loggedNoDXR) {
-      std::cout << "[Renderer] DXR available — enable RT via ImGui (off by default)\n";
+      std::cout << "[Renderer] DXR available — RT shadows + reflections ON (Ray Query)\n";
       m_loggedNoDXR = true;
     }
   } else if (!m_loggedNoDXR) {
@@ -241,6 +268,9 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   }
   m_iblExposure = 1.35f;
   std::cout << "[Renderer] IBL ready (maxMip=" << m_iblMaxMip << ")\n";
+
+  std::cout << "[Renderer] Precomputing Bruneton atmosphere LUTs...\n";
+  m_bruneton.init(m_device);
 
   rhi::BufferDesc expCb{};
   expCb.size = 256;
@@ -648,6 +678,7 @@ void Renderer::resize(uint32_t width, uint32_t height) {
   m_height = height;
   createTargets();
   m_rain.resize(m_device, m_width, m_height);
+  m_clouds.resize(m_device, m_width, m_height);
 }
 
 void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& scene) {
@@ -660,6 +691,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   std::function<void(rhi::CommandList&)> rgGBuffer;
   std::function<void(rhi::CommandList&)> rgAO;
   std::function<void(rhi::CommandList&)> rgLighting;
+  std::function<void(rhi::CommandList&)> rgClouds;
   std::function<void(rhi::CommandList&)> rgSSGI;
   std::function<void(rhi::CommandList&)> rgDDGI;
   std::function<void(rhi::CommandList&)> rgDDGISample;
@@ -697,7 +729,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
 
   const bool wantGi = m_settings.giTier != GITier::Off;
   const bool wantSsr = m_settings.enableSSR;
-  const bool wantPhase3 = wantGi || wantSsr;
+  const bool wantPhase3 = wantGi || wantSsr || m_settings.enableRTReflections;
 
   m_graph.addPass(
       "Shadow",
@@ -753,6 +785,20 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       [&](rhi::CommandList& c, RenderGraph&) {
         if (rgLighting) {
           rgLighting(c);
+        }
+      });
+  m_graph.addPass(
+      "Clouds",
+      [&](RGPassBuilder& b) {
+        b.read(hDepthColor);
+        b.read(hHdr);
+        b.write(hHdr, RGUsage::RenderTarget);
+        b.write(hCompose, RGUsage::RenderTarget);
+        b.enabled = m_settings.enableClouds;
+      },
+      [&](rhi::CommandList& c, RenderGraph&) {
+        if (rgClouds) {
+          rgClouds(c);
         }
       });
   m_graph.addPass(
@@ -949,6 +995,29 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       break;
     }
   }
+  if (m_settings.enableAtmosphere && m_settings.atmosphereDrivesSun) {
+    const float t = m_settings.timeOfDay;
+    const float elev = std::sin((t - 0.25f) * 6.2831853f); // -1..1
+    const float azim = (t - 0.25f) * 6.2831853f;
+    // Directional light: from sun toward scene (negative Y at noon).
+    sunDir = glm::normalize(glm::vec3(std::cos(azim) * 0.65f, -std::max(elev, -0.15f) - 0.05f, std::sin(azim) * 0.65f));
+    const float day = std::clamp((elev + 0.05f) / 0.85f, 0.0f, 1.0f);
+    const float dusk = std::clamp(1.0f - std::abs(elev) * 2.5f, 0.0f, 1.0f) * day;
+    sunColor = glm::mix(glm::vec3(0.55f, 0.45f, 0.7f), glm::vec3(1.0f, 0.96f, 0.88f), day);
+    sunColor = glm::mix(sunColor, glm::vec3(1.0f, 0.45f, 0.15f), dusk * 0.65f);
+    sunIntensity = glm::mix(0.15f, 6.5f, day * day);
+    for (auto& l : scene.lights) {
+      if (l.type == LightType::Directional) {
+        l.direction = sunDir;
+        l.color = sunColor;
+        l.intensity = sunIntensity;
+        break;
+      }
+    }
+  }
+  if (m_settings.enableAtmosphere) {
+    m_rain.params().wind = m_settings.wind;
+  }
 
   FrameCBData frame{};
   // Stable camera for determinism; scene.camera still used for gameplay samples
@@ -964,6 +1033,11 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   frame.sunDirectionIntensity = glm::vec4(sunDir, sunIntensity);
   frame.sunColor = glm::vec4(sunColor, 1.0f);
   frame.ambientColor = glm::vec4(0.03f, 0.04f, 0.06f, 1.0f);
+  if (m_settings.enableAtmosphere) {
+    const float elev = -sunDir.y;
+    const float day = std::clamp((elev + 0.05f) / 0.85f, 0.0f, 1.0f);
+    frame.ambientColor = glm::vec4(glm::mix(glm::vec3(0.01f, 0.015f, 0.04f), glm::vec3(0.08f, 0.11f, 0.18f), day), 1.0f);
+  }
   float splits[4]{};
   const float cascadeEnds[4] = {5.f, 20.f, 60.f, 200.f};
   if (m_settings.enableToroidalShadows) {
@@ -1003,8 +1077,10 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     m_reflectionProbes.placeProbes(scene, eye);
   }
 
-  // Lighting FrameCB is written by executeLightingPass; post passes use m_postCB ring.
+  // Lighting FrameCB is written by executeLightingPass; post/RT/Phase3 use rings.
   m_postCBBump = 0;
+  m_rtCBBump = 0;
+  m_phase3CBBump = 0;
   updateUploadCB(*m_frameCB, &frame, sizeof(frame));
 
   // Octa / spot slots first so lighting can map lights → atlas tiles
@@ -1646,7 +1722,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     p3.cameraPos = frame.cameraPos;
     p3.screenSize = frame.screenSize;
     p3.texIds0 = {bindlessOf(*m_visId), bindlessOf(*m_visUv), bindlessOf(*m_visNormal), bindlessOf(*m_visDepth)};
-    updateUploadCB(*m_phase3CB, &p3, sizeof(p3));
+    const uint64_t p3Off = pushUploadCB(*m_phase3CB, m_phase3CBBump, &p3, sizeof(p3));
     cmd->setRootSignature(*m_rootFS);
     cmd->transition(*m_albedo, rhi::ResourceState::RenderTarget);
     cmd->transition(*m_normal, rhi::ResourceState::RenderTarget);
@@ -1657,7 +1733,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     cmd->setRenderTargets(gbufferRTs, nullptr);
     cmd->setPipeline(*m_visResolvePSO);
     D3D12_CPU_DESCRIPTOR_HANDLE mats[] = {asDxBuf(*m_drawMaterials).srvCpu};
-    cmd->setGraphicsRootCBV(1, *m_phase3CB);
+    cmd->setGraphicsRootCBV(1, *m_phase3CB, p3Off);
     cmd->setGraphicsRootSrvTable(3, 0);
     cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(mats, 1));
     cmd->setGraphicsRootSamplerTable(4, sampTable);
@@ -1710,12 +1786,12 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
             frame.sunDirectionIntensity,
             glm::vec4(0.02f, 80.0f, 2.0f, 0.0f),
             {bindlessOf(*m_depthColor), bindlessOf(*m_normal), 0, 0}};
-      updateUploadCB(*m_rtCB, &rcb, sizeof(rcb));
+      const uint64_t rtOff = pushUploadCB(*m_rtCB, m_rtCBBump, &rcb, sizeof(rcb));
       cmd->transition(*m_rtShadowMask, rhi::ResourceState::UnorderedAccess);
       cmd->setDescriptorHeap();
       cmd->setRootSignature(*m_rootCS);
       cmd->setPipeline(*m_rtShadowsPSO);
-      cmd->setComputeRootCBV(1, *m_rtCB);
+      cmd->setComputeRootCBV(1, *m_rtCB, rtOff);
       cmd->setComputeRootSrvTable(2, 0);
       cmd->setComputeRootUavTable(3, uavOf(*m_rtShadowMask));
       cmd->setComputeRootSamplerTable(4, sampTable);
@@ -1769,6 +1845,15 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                                        m_settings.enablePCSS ? 1.f : 0.f),
                              glm::vec4(useVsm ? 1.f : 0.f, float(m_vsm.pagesPerAxis()), float(m_vsm.physicalGrid()),
                                        0.f),
+                             glm::vec4(m_settings.turbidity, m_settings.fogDensity, m_settings.fogHeight,
+                                       m_settings.enableAtmosphere ? 1.f : 0.f),
+                             glm::vec4(m_bruneton.bottomRadiusKm(), m_bruneton.topRadiusKm(), m_bruneton.mieG(),
+                                       m_bruneton.exposure()),
+                             glm::uvec4(0, 0, 0,
+                                        (m_settings.useBrunetonAtmosphere && m_bruneton.ready()) ? 1u : 0u),
+                             m_bruneton.transmittance(),
+                             m_bruneton.scattering(),
+                             m_bruneton.irradiance(),
                              vp,
                              sc,
                              &m_drawCalls};
@@ -1778,6 +1863,38 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     executeLightingPass(lctx);
   }
   }; // rgLighting
+
+  rgClouds = [&](rhi::CommandList& c) {
+    cmd = &c;
+    auto& cp = m_clouds.params();
+    cp.enabled = m_settings.enableClouds;
+    cp.coverage = m_settings.cloudCoverage;
+    cp.density = m_settings.cloudDensity;
+    cp.altitude = m_settings.cloudAltitude;
+    cp.thickness = m_settings.cloudThickness;
+    cp.shadowStrength = m_settings.cloudShadowStrength;
+    cp.godRayStrength = m_settings.cloudGodRayStrength;
+    cp.storminess = m_settings.cloudStorminess;
+    cp.enableShadows = m_settings.enableCloudShadows;
+    cp.enableGodRays = m_settings.enableCloudGodRays;
+    cp.driveRain = m_settings.cloudsDriveRain;
+    cp.wind = m_settings.wind;
+
+    rhi::Texture* src = postHdr;
+    rhi::Texture* dst = (postHdr == m_hdr.get()) ? m_hdrCompose.get() : m_hdr.get();
+    rhi::Texture* out = m_clouds.execute(
+        *cmd, m_device, *src, *dst, *m_depthColor, *m_cloudCB, *m_samplerLinear, frame.invViewProj, frame.viewProj,
+        m_prevViewProj, eye, frame.sunDirectionIntensity, glm::vec3(frame.sunColor), glm::vec3(frame.ambientColor),
+        m_timeSeconds, m_width, m_height, m_hasPrevCamera);
+    if (out) {
+      postHdr = out;
+      m_drawCalls += 4;
+    }
+    if (m_settings.cloudsDriveRain && m_rain.params().enabled) {
+      const float scale = m_clouds.weatherRainScale();
+      m_rain.params().amount = std::clamp(0.55f * scale, 0.15f, 1.6f);
+    }
+  };
 
   // ---- Phase 3 + Post (owned by RG; lambdas below) ----
   struct Phase3CBData {
@@ -1844,8 +1961,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   };
   auto bindPhase3 = [&](rhi::CommandList& c, rhi::Texture& historyOrBlack, rhi::Texture& ssrOrAtlas) {
     fillPhase3Ids(historyOrBlack, ssrOrAtlas);
-    updateUploadCB(*m_phase3CB, &p3cb, sizeof(p3cb));
-    c.setGraphicsRootCBV(1, *m_phase3CB);
+    const uint64_t off = pushUploadCB(*m_phase3CB, m_phase3CBBump, &p3cb, sizeof(p3cb));
+    c.setGraphicsRootCBV(1, *m_phase3CB, off);
     c.setGraphicsRootSrvTable(3, 0);
     c.setGraphicsRootSamplerTable(4, sampTable);
   };
@@ -1877,11 +1994,11 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     fillPhase3Ids(*m_hdr, *m_ddgiAtlasPrev);
     p3cb.texIds0 = {bindlessOf(*m_hdr), bindlessOf(*m_depthColor), bindlessOf(*m_normal),
                     bindlessOf(*m_ddgiAtlasPrev)};
-    updateUploadCB(*m_phase3CB, &p3cb, sizeof(p3cb));
+    const uint64_t ddgiOff = pushUploadCB(*m_phase3CB, m_phase3CBBump, &p3cb, sizeof(p3cb));
     c.setDescriptorHeap();
     c.setRootSignature(*m_rootCS);
     c.setPipeline(*m_ddgiUpdatePSO);
-    c.setComputeRootCBV(1, *m_phase3CB);
+    c.setComputeRootCBV(1, *m_phase3CB, ddgiOff);
     c.setComputeRootSrvTable(2, 0);
     c.setComputeRootUavTable(3, uavOf(*m_ddgiAtlas));
     c.setComputeRootSamplerTable(4, sampTable);
@@ -1908,7 +2025,10 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
 
   rgSSR = [&](rhi::CommandList& c) {
     cmd = &c;
-    if (wantSsr) {
+    // With Ray Query reflections, skip noisy screen-space SSR — RT owns the buffer.
+    const bool useRtRefl =
+        m_settings.enableRTReflections && m_rtScene.ready() && m_rtReflectionsPSO && m_rtCB && m_rtScene.tlas();
+    if (wantSsr && !useRtRefl) {
       rhi::Texture* ssrRT = m_ssr.get();
       cmd->setRenderTargets(std::span<rhi::Texture*>(&ssrRT, 1), nullptr);
       const float clearSsr[4] = {0, 0, 0, 0};
@@ -1926,7 +2046,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     }
 
     // HW RT reflections overwrite SSR for glossy/metal (miss keeps alpha≈0 → probes/IBL).
-    if (m_settings.enableRTReflections && m_rtScene.ready() && m_rtReflectionsPSO && m_rtCB && m_rtScene.tlas()) {
+    if (useRtRefl) {
       struct RTCB {
         glm::mat4 invViewProj;
         glm::vec4 cameraPos;
@@ -1939,15 +2059,16 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
             frame.cameraPos,
             frame.screenSize,
             frame.sunDirectionIntensity,
-            glm::vec4(0.015f, 60.0f, 0.45f, 0.35f),
+            // bias, tmax, roughCutoff (stricter), skyTint strength
+            glm::vec4(0.02f, 40.0f, 0.28f, 0.12f),
             {bindlessOf(*m_depthColor), bindlessOf(*m_normal), bindlessOf(*m_orm), bindlessOf(*m_albedo)},
-            glm::vec4(0.15f, 0.22f, 0.35f, 1.0f)};
-      updateUploadCB(*m_rtCB, &rcb, sizeof(rcb));
+            glm::vec4(0.12f, 0.16f, 0.22f, 1.0f)};
+      const uint64_t rtOff = pushUploadCB(*m_rtCB, m_rtCBBump, &rcb, sizeof(rcb));
       cmd->transition(*m_ssr, rhi::ResourceState::UnorderedAccess);
       cmd->setDescriptorHeap();
       cmd->setRootSignature(*m_rootCS);
       cmd->setPipeline(*m_rtReflectionsPSO);
-      cmd->setComputeRootCBV(1, *m_rtCB);
+      cmd->setComputeRootCBV(1, *m_rtCB, rtOff);
       cmd->setComputeRootSrvTable(2, 0);
       cmd->setComputeRootUavTable(3, uavOf(*m_ssr));
       cmd->setComputeRootSamplerTable(4, sampTable);
@@ -2004,13 +2125,13 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
             frame.sunDirectionIntensity,
             glm::vec4(1.5f, 0.45f, 0.02f, 0.0f),
             {bindlessOf(*m_depthColor), bindlessOf(*contactSrc), 0, 0}};
-      updateUploadCB(*m_rtCB, &rcb, sizeof(rcb));
+      const uint64_t rtOff = pushUploadCB(*m_rtCB, m_rtCBBump, &rcb, sizeof(rcb));
       cmd->transition(*contactSrc, rhi::ResourceState::ShaderResource);
       cmd->transition(*contactDst, rhi::ResourceState::UnorderedAccess);
       cmd->setDescriptorHeap();
       cmd->setRootSignature(*m_rootCS);
       cmd->setPipeline(*m_rtContactPSO);
-      cmd->setComputeRootCBV(1, *m_rtCB);
+      cmd->setComputeRootCBV(1, *m_rtCB, rtOff);
       cmd->setComputeRootSrvTable(2, 0);
       cmd->setComputeRootUavTable(3, uavOf(*contactDst));
       cmd->setComputeRootSamplerTable(4, sampTable);

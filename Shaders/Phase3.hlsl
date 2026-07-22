@@ -350,7 +350,9 @@ float4 PSCompose(VSOut input) : SV_Target {
     outCol += sampleWorldSh(worldPos, normalize(NormalTex().SampleLevel(samp, input.uv, 0).xyz * 2.0 - 1.0)) *
               albedo * params.x * 0.25;
   }
-  outCol += ssr.rgb * ssr.a;
+  // Soft specular layer — hard add of noisy RQ/SSR caused white fireflies.
+  float3 spec = min(ssr.rgb, 1.25) * saturate(ssr.a);
+  outCol += spec * 0.45;
   outCol = max(outCol, 0);
   return float4(outCol, 1);
 }

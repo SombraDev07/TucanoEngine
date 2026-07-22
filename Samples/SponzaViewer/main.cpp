@@ -64,9 +64,7 @@ int main(int argc, char** argv) {
     auto device = rhi::Device::create(true);
     auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
     auto renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
-    // Stable Sponza smoke path: deferred + rain; leave experimental passes off.
-    renderer->settings().enableRTReflections = false;
-    renderer->settings().enableRTShadows = false;
+    // Keep heavy experimental passes off; RT enables automatically when DXR is present.
     renderer->settings().enableVSM = false;
     renderer->settings().enableAsyncCompute = false;
     renderer->settings().enableOctahedralPointShadows = false;
@@ -76,10 +74,22 @@ int main(int argc, char** argv) {
     renderer->settings().enableMeshlets = false;
     renderer->settings().enableHiZOcclusion = false;
     renderer->settings().enableVoxelGI = false;
-    renderer->settings().enableSSR = false;
-    renderer->settings().enableContactShadows = false;
     renderer->settings().enableToroidalShadows = false;
     renderer->settings().giTier = GITier::Off;
+    if (device->supportsRaytracing()) {
+      renderer->settings().enableRTShadows = true;
+      renderer->settings().enableRTReflections = true;
+      renderer->settings().enableSSR = true;
+      renderer->settings().enableContactShadows = true;
+      renderer->settings().enableShadows = true;
+      std::cout << "[SponzaViewer] DXR ON — RT shadows + reflections + contact\n";
+    } else {
+      renderer->settings().enableRTShadows = false;
+      renderer->settings().enableRTReflections = false;
+      renderer->settings().enableSSR = true;
+      renderer->settings().enableContactShadows = true;
+      std::cout << "[SponzaViewer] No DXR — CSM + SSR fallback\n";
+    }
     Input input(window.handle());
     DebugUI ui;
     ui.init(window, *device);

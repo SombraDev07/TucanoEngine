@@ -639,7 +639,10 @@ void DX12Device::createSrv(DX12Texture& tex) {
   D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
   srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
   srv.Format = toDxgi(tex.desc.format);
-  if (tex.desc.isCube) {
+  if (tex.desc.depth > 1) {
+    srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+    srv.Texture3D.MipLevels = tex.desc.mipLevels;
+  } else if (tex.desc.isCube) {
     srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
     srv.TextureCube.MipLevels = tex.desc.mipLevels;
   } else if (tex.desc.arraySize > 1) {
@@ -997,10 +1000,11 @@ std::shared_ptr<Texture> DX12Device::createTexture(const TextureDesc& desc, cons
   heap.Type = D3D12_HEAP_TYPE_DEFAULT;
 
   D3D12_RESOURCE_DESC rd{};
-  rd.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  const bool is3D = desc.depth > 1;
+  rd.Dimension = is3D ? D3D12_RESOURCE_DIMENSION_TEXTURE3D : D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   rd.Width = desc.width;
   rd.Height = desc.height;
-  rd.DepthOrArraySize = static_cast<UINT16>(desc.isCube ? 6 : desc.arraySize);
+  rd.DepthOrArraySize = static_cast<UINT16>(is3D ? desc.depth : (desc.isCube ? 6 : desc.arraySize));
   rd.MipLevels = static_cast<UINT16>(desc.mipLevels);
   rd.Format = toDxgi(desc.format);
   rd.SampleDesc.Count = 1;
@@ -1071,6 +1075,7 @@ std::shared_ptr<Texture> DX12Device::createTexture(const TextureDesc& desc, cons
 
 void DX12Device::uploadTexture(Texture& texture, const void* data, uint32_t width, uint32_t height, uint32_t rowPitch,
                                uint32_t mip, uint32_t arraySlice) {
+  (void)width; // extent comes from the resource footprint (2D rows / 3D slices)
   auto& tex = static_cast<DX12Texture&>(texture);
   transitionToCopyDestDirect(tex.get(), tex.state);
 
@@ -1095,9 +1100,14 @@ void DX12Device::uploadTexture(Texture& texture, const void* data, uint32_t widt
                                                  &uploadRes, uploadOffset);
   const auto* src = static_cast<const uint8_t*>(data);
   const UINT rows = std::min(numRows, height);
-  for (UINT y = 0; y < rows; ++y) {
-    memcpy(dst + y * footprint.Footprint.RowPitch, src + y * rowPitch,
-           static_cast<size_t>(std::min<UINT64>(rowSizeInBytes, rowPitch)));
+  const UINT depthSlices = std::max<UINT>(1, footprint.Footprint.Depth);
+  const UINT64 dstSlicePitch = UINT64(footprint.Footprint.RowPitch) * numRows;
+  const UINT64 srcSlicePitch = UINT64(rowPitch) * height;
+  for (UINT z = 0; z < depthSlices; ++z) {
+    for (UINT y = 0; y < rows; ++y) {
+      memcpy(dst + z * dstSlicePitch + y * footprint.Footprint.RowPitch, src + z * srcSlicePitch + y * rowPitch,
+             static_cast<size_t>(std::min<UINT64>(rowSizeInBytes, rowPitch)));
+    }
   }
 
   if (tex.state != ResourceState::CopyDst) {

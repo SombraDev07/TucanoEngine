@@ -32,6 +32,9 @@ struct LightingCB {
   glm::uvec4 texIds2;
   glm::uvec4 texIds3;
   glm::vec4 vsmMeta;
+  glm::vec4 atmParams;
+  glm::vec4 brunetonParams;
+  glm::uvec4 brunetonTexIds;
 };
 
 } // namespace
@@ -63,6 +66,18 @@ void executeLightingPass(LightingPassContext& ctx) {
   const uint32_t rtMask = ctx.rtShadowMask ? bindlessOf(*ctx.rtShadowMask) : 0u;
   lcb.texIds3 = {vsmPhys, vsmTable, rtMask, 0};
   lcb.vsmMeta = ctx.vsmMeta;
+  lcb.atmParams = ctx.atmParams;
+  lcb.brunetonParams = ctx.brunetonParams;
+  lcb.brunetonTexIds = ctx.brunetonTexIds;
+  if (ctx.brunetonTransmittance) {
+    lcb.brunetonTexIds.x = bindlessOf(*ctx.brunetonTransmittance);
+  }
+  if (ctx.brunetonScattering) {
+    lcb.brunetonTexIds.y = bindlessOf(*ctx.brunetonScattering);
+  }
+  if (ctx.brunetonIrradiance) {
+    lcb.brunetonTexIds.z = bindlessOf(*ctx.brunetonIrradiance);
+  }
   updateCB(ctx.frameCB, &lcb, sizeof(lcb));
 
   ctx.cmd.transition(ctx.hdr, rhi::ResourceState::RenderTarget);

@@ -28,6 +28,7 @@ add_library(TucanoRuntime STATIC
   Renderer/PostFX/AOPass.cpp
   Renderer/PostFX/ExposurePass.cpp
   Renderer/GI/IBL.cpp
+  Renderer/GI/BrunetonAtmosphere.cpp
   Renderer/GI/VoxelGI.cpp
   Renderer/GI/WorldSDF.cpp
   Renderer/GI/ReflectionProbes.cpp
@@ -36,6 +37,8 @@ add_library(TucanoRuntime STATIC
   Renderer/Shadows/OctahedralShadows.cpp
   Renderer/Shadows/VirtualShadowMaps.cpp
   Renderer/Weather/RainSystem.cpp
+  Renderer/Weather/CloudSystem.cpp
+  Renderer/Weather/CloudNoise.cpp
   Renderer/RenderGraph/RenderGraph.cpp
   Renderer/Renderer.cpp
   AssetPipeline/GLTFLoader.cpp

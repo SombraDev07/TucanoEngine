@@ -43,6 +43,12 @@ struct LightingPassContext {
   float iblExposure = 1.0f;
   glm::vec4 shadowParams{}; // pcssLightSize, esmK, octaEnable, pcssEnable
   glm::vec4 vsmMeta{};      // enable, pagesPerAxis, physicalGrid, _
+  glm::vec4 atmParams{};    // turbidity, fogDensity, fogHeight, enable
+  glm::vec4 brunetonParams{}; // bottomKm, topKm, mieG, exposure
+  glm::uvec4 brunetonTexIds{}; // trans, scat, irr, enable
+  rhi::Texture* brunetonTransmittance = nullptr;
+  rhi::Texture* brunetonScattering = nullptr;
+  rhi::Texture* brunetonIrradiance = nullptr;
   rhi::Viewport viewport{};
   rhi::Scissor scissor{};
   uint32_t* drawCalls = nullptr;

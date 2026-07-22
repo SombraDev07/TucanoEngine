@@ -1,4 +1,6 @@
 #include "Common.hlsl"
+#include "Atmosphere.hlsl"
+#include "BrunetonAtmosphere.hlsl"
 
 struct VSOut {
   float4 position : SV_Position;
@@ -22,6 +24,9 @@ cbuffer FrameCB : register(b1) {
   uint4 texIds2;        // prefiltered, ao, octaAtlas, _
   uint4 texIds3;        // vsmPhysical, vsmPageTable, rtShadowMask, _
   float4 vsmMeta;       // x=enable, y=pagesPerAxis, z=physicalGrid, w=unused
+  float4 atmParams;     // x=turbidity, y=fogDensity, z=fogHeight, w=enableAtmosphere
+  float4 brunetonParams; // x=bottomKm, y=topKm, z=mieG, w=exposure (+ enable if textures bound)
+  uint4 brunetonTexIds; // transmittance, scattering, irradiance, enableBruneton
 };
 
 cbuffer LightCB : register(b2) {
@@ -300,12 +305,22 @@ float4 PSMain(VSOut input) : SV_Target {
   Texture2D depthTex = bindlessHeap[NonUniformResourceIndex(safeBindless(texIds1.x))];
   float depth = depthTex.SampleLevel(samp, input.uv, 0).r;
   if (depth <= 0.0001) {
+    float2 ndc = input.uv * float2(2, -2) + float2(-1, 1);
+    float4 clip = float4(ndc, 1.0, 1.0);
+    float4 w = mul(invViewProj, clip);
+    float3 dir = normalize(w.xyz / max(w.w, 1e-6) - cameraPos.xyz);
     float3 env = ambientColor.rgb;
-    if (flags.y > 0.5) {
-      float2 ndc = input.uv * float2(2, -2) + float2(-1, 1);
-      float4 clip = float4(ndc, 1.0, 1.0);
-      float4 w = mul(invViewProj, clip);
-      float3 dir = normalize(w.xyz / max(w.w, 1e-6) - cameraPos.xyz);
+    if (brunetonTexIds.w != 0u && atmParams.w > 0.5) {
+      Texture2D transTex = bindlessHeap[NonUniformResourceIndex(safeBindless(brunetonTexIds.x))];
+      Texture2D scatTex = bindlessHeap[NonUniformResourceIndex(safeBindless(brunetonTexIds.y))];
+      float3 camPlanet = brunetonWorldToPlanet(cameraPos.xyz, brunetonParams.x);
+      float3 sunToward = normalize(-sunDirectionIntensity.xyz);
+      float3 T;
+      env = brunetonGetSkyLuminance(transTex, scatTex, samp, camPlanet, dir, sunToward, brunetonParams.x,
+                                    brunetonParams.y, brunetonParams.z, brunetonParams.w, T);
+    } else if (atmParams.w > 0.5) {
+      env = atmosphereSky(dir, sunDirectionIntensity.xyz, atmParams.x, sunDirectionIntensity.w);
+    } else if (flags.y > 0.5) {
       env = samplePrefiltered(dir, 0.0) * iblParams.y;
     }
     return float4(env, 1.0);
@@ -356,8 +371,17 @@ float4 PSMain(VSOut input) : SV_Target {
       shadow = sampleShadow(worldPos, length(cameraPos.xyz - worldPos));
       uint rtId = safeBindless(texIds3.z);
       if (rtId != 0) {
+        // Half-res Ray Query mask — 3x3 box upsample kills binary edge sparkle.
         Texture2D rtMask = bindlessHeap[NonUniformResourceIndex(rtId)];
-        shadow = min(shadow, rtMask.SampleLevel(samp, input.uv, 0).r);
+        float2 texel = screenSize.zw * 2.0; // mask is ~half res
+        float rt = 0.0;
+        [unroll] for (int oy = -1; oy <= 1; ++oy) {
+          [unroll] for (int ox = -1; ox <= 1; ++ox) {
+            rt += rtMask.SampleLevel(samp, input.uv + float2(ox, oy) * texel, 0).r;
+          }
+        }
+        rt *= (1.0 / 9.0);
+        shadow = min(shadow, rt);
       }
     }
     lo += evaluateDirectBRDF(albedo, f0, metallic, roughness, n, v, l, radiance) * shadow;
@@ -435,5 +459,20 @@ float4 PSMain(VSOut input) : SV_Target {
     }
   }
 
-  return float4(lo + ambient + emissive, 1.0);
+  float3 color = lo + ambient + emissive;
+  if (brunetonTexIds.w != 0u && atmParams.w > 0.5) {
+    Texture2D transTex = bindlessHeap[NonUniformResourceIndex(safeBindless(brunetonTexIds.x))];
+    Texture2D scatTex = bindlessHeap[NonUniformResourceIndex(safeBindless(brunetonTexIds.y))];
+    float3 camPlanet = brunetonWorldToPlanet(cameraPos.xyz, brunetonParams.x);
+    float3 pPlanet = brunetonWorldToPlanet(worldPos, brunetonParams.x);
+    float3 sunToward = normalize(-sunDirectionIntensity.xyz);
+    color = brunetonAerialPerspective(transTex, scatTex, samp, camPlanet, pPlanet, sunToward, color,
+                                      brunetonParams.x, brunetonParams.y, brunetonParams.z, brunetonParams.w);
+  } else if (atmParams.w > 0.5 && atmParams.y > 1e-5) {
+    float dist = length(worldPos - cameraPos.xyz);
+    float fogF = atmosphereFogFactor(dist, atmParams.y, worldPos.y, max(atmParams.z, 1.0));
+    float3 fogCol = atmosphereFogColor(sunDirectionIntensity.xyz, atmParams.x, sunDirectionIntensity.w);
+    color = lerp(color, fogCol, fogF);
+  }
+  return float4(color, 1.0);
 }

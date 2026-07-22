@@ -15,10 +15,10 @@ std::shared_ptr<RootSignature> DX12Device::createRootSignature(bool allowInputLa
   // 0: 32-bit constants (32)
   // 1: CBV b1
   // 2: CBV b2
-  // 3: unbounded SRV table t0 space0 (bindless textures)
+  // 3: unbounded SRV table t0 space0 (bindless textures; space2 aliases the same heap as Texture3D)
   // 4: sampler table s0
   // 5: SRV table t0.. space1 (structured buffers: materials, meshlets, …)
-  D3D12_DESCRIPTOR_RANGE1 ranges[3]{};
+  D3D12_DESCRIPTOR_RANGE1 ranges[4]{};
   ranges[0].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
   ranges[0].NumDescriptors = UINT_MAX;
   ranges[0].BaseShaderRegister = 0;
@@ -40,6 +40,10 @@ std::shared_ptr<RootSignature> DX12Device::createRootSignature(bool allowInputLa
   ranges[2].Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE | D3D12_DESCRIPTOR_RANGE_FLAG_DATA_VOLATILE;
   ranges[2].OffsetInDescriptorsFromTableStart = 0;
 
+  // Texture3D alias of the bindless heap (same table offset, different register space).
+  ranges[3] = ranges[0];
+  ranges[3].RegisterSpace = 2;
+
   D3D12_ROOT_PARAMETER1 params[6]{};
   params[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
   params[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
@@ -59,10 +63,11 @@ std::shared_ptr<RootSignature> DX12Device::createRootSignature(bool allowInputLa
   params[2].Descriptor.RegisterSpace = 0;
   params[2].Descriptor.Flags = D3D12_ROOT_DESCRIPTOR_FLAG_DATA_VOLATILE;
 
+  const D3D12_DESCRIPTOR_RANGE1 bindlessRanges[2] = {ranges[0], ranges[3]};
   params[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
-  params[3].DescriptorTable.NumDescriptorRanges = 1;
-  params[3].DescriptorTable.pDescriptorRanges = &ranges[0];
+  params[3].DescriptorTable.NumDescriptorRanges = 2;
+  params[3].DescriptorTable.pDescriptorRanges = bindlessRanges;
 
   params[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
   params[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;

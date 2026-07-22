@@ -128,9 +128,15 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
 
   ImGui::SetNextWindowSize(ImVec2(360, 520), ImGuiCond_FirstUseEver);
   if (ImGui::Begin("Tucano Tools")) {
-    if (ImGui::CollapsingHeader("Rain (Cry-parity)", ImGuiTreeNodeFlags_DefaultOpen)) {
+    if (ImGui::CollapsingHeader("Rain (Cry-parity)")) {
       ImGui::Checkbox("Enable rain", &rain.enabled);
+      if (rain.enabled && rain.amount < 0.05f) {
+        rain.amount = 0.65f; // recover if a lab zeroed amount
+      }
       ImGui::Checkbox("SceneRain cones", &rain.enableSceneRain);
+      if (rain.enableSceneRain) {
+        ImGui::TextDisabled("Note: cones are for enclosed scenes (Sponza); outdoors they look huge.");
+      }
       ImGui::Checkbox("World splashes", &rain.enableWorldSplashes);
       ImGui::SliderFloat("Amount", &rain.amount, 0.0f, 1.5f);
       if (rain.enableSceneRain) {
@@ -202,6 +208,82 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
       int gi = static_cast<int>(settings.giTier);
       if (ImGui::SliderInt("GI tier", &gi, 0, 3)) {
         settings.giTier = static_cast<GITier>(gi);
+      }
+    }
+
+    if (ImGui::CollapsingHeader("Atmosphere (FASE 5.2)", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::Checkbox("Enable atmosphere", &settings.enableAtmosphere);
+      ImGui::Checkbox("Bruneton LUTs (EGSR)", &settings.useBrunetonAtmosphere);
+      ImGui::Checkbox("Time of day drives sun", &settings.atmosphereDrivesSun);
+      ImGui::SliderFloat("Time of day", &settings.timeOfDay, 0.0f, 1.0f);
+      ImGui::TextDisabled("0=mid  0.25=rise  0.5=noon  0.75=set");
+      ImGui::SliderFloat("Turbidity", &settings.turbidity, 1.0f, 8.0f);
+      ImGui::SliderFloat("Fog density", &settings.fogDensity, 0.0f, 0.08f, "%.4f");
+      ImGui::SliderFloat("Fog height", &settings.fogHeight, 5.0f, 200.0f);
+      ImGui::SliderFloat3("Wind", &settings.wind.x, -2.0f, 2.0f);
+      ImGui::Separator();
+      ImGui::Checkbox("Volumetric clouds", &settings.enableClouds);
+      if (settings.enableClouds) {
+        ImGui::SliderFloat("Coverage", &settings.cloudCoverage, 0.0f, 1.0f);
+        ImGui::SliderFloat("Density", &settings.cloudDensity, 0.1f, 3.0f);
+        ImGui::SliderFloat("Altitude", &settings.cloudAltitude, 200.0f, 4000.0f);
+        ImGui::SliderFloat("Thickness", &settings.cloudThickness, 200.0f, 6000.0f);
+        ImGui::SliderFloat("Storminess", &settings.cloudStorminess, 0.0f, 1.0f);
+        ImGui::Checkbox("Cloud shadows", &settings.enableCloudShadows);
+        if (settings.enableCloudShadows) {
+          ImGui::SliderFloat("Shadow strength", &settings.cloudShadowStrength, 0.0f, 1.0f);
+        }
+        ImGui::Checkbox("God rays", &settings.enableCloudGodRays);
+        if (settings.enableCloudGodRays) {
+          ImGui::SliderFloat("God ray strength", &settings.cloudGodRayStrength, 0.0f, 1.5f);
+        }
+        ImGui::Checkbox("Clouds drive rain amount", &settings.cloudsDriveRain);
+      }
+      if (ImGui::Button("Preset: Clear noon")) {
+        settings.enableAtmosphere = true;
+        settings.atmosphereDrivesSun = true;
+        settings.timeOfDay = 0.5f;
+        settings.turbidity = 2.0f;
+        settings.fogDensity = 0.004f;
+        settings.fogHeight = 60.0f;
+        settings.enableClouds = true;
+        settings.cloudCoverage = 0.28f;
+        settings.cloudDensity = 0.9f;
+        settings.cloudAltitude = 1800.0f;
+        settings.cloudThickness = 1600.0f;
+        settings.cloudStorminess = 0.1f;
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Preset: Golden hour")) {
+        settings.enableAtmosphere = true;
+        settings.atmosphereDrivesSun = true;
+        settings.timeOfDay = 0.78f;
+        settings.turbidity = 3.5f;
+        settings.fogDensity = 0.018f;
+        settings.fogHeight = 35.0f;
+        settings.enableClouds = true;
+        settings.cloudCoverage = 0.55f;
+        settings.cloudDensity = 1.2f;
+        settings.cloudAltitude = 1300.0f;
+        settings.cloudThickness = 2600.0f;
+        settings.cloudStorminess = 0.35f;
+        settings.enableCloudGodRays = true;
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Preset: Overcast")) {
+        settings.enableAtmosphere = true;
+        settings.atmosphereDrivesSun = true;
+        settings.timeOfDay = 0.42f;
+        settings.turbidity = 6.5f;
+        settings.fogDensity = 0.035f;
+        settings.fogHeight = 25.0f;
+        settings.enableClouds = true;
+        settings.cloudCoverage = 0.88f;
+        settings.cloudDensity = 1.6f;
+        settings.cloudAltitude = 700.0f;
+        settings.cloudThickness = 3200.0f;
+        settings.cloudStorminess = 0.85f;
+        settings.enableCloudShadows = true;
       }
     }
 

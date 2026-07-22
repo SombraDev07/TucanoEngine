@@ -28,9 +28,7 @@ void CSMain(uint3 dtid : SV_DispatchThreadID) {
     return;
   }
 
-  float2 uv = (float2(dtid.xy) + 0.5) * float2(screenSize.z, screenSize.w) * max(params.z, 1.0);
-  // half-res: params.z = 2 → uv covers full screen
-  uv = (float2(dtid.xy) + 0.5) / float2(outSize);
+  float2 uv = (float2(dtid.xy) + 0.5) / float2(outSize);
 
   Texture2D depthTex = bindlessHeap[NonUniformResourceIndex(texIds.x)];
   Texture2D normalTex = bindlessHeap[NonUniformResourceIndex(texIds.y)];

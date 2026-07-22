@@ -58,3 +58,12 @@ CMakeUserPresets.json
 # Local vcpkg clone
 /Tools/vcpkg/
 
+# TestPlay deploy (keep README; ignore built binaries / shaders)
+/TestPlay/*.exe
+/TestPlay/*.dll
+/TestPlay/*.pdb
+/TestPlay/shaders/
+/TestPlay/*.png
+!/TestPlay/README.md
+!/TestPlay/.gitkeep
+
