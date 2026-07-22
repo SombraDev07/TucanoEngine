@@ -36,6 +36,9 @@ public:
   // Mean weather coverage last frame (CPU estimate from settings + storminess) for rain coupling.
   float weatherRainScale() const;
 
+  // GPU weather map written this frame (R = coverage, camera-centered ±4 km); null until first execute.
+  rhi::Texture* weatherMap() const { return m_lastWeather; }
+
   // After Lighting (HDR has sky). Returns composited HDR (ping-pong) or nullptr if disabled.
   rhi::Texture* execute(rhi::CommandList& cmd, rhi::Device& device, rhi::Texture& hdrIn, rhi::Texture& hdrTemp,
                         rhi::Texture& depthColor, rhi::Buffer& cloudCB, rhi::Sampler& linearSamp,
@@ -65,6 +68,7 @@ private:
   std::shared_ptr<rhi::Texture> m_weatherB;
   std::shared_ptr<rhi::Texture> m_noiseBase;   // 128^3 Perlin-Worley RGBA8
   std::shared_ptr<rhi::Texture> m_noiseDetail; // 32^3 Worley RGBA8
+  rhi::Texture* m_lastWeather = nullptr;
   uint32_t m_frame = 0;
   bool m_weatherFlip = false;
   bool m_ready = false;

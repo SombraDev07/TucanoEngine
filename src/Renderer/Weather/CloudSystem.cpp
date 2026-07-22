@@ -221,6 +221,7 @@ rhi::Texture* CloudSystem::execute(rhi::CommandList& cmd, rhi::Device& device, r
   if (m_params.enableWeatherMap) {
     drawPass(*m_weatherPSO, *weatherCurr, weatherVp, weatherSc, bindlessOf(hdrIn), bindlessOf(*m_cloudHistory),
              bindlessOf(*m_cloudHalf));
+    m_lastWeather = weatherCurr;
   }
 
   drawPass(*m_marchPSO, *m_cloudHalfTemp, halfVp, halfSc, bindlessOf(hdrIn), bindlessOf(*m_cloudHistory),

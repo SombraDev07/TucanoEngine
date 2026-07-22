@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
   bool noClouds = false;
   bool noGodRays = false;
   bool withRain = false;
+  float coverage = -1.0f;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--screenshot" && i + 1 < argc) {
@@ -35,6 +36,8 @@ int main(int argc, char** argv) {
       noGodRays = true;
     } else if (a == "--rain") {
       withRain = true;
+    } else if (a == "--coverage" && i + 1 < argc) {
+      coverage = std::stof(argv[++i]);
     }
   }
 
@@ -55,6 +58,9 @@ int main(int argc, char** argv) {
     }
     if (withRain) {
       renderer->rain().enabled = true;
+    }
+    if (coverage >= 0.0f) {
+      renderer->settings().cloudCoverage = coverage;
     }
 
     Input input(window.handle());

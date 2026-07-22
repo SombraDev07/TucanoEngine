@@ -17,6 +17,10 @@ public:
   RainParams& params() { return m_params; }
   const RainParams& params() const { return m_params; }
 
+  // True while raining OR while surfaces are still wet/drying — rain passes must keep
+  // running after the rain stops so puddles fade out instead of vanishing.
+  bool isActive() const { return (m_params.enabled && m_params.amount > 0.001f) || m_wetLevel > 0.01f; }
+
   // After GBuffer, before lighting: wetness / puddles / ripples + Cry rain-space occluder.
   void executeDeferredGBuffer(rhi::CommandList& cmd, rhi::Device& device, Scene& scene, rhi::Texture& albedo,
                               rhi::Texture& normal, rhi::Texture& orm, rhi::Texture& depthColor,
@@ -24,7 +28,17 @@ public:
                               const glm::mat4& viewProj, const glm::mat4& view, const glm::vec3& cameraPos,
                               float timeSeconds, uint32_t width, uint32_t height);
 
-  // After HDR: puddle SSR + mist + SceneRain cones + streaks + world splashes + lens drops.
+  // Sun + camera info for lit streaks; cloud weather map couples local rain density (all optional).
+  void setLighting(const glm::vec4& sunDirIntensity, const glm::vec3& sunColor, float tanHalfFovY,
+                   rhi::Texture* weatherMap, float cloudCoverage = 1.0f) {
+    m_sunDirIntensity = sunDirIntensity;
+    m_sunColor = sunColor;
+    m_tanHalfFovY = tanHalfFovY;
+    m_weatherMap = weatherMap;
+    m_cloudCoverage = cloudCoverage;
+  }
+
+  // After HDR: merged composite (puddle SSR + mist + lit streaks) + SceneRain cones + world splashes + lens drops.
   rhi::Texture* executePost(rhi::CommandList& cmd, rhi::Device& device, rhi::Texture& hdrIn,
                             rhi::Texture& hdrTemp, rhi::Texture& depthColor, rhi::Texture& normals,
                             rhi::Texture& bloomOrHdr, rhi::Buffer& rainCB, rhi::Sampler& linearSamp,
@@ -52,10 +66,10 @@ private:
   std::shared_ptr<rhi::PipelineState> m_occPSO;
   std::shared_ptr<rhi::PipelineState> m_occDepthPSO;
   std::shared_ptr<rhi::PipelineState> m_gbufferPSO;
-  std::shared_ptr<rhi::PipelineState> m_streakPSO;
-  std::shared_ptr<rhi::PipelineState> m_puddleSpecPSO;
-  std::shared_ptr<rhi::PipelineState> m_mistPSO;
+  std::shared_ptr<rhi::PipelineState> m_compositePSO; // puddle + mist + streaks merged
   std::shared_ptr<rhi::PipelineState> m_dropsPSO;
+  std::shared_ptr<rhi::PipelineState> m_rainDropsPSO; // stateless GPU drop particles
+  std::shared_ptr<rhi::PipelineState> m_wetnessPSO;   // wetness accumulate/dry update
   std::shared_ptr<rhi::PipelineState> m_sceneRainPSO;
   std::shared_ptr<rhi::PipelineState> m_splashPSO;
 
@@ -72,6 +86,8 @@ private:
   std::shared_ptr<rhi::Texture> m_ormCopy;
   std::shared_ptr<rhi::Texture> m_occlusion;
   std::shared_ptr<rhi::Texture> m_rainSpaceDepth; // Cry-style rain-space occluder (R32)
+  std::shared_ptr<rhi::Texture> m_wetnessA;       // accumulated wetness ping-pong (R16F, world-tiled)
+  std::shared_ptr<rhi::Texture> m_wetnessB;
 
   std::shared_ptr<rhi::Buffer> m_rainVB;
   uint32_t m_rainVertexCount = 0;
@@ -81,11 +97,25 @@ private:
   std::shared_ptr<rhi::Sampler> m_occSamp; // comparison-ish point clamp
 
   glm::mat4 m_rainOccVP{1.0f};
+  glm::vec4 m_sunDirIntensity{0.0f, -1.0f, 0.0f, 0.0f};
+  glm::vec3 m_sunColor{1.0f};
+  float m_tanHalfFovY = 0.0f;
+  float m_cloudCoverage = 1.0f;
+  rhi::Texture* m_weatherMap = nullptr;
+  glm::vec3 m_occCamPos{1e9f};
+  uint32_t m_occCooldown = 0;
+  float m_wetLevel = 0.0f; // CPU mirror of overall wetness (pass gating only)
+  float m_lastTime = -1.0f;
+  float m_dt = 0.0f;
+  bool m_wetFlip = false;
   bool m_ready = false;
   static constexpr int kRippleCount = 24;
   static constexpr int kSlices = 12;
   static constexpr uint32_t kOccSize = 512;
-  static constexpr uint32_t kSplashParticles = 384;
+  static constexpr uint32_t kWetnessSize = 512;
+  static constexpr uint32_t kRainParticles = 24576;
+  static constexpr float kParticleRadius = 17.0f;
+  static constexpr float kWetnessExtent = 96.0f;
 };
 
 } // namespace tucano

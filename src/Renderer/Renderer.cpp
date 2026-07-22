@@ -897,7 +897,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         b.read(hCompose);
         b.write(hHdr, RGUsage::RenderTarget);
         b.write(hCompose, RGUsage::RenderTarget);
-        b.enabled = m_rain.params().enabled;
+        b.enabled = m_rain.isActive(); // keeps running while surfaces dry after rain
       },
       [&](rhi::CommandList& c, RenderGraph&) {
         if (rgRain) {
@@ -2186,6 +2186,12 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     cmd = &c;
     rhi::Texture* rainSrc = postHdr;
     rhi::Texture* rainTmp = (postHdr == m_hdr.get()) ? m_hdrCompose.get() : m_hdr.get();
+    // Real camera FOV for streak parallax; sun for backscatter; cloud weather map for local density.
+    const glm::mat4 proj = frame.viewProj * glm::inverse(frame.view);
+    const float tanHalfFovY = 1.0f / std::max(std::abs(proj[1][1]), 1e-3f);
+    rhi::Texture* weather = m_settings.enableClouds ? m_clouds.weatherMap() : nullptr;
+    m_rain.setLighting(frame.sunDirectionIntensity, glm::vec3(frame.sunColor), tanHalfFovY, weather,
+                       m_settings.cloudCoverage);
     rhi::Texture* rainOut = m_rain.executePost(
         *cmd, m_device, *rainSrc, *rainTmp, *m_depthColor, *m_normal, *rainSrc, *m_rainCB, *m_samplerLinear,
         frame.invViewProj, frame.viewProj, frame.view, eye, m_timeSeconds, m_width, m_height, m_ssr.get());
