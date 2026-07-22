@@ -111,7 +111,7 @@ float4 PSCopy(VSOut input) : SV_Target {
 // Cry rain-space occluder: compare against depth map rendered along rain direction
 float4 PSOcclusion(VSOut input) : SV_Target {
   float depth = depthTex.SampleLevel(pointSamp, input.uv, 0).r;
-  if (depth >= 0.9995) {
+  if (depth <= 1e-4) { // sky (DepthColor clears to 0)
     return 1.0;
   }
   float3 world = reconstructWorld(input.uv, depth);
@@ -147,7 +147,7 @@ GBufferOut PSDeferredGBuffer(VSOut input) {
 
   float depth = depthTex.SampleLevel(pointSamp, input.uv, 0).r;
   float amt = saturate(rainAmount.x);
-  if (depth >= 0.9995 || amt < 0.001) {
+  if (depth <= 1e-4 || amt < 0.001) {
     return o;
   }
 
@@ -276,13 +276,6 @@ float rainStreakLayerVS(float3 viewP, float t, float layer, float2 wind) {
   return streak * rnd;
 }
 
-// Linearize depth roughly for soft intersection (works with 0-near 1-far Z)
-float approxViewZ(float depth) {
-  // Perspective reverse-ish: map nonlinear Z to meters (tuned for 0.1–300)
-  float z = saturate(depth);
-  return lerp(0.1, 300.0, z * z);
-}
-
 float4 PSStreaks(VSOut input) : SV_Target {
   float3 hdr = src0Tex.Sample(linearSamp, input.uv).rgb;
   float amt = saturate(rainAmount.x);
@@ -297,7 +290,11 @@ float4 PSStreaks(VSOut input) : SV_Target {
   float2 wind = clampWind();
   int layers = (int)clamp(rainColor.w, 1.0, 3.0);
   float aspect = screenSize.x * screenSize.w;
-  float sceneZ = approxViewZ(depth);
+  // Sky (DepthColor = 0) → rain falls freely through the whole air column.
+  float sceneDist = 1e6;
+  if (depth > 1e-4) {
+    sceneDist = length(reconstructWorld(input.uv, depth) - cameraPos.xyz);
+  }
 
   float streaks = 0.0;
   float texRain = 0.0;
@@ -310,17 +307,13 @@ float4 PSStreaks(VSOut input) : SV_Target {
     float3 viewP = rainPlaneView(input.uv, planeZ, aspect);
 
     // Soft clip against scene: rain only in empty air (not painted on walls)
-    float soft = 1.0;
-    if (depth < 0.9995) {
-      soft = saturate((sceneZ - planeZ) * 0.35);
-      soft = smoothstep(0.0, 1.0, soft);
-    }
+    float soft = smoothstep(0.0, 1.0, saturate((sceneDist - planeZ) * 0.35));
 
     streaks += rainStreakLayerVS(viewP, t, (float)i, wind) * w * soft;
     texRain += texturedRainLayerVS(viewP, t, (float)i, wind) * w * soft;
   }
 
-  float skyBoost = depth > 0.998 ? 1.25 : 1.0;
+  float skyBoost = depth <= 1e-4 ? 1.25 : 1.0;
   float vis = skyBoost * lerp(0.75, 1.0, occ);
 
   streaks = saturate(streaks * inten * 1.05 * vis);
@@ -343,7 +336,7 @@ float4 PSPuddleSpec(VSOut input) : SV_Target {
     return float4(hdr, 1);
   }
   float depth = depthTex.SampleLevel(pointSamp, input.uv, 0).r;
-  if (depth >= 0.9995) {
+  if (depth <= 1e-4) { // sky
     return float4(hdr, 1);
   }
 
@@ -390,7 +383,7 @@ float4 PSPuddleSpec(VSOut input) : SV_Target {
           break;
         }
         float d = depthTex.SampleLevel(pointSamp, uv, 0).r;
-        if (d < depth - 0.002 && d < prevD - 0.001) {
+        if (d > 1e-4 && d < depth - 0.002 && d < prevD - 0.001) {
           marchCol = min(src0Tex.SampleLevel(linearSamp, uv, 0).rgb, 6.0);
           float edge = saturate(1.0 - max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0);
           marchHit = edge * saturate(1.0 - float(i) / float(steps));
@@ -428,7 +421,7 @@ float4 PSMist(VSOut input) : SV_Target {
   }
   float depth = depthTex.Sample(linearSamp, input.uv).r;
   float fog = mistAmt * 0.1;
-  if (depth < 0.9995) {
+  if (depth > 1e-4) { // geometry: distance-based mist
     float3 world = reconstructWorld(input.uv, depth);
     float dist = length(cameraPos.xyz - world);
     fog = saturate(dist / max(sceneRain1.w, 1.0)) * mistAmt * 0.22;
@@ -528,9 +521,9 @@ float4 PSSceneRain(SceneVSOut IN) : SV_Target {
 
   float sceneD = depthTex.SampleLevel(pointSamp, uv, 0).r;
   float rainD = saturate(IN.clip.z / max(IN.clip.w, 1e-4));
-  // Soft clip: keep rain in front of opaque surfaces
+  // Soft clip: keep rain in front of opaque surfaces (sky = 0 → no clip)
   float soft = 1.0;
-  if (sceneD < 0.9995) {
+  if (sceneD > 1e-4) {
     soft = saturate((sceneD - rainD) * 80.0 + 0.5);
     soft = smoothstep(0.0, 1.0, soft);
   }
@@ -578,7 +571,7 @@ SplashVSOut VSSplash(uint vid : SV_VertexID) {
   float2 spawn = hash22(float2(float(pid), cellShift));
   float2 screenUV = spawn;
   float depth = depthTex.SampleLevel(pointSamp, screenUV, 0).r;
-  if (depth >= 0.999 || saturate(sceneRain0.w) < 0.01) {
+  if (depth <= 1e-4 || saturate(sceneRain0.w) < 0.01) {
     o.pos = float4(2, 2, 0, 1); // offscreen
     o.uv = qc * 0.5 + 0.5;
     o.life = 0;

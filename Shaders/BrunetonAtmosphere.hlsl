@@ -46,19 +46,11 @@ float3 brunetonSampleTransmittance(Texture2D transTex, SamplerState s, float r, 
   return transTex.SampleLevel(s, uv, 0).rgb;
 }
 
-float2 brunetonScatteringUv(float r, float mu, float mu_s, float nu, float bottom, float top, float layer,
-                            float u_mu) {
-  float u_mu_s;
-  {
-    float H = sqrt(max(top * top - bottom * bottom, 0.0));
-    float rho = sqrt(max(r * r - bottom * bottom, 0.0));
-    float d = max(-r * mu_s + sqrt(max(r * r * (mu_s * mu_s - 1.0) + top * top, 0.0)), 0.0);
-    float d_min = top - r;
-    float d_max = rho + H;
-    u_mu_s = saturate((d - d_min) / max(d_max - d_min, 1e-5));
-  }
-  float u_nu = saturate(0.5 + 0.5 * nu);
-  float u = (u_nu * float(BRUNETON_SCAT_NU - 1) + u_mu_s) / float(BRUNETON_SCAT_NU);
+// Atlas X packs BRUNETON_SCAT_NU slices of BRUNETON_SCAT_MU_S texels each. Sampling must stay
+// inside one nu slice (manual nu interpolation below) or bilinear bleeds across unrelated slices.
+float2 brunetonScatteringUv(float nuSlice, float u_mu_s, float u_mu, float layer) {
+  float u = (nuSlice * float(BRUNETON_SCAT_MU_S) + u_mu_s * float(BRUNETON_SCAT_MU_S - 1) + 0.5) /
+            float(BRUNETON_SCAT_NU * BRUNETON_SCAT_MU_S);
   float v = (layer * float(BRUNETON_SCAT_MU) + saturate(u_mu) * float(BRUNETON_SCAT_MU - 1) + 0.5) /
             float(BRUNETON_SCAT_MU * BRUNETON_SCAT_R);
   return float2(saturate(u), saturate(v));
@@ -82,14 +74,31 @@ float4 brunetonSampleScattering(Texture2D scatTex, SamplerState s, float r, floa
   }
   u_mu = saturate(u_mu);
 
+  float u_mu_s;
+  {
+    float d = max(-r * mu_s + sqrt(max(r * r * (mu_s * mu_s - 1.0) + top * top, 0.0)), 0.0);
+    float d_min = top - r;
+    float d_max = rho + H;
+    u_mu_s = saturate((d - d_min) / max(d_max - d_min, 1e-5));
+  }
+
   float layerF = u_r * float(BRUNETON_SCAT_R - 1);
   float layer0 = floor(layerF);
   float layer1 = min(layer0 + 1.0, float(BRUNETON_SCAT_R - 1));
-  float2 uv0 = brunetonScatteringUv(r, mu, mu_s, nu, bottom, top, layer0, u_mu);
-  float2 uv1 = brunetonScatteringUv(r, mu, mu_s, nu, bottom, top, layer1, u_mu);
-  float4 s0 = scatTex.SampleLevel(s, uv0, 0);
-  float4 s1 = scatTex.SampleLevel(s, uv1, 0);
-  return lerp(s0, s1, saturate(frac(layerF)));
+  float lf = saturate(frac(layerF));
+
+  // Manual nu interpolation (bake stores slice centers at x_nu = (i + 0.5) / NU).
+  float nuC = clamp(saturate(0.5 + 0.5 * nu) * float(BRUNETON_SCAT_NU) - 0.5, 0.0,
+                    float(BRUNETON_SCAT_NU - 1));
+  float nu0 = floor(nuC);
+  float nu1 = min(nu0 + 1.0, float(BRUNETON_SCAT_NU - 1));
+  float nf = saturate(nuC - nu0);
+
+  float4 s00 = scatTex.SampleLevel(s, brunetonScatteringUv(nu0, u_mu_s, u_mu, layer0), 0);
+  float4 s10 = scatTex.SampleLevel(s, brunetonScatteringUv(nu1, u_mu_s, u_mu, layer0), 0);
+  float4 s01 = scatTex.SampleLevel(s, brunetonScatteringUv(nu0, u_mu_s, u_mu, layer1), 0);
+  float4 s11 = scatTex.SampleLevel(s, brunetonScatteringUv(nu1, u_mu_s, u_mu, layer1), 0);
+  return lerp(lerp(s00, s10, nf), lerp(s01, s11, nf), lf);
 }
 
 // camera / view / sun in planet space (km), sunDir toward sun.

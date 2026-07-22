@@ -17,12 +17,24 @@ using namespace tucano;
 int main(int argc, char** argv) {
   std::string screenshotPath;
   int maxFrames = -1;
+  bool noBloom = false;
+  bool noClouds = false;
+  bool noGodRays = false;
+  bool withRain = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--screenshot" && i + 1 < argc) {
       screenshotPath = argv[++i];
     } else if (a == "--frames" && i + 1 < argc) {
       maxFrames = std::stoi(argv[++i]);
+    } else if (a == "--nobloom") {
+      noBloom = true;
+    } else if (a == "--noclouds") {
+      noClouds = true;
+    } else if (a == "--nogodrays") {
+      noGodRays = true;
+    } else if (a == "--rain") {
+      withRain = true;
     }
   }
 
@@ -32,6 +44,18 @@ int main(int argc, char** argv) {
     auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
     auto renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
     skylab::configureCleanRenderer(*renderer);
+    if (noBloom) {
+      renderer->settings().enableBloom = false;
+    }
+    if (noClouds) {
+      renderer->settings().enableClouds = false;
+    }
+    if (noGodRays) {
+      renderer->settings().enableCloudGodRays = false;
+    }
+    if (withRain) {
+      renderer->rain().enabled = true;
+    }
 
     Input input(window.handle());
     DebugUI ui;
