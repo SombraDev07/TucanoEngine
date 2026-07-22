@@ -1061,7 +1061,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     m_voxelGI.update(m_device, scene, 0.25f);
     const glm::vec3 sunDirN = glm::normalize(glm::vec3(frame.sunDirectionIntensity));
     const float sunI = frame.sunDirectionIntensity.w;
-    m_worldSdf.update(m_device, scene, eye, sunDirN, sunI, 0.25f);
+    m_worldSdf.update(m_device, *cmd, scene, eye, sunDirN, sunI, 0.25f);
     if (!m_reflectionProbes.ready()) {
       m_reflectionProbes.init(m_device);
     }
@@ -1260,19 +1260,9 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->transition(*m_shadowMap, rhi::ResourceState::RenderTarget);
       rhi::Texture* rt = m_shadowMap.get();
       cmd->setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
-      // Only full-clear when not doing partial toroidal scroll rebuild.
-      bool needFullClear = !m_settings.enableToroidalShadows;
-      if (m_settings.enableToroidalShadows) {
-        for (int i = 0; i < 4; ++i) {
-          if (m_shadowAtlas.isDirty(i) && m_shadowAtlas.cascade(i).lastScrollX == 0 &&
-              m_shadowAtlas.cascade(i).lastScrollY == 0) {
-            needFullClear = true;
-          }
-        }
-      }
-      if (needFullClear) {
-        const float clear[4] = {1, 1, 1, 1};
-        cmd->clearRenderTarget(*m_shadowMap, clear);
+      const float clearFar[4] = {1, 1, 1, 1};
+      if (!m_settings.enableToroidalShadows) {
+        cmd->clearRenderTarget(*m_shadowMap, clearFar);
       }
       cmd->setRootSignature(*m_root);
       cmd->setPipeline(*m_shadowPSO);
@@ -1284,20 +1274,57 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         }
         const uint32_t ox = (cascade % 2) * tile;
         const uint32_t oy = (cascade / 2) * tile;
-        cmd->setViewport({float(ox), float(oy), float(tile), float(tile), 0, 1});
-        cmd->setScissor({int(ox), int(oy), int(ox + tile), int(oy + tile)});
-        for (auto& obj : scene.objects) {
-          if (!obj.mesh) {
-            continue;
+
+        // Incremental invalidation (Dagor toroidal): on scroll, only the newly exposed
+        // L-shaped strips are cleared and re-rendered; the rest of the tile is cached.
+        struct Rect {
+          uint32_t x, y, w, h;
+        };
+        Rect rects[2];
+        int nRects = 0;
+        bool partial = false;
+        if (m_settings.enableToroidalShadows) {
+          const auto& casc = m_shadowAtlas.cascade(cascade);
+          partial = !casc.fullRefresh && (casc.lastScrollX != 0 || casc.lastScrollY != 0);
+          if (partial) {
+            const int sx = casc.lastScrollX;
+            const int sy = casc.lastScrollY;
+            if (sx > 0) {
+              rects[nRects++] = {ox + tile - uint32_t(sx), oy, uint32_t(sx), tile};
+            } else if (sx < 0) {
+              rects[nRects++] = {ox, oy, uint32_t(-sx), tile};
+            }
+            if (sy > 0) {
+              rects[nRects++] = {ox, oy + tile - uint32_t(sy), tile, uint32_t(sy)};
+            } else if (sy < 0) {
+              rects[nRects++] = {ox, oy, tile, uint32_t(-sy)};
+            }
           }
-          RootXform xform{frame.lightViewProj[cascade], obj.worldMatrix};
-          cmd->setGraphicsRootConstants(0, &xform, 32);
-          cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
-          cmd->setVertexBuffer(obj.mesh->vertexBuffer(), sizeof(Vertex));
-          cmd->setIndexBuffer(obj.mesh->indexBuffer(), true);
-          for (const auto& sub : obj.mesh->submeshes()) {
-            cmd->drawIndexed(sub.indexCount, sub.indexOffset);
-            ++m_drawCalls;
+        }
+        if (nRects == 0) {
+          rects[nRects++] = {ox, oy, tile, tile};
+        }
+
+        cmd->setViewport({float(ox), float(oy), float(tile), float(tile), 0, 1});
+        for (int r = 0; r < nRects; ++r) {
+          if (m_settings.enableToroidalShadows) {
+            cmd->clearRenderTargetRect(*m_shadowMap, clearFar, rects[r].x, rects[r].y, rects[r].w, rects[r].h);
+          }
+          cmd->setScissor({int(rects[r].x), int(rects[r].y), int(rects[r].x + rects[r].w),
+                           int(rects[r].y + rects[r].h)});
+          for (auto& obj : scene.objects) {
+            if (!obj.mesh) {
+              continue;
+            }
+            RootXform xform{frame.lightViewProj[cascade], obj.worldMatrix};
+            cmd->setGraphicsRootConstants(0, &xform, 32);
+            cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+            cmd->setVertexBuffer(obj.mesh->vertexBuffer(), sizeof(Vertex));
+            cmd->setIndexBuffer(obj.mesh->indexBuffer(), true);
+            for (const auto& sub : obj.mesh->submeshes()) {
+              cmd->drawIndexed(sub.indexCount, sub.indexOffset);
+              ++m_drawCalls;
+            }
           }
         }
         if (m_settings.enableToroidalShadows) {

@@ -70,6 +70,10 @@ FetchContent_Declare(joltphysics
   GIT_SHALLOW TRUE)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
 set(ENABLE_OBJECT_STREAM OFF CACHE BOOL "" FORCE)
+# Jolt traps hardware FP exceptions in Debug/Release by default; some SIMD solver paths touch
+# uninitialized lanes and trip an invalid-op fault (crash) once contact islands form. Off for
+# stable runtime (matches Jolt's Distribution config).
+set(FLOATING_POINT_EXCEPTIONS_ENABLED OFF CACHE BOOL "" FORCE)
 set(TARGET_UNIT_TESTS OFF CACHE BOOL "" FORCE)
 set(TARGET_HELLO_WORLD OFF CACHE BOOL "" FORCE)
 set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)

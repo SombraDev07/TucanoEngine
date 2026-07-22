@@ -157,10 +157,11 @@ int main(int argc, char** argv) {
       obj.worldMatrix = glm::translate(glm::mat4(1.0f), pos);
       scene.objects.push_back(std::move(obj));
 
-      auto e = ecsWorld.create();
-      ecsWorld.transforms.add(e, {pos, {1,0,0,0}, {1,1,1}});
-      ecsWorld.physicsBodies.add(e, {bodyId});
-      ecsWorld.renderObjects.add(e, {scene.objects.size() - 1});
+      auto e = ecsWorld.createWith<ecs::TransformComponent, ecs::PhysicsBodyComponent,
+                                    ecs::RenderObjectComponent>();
+      *ecsWorld.get<ecs::TransformComponent>(e) = {pos, {1, 0, 0, 0}, {1, 1, 1}};
+      ecsWorld.get<ecs::PhysicsBodyComponent>(e)->joltBodyId = bodyId;
+      ecsWorld.get<ecs::RenderObjectComponent>(e)->sceneIndex = uint32_t(scene.objects.size() - 1);
 
       spheres.push_back({bodyId, float(i) / 6.0f});
     }

@@ -51,6 +51,14 @@ add_library(TucanoRuntime STATIC
   Runtime/DebugUI.cpp
   Runtime/StbImpl.cpp
   Physics/PhysicsWorld.cpp
+  Core/JobSystem.cpp
+  Core/Json.cpp
+  ECS/ComponentTypes.cpp
+  ECS/Components.cpp
+  ECS/EntityManager.cpp
+  ECS/QueryManager.cpp
+  ECS/EventManager.cpp
+  ECS/TemplateManager.cpp
   ECS/World.cpp
   ECS/PhysicsSync.cpp
 )

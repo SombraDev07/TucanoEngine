@@ -8,6 +8,7 @@
 #include "ECS/PhysicsSync.h"
 
 #include <GLFW/glfw3.h>
+#include <chrono>
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -65,6 +66,23 @@ int main(int argc, char** argv) {
     auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
     std::cout << "SwapChain OK\n" << std::flush;
     Renderer renderer(*device, window.width(), window.height());
+    // Preset for this simple procedural scene. The meshlet/visbuffer path needs cooked meshlet
+    // data the makeCube() meshes lack, so use the classic IA path. RT shadows/reflections are
+    // essentially free here (~0.3 ms) and stay on; VoxelGI/DDGI voxelizes the world every frame
+    // at a fixed grid cost (~90 ms regardless of scene size) so it stays off for a few boxes.
+    {
+      auto& s = renderer.settings();
+      s.enableMeshlets = false;
+      s.enableGpuMeshletCull = false;
+      s.enableMeshShaders = false;
+      s.enableVisibilityBuffer = false;
+      s.enableHiZOcclusion = false;
+      s.enableVoxelGI = false;
+      s.giTier = GITier::Off;
+      s.enableSSR = false;
+      s.enableContactShadows = false;
+      s.enableOctahedralPointShadows = false;
+    }
     std::cout << "Renderer OK\n" << std::flush;
     Input input(window.handle());
 
@@ -128,10 +146,11 @@ int main(int argc, char** argv) {
         obj.worldMatrix = glm::translate(glm::mat4(1.0f), pos);
         scene.objects.push_back(std::move(obj));
 
-        auto e = ecsWorld.create();
-        ecsWorld.transforms.add(e, {pos, {1,0,0,0}, {1,1,1}});
-        ecsWorld.physicsBodies.add(e, {bodyId});
-        ecsWorld.renderObjects.add(e, {scene.objects.size() - 1});
+        auto e = ecsWorld.createWith<ecs::TransformComponent, ecs::PhysicsBodyComponent,
+                                      ecs::RenderObjectComponent>();
+        *ecsWorld.get<ecs::TransformComponent>(e) = {pos, {1, 0, 0, 0}, {1, 1, 1}, pos, {1, 0, 0, 0}};
+        ecsWorld.get<ecs::PhysicsBodyComponent>(e)->joltBodyId = bodyId;
+        ecsWorld.get<ecs::RenderObjectComponent>(e)->sceneIndex = uint32_t(scene.objects.size() - 1);
       }
     }
 
@@ -149,9 +168,10 @@ int main(int argc, char** argv) {
     charObj.worldMatrix = glm::scale(glm::translate(glm::mat4(1.0f), {0, 1.6f, 12}), {0.6f, 1.6f, 0.6f});
     scene.objects.push_back(std::move(charObj));
 
-    auto charEntity = ecsWorld.create();
-    ecsWorld.transforms.add(charEntity, {{0, 1.6f, 12}, {1,0,0,0}, {0.6f, 1.6f, 0.6f}});
-    ecsWorld.renderObjects.add(charEntity, {scene.objects.size() - 1});
+    auto charEntity = ecsWorld.createWith<ecs::TransformComponent, ecs::RenderObjectComponent>();
+    *ecsWorld.get<ecs::TransformComponent>(charEntity) =
+        {{0, 1.6f, 12}, {1, 0, 0, 0}, {0.6f, 1.6f, 0.6f}, {0, 1.6f, 12}, {1, 0, 0, 0}};
+    ecsWorld.get<ecs::RenderObjectComponent>(charEntity)->sceneIndex = uint32_t(scene.objects.size() - 1);
 
     window.setResizeCallback([&](uint32_t w, uint32_t h) {
       swapChain->resize(w, h);
@@ -162,56 +182,97 @@ int main(int argc, char** argv) {
     int frame = 0;
     bool shotDone = screenshotPath.empty();
 
-    float fixedDt = 1.0f / 60.0f;
+    const float fixedDt = 1.0f / 60.0f;
+    float accumulator = 0.0f;
+    // Simulation speed. Real-time (1.0) feels fast for a drop demo, so default to a gentle
+    // slow-motion; [ and ] adjust it live. Headless --frames runs stay at 1.0 for determinism.
+    float timeScale = (maxFrames >= 0) ? 1.0f : 0.5f;
+    auto prevTime = std::chrono::high_resolution_clock::now();
 
-    while (!window.shouldClose()) {
+    // Headless-friendly: a fixed --frames run ignores window close so physics runs to completion.
+    while ((maxFrames >= 0 && frame < maxFrames) || (maxFrames < 0 && !window.shouldClose())) {
       window.pollEvents();
       input.beginFrame();
 
-      // Character movement
+      // Wall-clock delta → fixed-timestep accumulator, so physics runs at real speed regardless
+      // of frame rate (a fixed dt-per-frame ran in slow motion whenever the frame rate dipped).
+      // Headless runs use a synthetic 1/60 step for deterministic screenshots.
+      float realDt = fixedDt;
+      if (maxFrames < 0) {
+        const auto now = std::chrono::high_resolution_clock::now();
+        realDt = std::chrono::duration<float>(now - prevTime).count();
+        prevTime = now;
+      }
+      // Live speed control: [ slows down, ] speeds up (0.1x .. 2.0x).
+      if (input.keyPressed(GLFW_KEY_LEFT_BRACKET))  timeScale = std::max(0.1f, timeScale - 0.1f);
+      if (input.keyPressed(GLFW_KEY_RIGHT_BRACKET)) timeScale = std::min(2.0f, timeScale + 0.1f);
+      accumulator += std::min(realDt, 0.1f) * timeScale; // clamp to avoid a spiral of death after a stall
+
+      // Character movement (world-space). The camera sits behind the character looking down -Z,
+      // which mirrors the X axis on screen, so A/D map to +X/-X to match the player's view.
       glm::vec3 wishDir{0};
       if (input.keyDown(GLFW_KEY_W)) wishDir.z -= 1;
       if (input.keyDown(GLFW_KEY_S)) wishDir.z += 1;
-      if (input.keyDown(GLFW_KEY_A)) wishDir.x -= 1;
-      if (input.keyDown(GLFW_KEY_D)) wishDir.x += 1;
-      physics.moveCharacter(character, wishDir, fixedDt, 8.0f);
+      if (input.keyDown(GLFW_KEY_A)) wishDir.x += 1;
+      if (input.keyDown(GLFW_KEY_D)) wishDir.x -= 1;
       if (input.keyPressed(GLFW_KEY_SPACE)) physics.jumpCharacter(character);
 
-      // Camera follows character
-      if (character->joltCharacter) {
+      // Camera follows the character while it is on/near the arena; if it falls out of the
+      // world (character controller sinking through the floor) fall back to a fixed framing
+      // that keeps the cube stack in view instead of staring into the void.
+      if (character && character->joltCharacter) {
         auto joltPos = character->joltCharacter->GetPosition();
-        scene.camera.setPosition({joltPos.GetX(), joltPos.GetY() + 5.0f, joltPos.GetZ() + 8.0f});
-        scene.camera.lookAt({joltPos.GetX(), joltPos.GetY() + 1.0f, joltPos.GetZ() + 1.0f});
+        if (joltPos.GetY() > -3.0f) {
+          scene.camera.setPosition({joltPos.GetX(), joltPos.GetY() + 5.0f, joltPos.GetZ() + 8.0f});
+          scene.camera.lookAt({joltPos.GetX(), joltPos.GetY() + 1.0f, joltPos.GetZ() + 1.0f});
+        } else {
+          scene.camera.setPosition({12.0f, 9.0f, 18.0f});
+          scene.camera.lookAt({0.0f, 3.5f, 0.0f});
+        }
       }
 
       input.endFrame();
 
-      // Step physics
-      physics.step(fixedDt);
-
-      // Sync physics → ECS → Scene
-      ecs::syncPhysicsToTransforms(physics, ecsWorld);
-
-      // Update character entity transform
-      if (character->joltCharacter) {
-        auto joltPos = character->joltCharacter->GetPosition();
-        auto* charTransform = ecsWorld.transforms.get(charEntity);
+      // Step physics in fixed sub-steps to consume the accumulated real time. Sync inside the
+      // loop so each transform's prev/current pair straddles exactly one fixed step, which the
+      // render then interpolates between (smooth motion despite a high, variable frame rate).
+      auto* charTransform = ecsWorld.get<ecs::TransformComponent>(charEntity);
+      int subSteps = 0;
+      while (accumulator >= fixedDt && subSteps < 5) {
         if (charTransform) {
-          charTransform->position = {joltPos.GetX(), joltPos.GetY(), joltPos.GetZ()};
+          charTransform->prevPosition = charTransform->position;
+          charTransform->prevRotation = charTransform->rotation;
         }
+        physics.moveCharacter(character, wishDir, fixedDt, 8.0f);
+        physics.step(fixedDt);
+        ecs::syncPhysicsToTransforms(physics, ecsWorld);
+        if (character && character->joltCharacter && charTransform) {
+          auto jp = character->joltCharacter->GetPosition();
+          charTransform->position = {jp.GetX(), jp.GetY(), jp.GetZ()};
+        }
+        accumulator -= fixedDt;
+        ++subSteps;
       }
-      ecs::syncTransformsToScene(ecsWorld, scene);
+
+      // Render at the interpolated state between the last two fixed steps (headless uses the
+      // current state directly for deterministic screenshots).
+      const float alpha = (maxFrames >= 0) ? 1.0f : accumulator / fixedDt;
+      ecs::syncTransformsToScene(ecsWorld, scene, alpha);
 
       // Render
       auto* cmd = device->beginFrame();
       auto& bb = swapChain->backBuffer();
       renderer.render(cmd, bb, scene);
       if (frame == 0) {
-        std::cout << "drawCalls=" << renderer.drawCalls() << " frameMs=" << renderer.lastFrameMs() << "\n" << std::flush;
+        std::cout << "drawCalls=" << renderer.drawCalls() << " frameMs=" << renderer.lastFrameMs() << "\n"
+                  << "Controls: WASD move, Space jump, [ / ] slow down / speed up simulation\n"
+                  << std::flush;
       }
 
+      // Capture near the end of a fixed --frames run so physics has time to settle.
+      const int shotFrame = (maxFrames > 5) ? maxFrames - 2 : 3;
       ScreenshotPending shot;
-      if (!shotDone && frame >= 3)
+      if (!shotDone && frame >= shotFrame)
         shot = beginScreenshot(*device, *cmd, bb);
       cmd->transition(bb, rhi::ResourceState::Present);
       device->endFrame(*swapChain);

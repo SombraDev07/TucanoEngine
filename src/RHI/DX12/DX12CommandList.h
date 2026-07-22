@@ -27,6 +27,8 @@ public:
   void setScissor(const Scissor& sc) override;
   void setRenderTargets(std::span<Texture*> rtvs, Texture* dsv) override;
   void clearRenderTarget(Texture& rtv, const float color[4]) override;
+  void clearRenderTargetRect(Texture& rtv, const float color[4], uint32_t x, uint32_t y, uint32_t w,
+                             uint32_t h) override;
   void clearDepth(Texture& dsv, float depth) override;
   void setVertexBuffer(Buffer& vb, uint32_t stride) override;
   void setIndexBuffer(Buffer& ib, bool index32) override;
@@ -54,6 +56,8 @@ public:
   void uavBarrier(Texture* resource) override;
   void aliasingBarrier(Texture* before, Texture* after) override;
   void copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t width, uint32_t height, Format format) override;
+  void copyBufferToTexture(Buffer& src, Texture& dst, uint32_t width, uint32_t height, uint32_t depth,
+                           Format format) override;
   void copyTextureRegion(Texture& dst, uint32_t dstX, uint32_t dstY, Texture& src, uint32_t srcX, uint32_t srcY,
                          uint32_t width, uint32_t height) override;
 

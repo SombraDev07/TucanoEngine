@@ -327,6 +327,15 @@ std::shared_ptr<PipelineState> DX12Device::createGraphicsPipeline(const Graphics
       rt.SrcBlendAlpha = D3D12_BLEND_ONE;
       rt.DestBlendAlpha = D3D12_BLEND_ONE;
       rt.BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    } else if (desc.blend == BlendMode::Min) {
+      // Depth-as-color targets (shadow atlases): keep the nearest depth regardless of draw order.
+      rt.BlendEnable = TRUE;
+      rt.SrcBlend = D3D12_BLEND_ONE;
+      rt.DestBlend = D3D12_BLEND_ONE;
+      rt.BlendOp = D3D12_BLEND_OP_MIN;
+      rt.SrcBlendAlpha = D3D12_BLEND_ONE;
+      rt.DestBlendAlpha = D3D12_BLEND_ONE;
+      rt.BlendOpAlpha = D3D12_BLEND_OP_MIN;
     } else {
       rt.BlendEnable = FALSE;
     }

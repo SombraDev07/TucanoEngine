@@ -70,6 +70,7 @@ private:
   JPH::BodyInterface&                       m_bodyInterface;
 
   std::vector<Character> m_characters;
+  bool m_broadPhaseOptimized = false;
 };
 
 } // namespace tucano::physics

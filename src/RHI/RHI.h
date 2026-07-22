@@ -173,6 +173,9 @@ public:
   virtual void setScissor(const Scissor& sc) = 0;
   virtual void setRenderTargets(std::span<Texture*> rtvs, Texture* dsv) = 0;
   virtual void clearRenderTarget(Texture& rtv, const float color[4]) = 0;
+  // Clears only the given rect (incremental shadow/cache invalidation).
+  virtual void clearRenderTargetRect(Texture& rtv, const float color[4], uint32_t x, uint32_t y, uint32_t w,
+                                     uint32_t h) = 0;
   virtual void clearDepth(Texture& dsv, float depth = 1.0f) = 0;
   virtual void setVertexBuffer(Buffer& vb, uint32_t stride) = 0;
   virtual void setIndexBuffer(Buffer& ib, bool index32 = true) = 0;
@@ -213,6 +216,10 @@ public:
     (void)after;
   }
   virtual void copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t width, uint32_t height,
+                                   Format format) = 0;
+  // Copy an upload buffer (256-aligned rows) into a texture (2D or 3D) on this command list —
+  // avoids the shared upload-arena reset that uploadTexture() does mid-frame.
+  virtual void copyBufferToTexture(Buffer& src, Texture& dst, uint32_t width, uint32_t height, uint32_t depth,
                                    Format format) = 0;
   // Optional GPU copy (toroidal scroll, etc.). Default no-op.
   virtual void copyTextureRegion(Texture& dst, uint32_t dstX, uint32_t dstY, Texture& src, uint32_t srcX,

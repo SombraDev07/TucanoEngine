@@ -88,7 +88,7 @@ enum class ShaderStage : uint32_t {
 
 enum class CullMode : uint32_t { None, Back, Front };
 enum class CompareOp : uint32_t { Never, Less, Equal, LessEqual, Greater, NotEqual, GreaterEqual, Always };
-enum class BlendMode : uint32_t { Opaque, AlphaBlend, Additive };
+enum class BlendMode : uint32_t { Opaque, AlphaBlend, Additive, Min };
 enum class Filter : uint32_t { Point, Linear, Anisotropic };
 enum class AddressMode : uint32_t { Wrap, Clamp, Mirror, Border };
 enum class PrimitiveTopology : uint32_t { TriangleList, TriangleStrip, LineList };

@@ -696,8 +696,15 @@ void DX12Device::createDsv(DX12Texture& tex) {
 void DX12Device::createUav(DX12Texture& tex) {
   D3D12_UNORDERED_ACCESS_VIEW_DESC uav{};
   uav.Format = toDxgi(tex.desc.format);
-  uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
-  uav.Texture2D.MipSlice = 0;
+  if (tex.desc.depth > 1) {
+    uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE3D;
+    uav.Texture3D.MipSlice = 0;
+    uav.Texture3D.FirstWSlice = 0;
+    uav.Texture3D.WSize = tex.desc.depth;
+  } else {
+    uav.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    uav.Texture2D.MipSlice = 0;
+  }
   tex.uavIndex = m_bindless.allocate(1);
   if (tex.uavIndex == UINT32_MAX) {
     throw std::runtime_error("Bindless UAV heap exhausted");

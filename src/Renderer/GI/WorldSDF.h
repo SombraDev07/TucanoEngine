@@ -20,8 +20,9 @@ public:
   static constexpr uint32_t kCascades = 4;
 
   void init(rhi::Device& device);
-  void update(rhi::Device& device, const Scene& scene, const glm::vec3& cameraPos, const glm::vec3& sunDir,
-              float sunIntensity, float amortizeFraction = 0.35f);
+  // CPU seeds the surface voxels; the GPU runs the 3D JFA + finalize (SDF + SH) per cascade.
+  void update(rhi::Device& device, rhi::CommandList& cmd, const Scene& scene, const glm::vec3& cameraPos,
+              const glm::vec3& sunDir, float sunIntensity, float amortizeFraction = 0.35f);
 
   rhi::Texture* sdfAtlas() const { return m_sdf.get(); }
   rhi::Texture* shAtlas() const { return m_sh.get(); }
@@ -38,13 +39,28 @@ public:
   glm::vec3 sampleShCpu(const glm::vec3& worldPos) const;
 
 private:
-  void rebuildCascade(uint32_t cascade, const Scene& scene, const glm::vec3& sunDir, float sunIntensity);
-  void uploadCascade(rhi::Device& device, uint32_t cascade);
+  // CPU: rasterize triangles → surface seed volume + per-voxel albedo/inside aux.
+  void seedCascade(uint32_t cascade, const Scene& scene);
+  void ensureGpu(rhi::Device& device);
 
-  std::shared_ptr<rhi::Texture> m_sdf; // R32_FLOAT, W=kRes*kCascades, H=kRes*kRes
-  std::shared_ptr<rhi::Texture> m_sh;  // RGBA16F, same layout (L0.rgb approx + L1.z in a unused; rgb=irradiance)
-  std::vector<float> m_sdfCpu;        // full atlas
-  std::vector<float> m_shCpu;         // RGBA interleaved
+  std::shared_ptr<rhi::Texture> m_sdf; // R32_FLOAT, W=kRes*kCascades, H=kRes*kRes  (UAV)
+  std::shared_ptr<rhi::Texture> m_sh;  // RGBA16F, same layout (UAV)
+  std::vector<float> m_sdfCpu;         // CPU mirror (reflection-probe bake / tools)
+  std::vector<float> m_shCpu;
+
+  // GPU JFA resources.
+  std::shared_ptr<rhi::Texture> m_seedA;   // R32_UINT, kRes³ (ping)
+  std::shared_ptr<rhi::Texture> m_seedB;   // R32_UINT, kRes³ (pong)
+  std::shared_ptr<rhi::Texture> m_aux;     // RGBA8, kRes³ (rgb=albedo, a=inside)
+  std::shared_ptr<rhi::RootSignature> m_computeRoot;
+  std::shared_ptr<rhi::PipelineState> m_jfaPSO;
+  std::shared_ptr<rhi::PipelineState> m_finalizePSO;
+  std::shared_ptr<rhi::Buffer> m_seedUpload; // persistent upload staging (256-aligned rows)
+  std::shared_ptr<rhi::Buffer> m_auxUpload;
+  std::vector<uint32_t> m_seedCpu; // kRes³ upload staging
+  std::vector<uint32_t> m_auxCpu;  // kRes³ RGBA8 packed
+  bool m_gpuReady = false;
+
   std::array<glm::vec3, kCascades> m_origin{};
   std::array<float, kCascades> m_extent{16.f, 32.f, 64.f, 128.f};
   uint32_t m_cascadeCursor = 0;

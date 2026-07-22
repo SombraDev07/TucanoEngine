@@ -21,6 +21,7 @@ int main(int argc, char** argv) {
   bool noClouds = false;
   bool noGodRays = false;
   bool withRain = false;
+  bool toroidal = false;
   float coverage = -1.0f;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
@@ -38,6 +39,8 @@ int main(int argc, char** argv) {
       withRain = true;
     } else if (a == "--coverage" && i + 1 < argc) {
       coverage = std::stof(argv[++i]);
+    } else if (a == "--toroidal") {
+      toroidal = true;
     }
   }
 
@@ -61,6 +64,9 @@ int main(int argc, char** argv) {
     }
     if (coverage >= 0.0f) {
       renderer->settings().cloudCoverage = coverage;
+    }
+    if (toroidal) {
+      renderer->settings().enableToroidalShadows = true;
     }
 
     Input input(window.handle());

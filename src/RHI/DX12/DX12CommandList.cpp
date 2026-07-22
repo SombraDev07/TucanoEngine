@@ -152,6 +152,13 @@ void DX12CommandList::clearRenderTarget(Texture& rtv, const float color[4]) {
   m_cmd->ClearRenderTargetView(tex.rtv, color, 0, nullptr);
 }
 
+void DX12CommandList::clearRenderTargetRect(Texture& rtv, const float color[4], uint32_t x, uint32_t y,
+                                            uint32_t w, uint32_t h) {
+  auto& tex = static_cast<DX12Texture&>(rtv);
+  D3D12_RECT rect{LONG(x), LONG(y), LONG(x + w), LONG(y + h)};
+  m_cmd->ClearRenderTargetView(tex.rtv, color, 1, &rect);
+}
+
 void DX12CommandList::clearDepth(Texture& dsv, float depth) {
   auto& tex = static_cast<DX12Texture&>(dsv);
   m_cmd->ClearDepthStencilView(tex.dsv, D3D12_CLEAR_FLAG_DEPTH, depth, 0, 0, nullptr);
@@ -288,6 +295,29 @@ void DX12CommandList::copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t wi
   dstLoc.PlacedFootprint.Footprint.Height = height;
   dstLoc.PlacedFootprint.Footprint.Depth = 1;
   dstLoc.PlacedFootprint.Footprint.RowPitch = (formatRowPitch(format, width) + 255u) & ~255u;
+
+  m_barriers.flush(m_cmd.Get());
+  m_cmd->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
+}
+
+void DX12CommandList::copyBufferToTexture(Buffer& src, Texture& dst, uint32_t width, uint32_t height,
+                                          uint32_t depth, Format format) {
+  auto& buf = static_cast<DX12Buffer&>(src);
+  auto& tex = static_cast<DX12Texture&>(dst);
+  D3D12_TEXTURE_COPY_LOCATION srcLoc{};
+  srcLoc.pResource = buf.get();
+  srcLoc.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  srcLoc.PlacedFootprint.Offset = 0;
+  srcLoc.PlacedFootprint.Footprint.Format = toDxgi(format);
+  srcLoc.PlacedFootprint.Footprint.Width = width;
+  srcLoc.PlacedFootprint.Footprint.Height = height;
+  srcLoc.PlacedFootprint.Footprint.Depth = depth;
+  srcLoc.PlacedFootprint.Footprint.RowPitch = (formatRowPitch(format, width) + 255u) & ~255u;
+
+  D3D12_TEXTURE_COPY_LOCATION dstLoc{};
+  dstLoc.pResource = tex.get();
+  dstLoc.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  dstLoc.SubresourceIndex = 0;
 
   m_barriers.flush(m_cmd.Get());
   m_cmd->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);

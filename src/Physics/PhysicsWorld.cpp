@@ -3,6 +3,7 @@
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/Factory.h>
+#include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
@@ -29,6 +30,9 @@ static void ensureJoltInit() {
   std::call_once(s_joltInitFlag, [] {
     JPH::RegisterDefaultAllocator();
     JPH::Factory::sInstance = new JPH::Factory();
+    // Registers all shape/collision/constraint types with the Factory. Without this the solver
+    // dereferences unregistered types when the first contact constraint is created → crash.
+    JPH::RegisterTypes();
   });
 }
 
@@ -39,7 +43,10 @@ PhysicsWorld::PhysicsWorld(uint32_t maxBodies)
   ensureJoltInit();
 
   JPH::TempAllocatorImpl tempAllocator(32 * 1024 * 1024);
-  m_jobSystem = std::make_unique<JPH::JobSystemThreadPool>(2048, 1, -1);
+  // maxBarriers must match Jolt's recommended default (8); the previous value (1) could corrupt
+  // memory once the solver forms simulation islands.
+  m_jobSystem = std::make_unique<JPH::JobSystemThreadPool>(
+      JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, -1);
 
   constexpr uint32_t cMaxPairs    = 65536;
   constexpr uint32_t cMaxContacts = 65536;
@@ -54,6 +61,12 @@ PhysicsWorld::~PhysicsWorld() {
 
 void PhysicsWorld::step(float deltaTime) {
   constexpr int cCollisionSteps = 1;
+
+  // Optimize the broadphase once after the initial bodies are in (Jolt HelloWorld pattern).
+  if (!m_broadPhaseOptimized) {
+    m_system.OptimizeBroadPhase();
+    m_broadPhaseOptimized = true;
+  }
 
   JPH::TempAllocatorImpl tempAllocator(32 * 1024 * 1024);
   m_system.Update(deltaTime, cCollisionSteps, &tempAllocator, m_jobSystem.get());
@@ -204,13 +217,10 @@ void PhysicsWorld::moveCharacter(Character* c, glm::vec3 wishDir, float dt, floa
     c->velocity.y -= 9.81f * dt;
   }
 
+  // Only set the desired velocity here — the single CharacterVirtual::Update happens in step().
+  // (Updating both here and in step() integrated the character twice per frame → visible jitter.)
   JPH::Vec3 joltVel(c->velocity.x, c->velocity.y, c->velocity.z);
-  JPH::Vec3 gravity(0.0f, -9.81f, 0.0f);
-  JPH::TempAllocatorImpl tempAllocator(1 * 1024 * 1024);
   c->joltCharacter->SetLinearVelocity(joltVel);
-  c->joltCharacter->Update(dt, gravity,
-    JPH::BroadPhaseLayerFilter{}, JPH::ObjectLayerFilter{}, JPH::BodyFilter{}, JPH::ShapeFilter{},
-    tempAllocator);
 }
 
 void PhysicsWorld::jumpCharacter(Character* c, float impulse) {
