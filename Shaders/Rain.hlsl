@@ -4,6 +4,7 @@ cbuffer RainCB : register(b1) {
   float4x4 invViewProj;
   float4x4 viewProj;
   float4x4 viewMtx;      // world → view
+  float4x4 rainOccVP;    // world → rain-space clip (Cry occluder)
   float4 cameraPos;      // xyz, time
   float4 screenSize;     // w, h, 1/w, 1/h
   float4 rainAmount;     // amount, dropsAmount, dropsSpeed, dropsLighting
@@ -11,8 +12,8 @@ cbuffer RainCB : register(b1) {
   float4 rainAnim;       // wind.x, wind.z, rippleFrame, mistAmount
   float4 rainColor;      // rgb, layers
   float4 rainVolume;     // center.xyz, radius
-  float4 sceneRain0;     // streakSpeed, _, _, _
-  float4 sceneRain1;     // dropsLighting, streakIntensity, 0, maxViewDist
+  float4 sceneRain0;     // streakSpeed, puddlesSSR, sceneRainIntensity, splashAmt
+  float4 sceneRain1;     // dropsLighting, streakIntensity, sceneLayer, maxViewDist
 };
 
 Texture2D depthTex : register(t0);
@@ -25,6 +26,7 @@ Texture2D surfaceFlowTex : register(t6);
 Texture2DArray rainRippleTex : register(t7);
 Texture2D rainOccTex : register(t8);
 Texture2D bloomTex : register(t9);
+Texture2D ssrTex : register(t10);
 
 SamplerState linearSamp : register(s0);
 SamplerState wrapSamp : register(s1);
@@ -92,35 +94,42 @@ float puddleIsland(float2 xz, float puddleAmt) {
   return smoothstep(lo, hi, mask);
 }
 
+float puddleIslandLevel(float2 xz, float puddleAmt) {
+  float a = puddleMaskTex.SampleLevel(wrapSamp, xz * 0.045, 0).r;
+  float b = puddleMaskTex.SampleLevel(wrapSamp, xz * 0.012 + 9.1, 0).r;
+  float c = rainSpatterTex.SampleLevel(wrapSamp, xz * 0.09, 0).r;
+  float mask = a * 0.5 + b * 0.35 + (1.0 - c) * 0.15;
+  float lo = lerp(0.55, 0.28, saturate(puddleAmt * 0.5));
+  float hi = lerp(0.78, 0.5, saturate(puddleAmt * 0.5));
+  return smoothstep(lo, hi, mask);
+}
+
 float4 PSCopy(VSOut input) : SV_Target {
   return src0Tex.SampleLevel(pointSamp, input.uv, 0);
 }
 
-// Very soft occlusion — avoid stair-step popping when camera moves
+// Cry rain-space occluder: compare against depth map rendered along rain direction
 float4 PSOcclusion(VSOut input) : SV_Target {
   float depth = depthTex.SampleLevel(pointSamp, input.uv, 0).r;
   if (depth >= 0.9995) {
     return 1.0;
   }
   float3 world = reconstructWorld(input.uv, depth);
-  float2 wind = clampWind();
-  float3 rainDir = normalize(float3(-wind.x * 0.25, 1.0, -wind.y * 0.25));
-  float blocked = 0.0;
-  float stepLen = 0.55;
-  [unroll] for (int i = 1; i <= 6; ++i) {
-    float3 p = world + rainDir * (stepLen * (float)i);
-    float4 clip = mul(viewProj, float4(p, 1));
-    if (clip.w <= 0.0)
-      break;
-    float2 uv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
-    if (any(uv < 0.02) || any(uv > 0.98))
-      break;
-    float dScene = depthTex.SampleLevel(pointSamp, uv, 0).r;
-    float dRay = clip.z / clip.w;
-    if (dScene < dRay - 0.002) {
-      blocked += 0.2;
-    }
+  float4 clip = mul(rainOccVP, float4(world, 1.0));
+  if (clip.w <= 1e-4) {
+    return 1.0;
   }
+  float2 uv = clip.xy / clip.w * float2(0.5, -0.5) + 0.5;
+  if (any(uv < 0.001) || any(uv > 0.999)) {
+    return 1.0;
+  }
+  float mapD = src0Tex.SampleLevel(pointSamp, uv, 0).r;
+  float pointZ = saturate(clip.z / clip.w);
+  // Geometry closer to sky than this surface blocks rain
+  float blocked = (mapD + 0.002 < pointZ) ? 1.0 : 0.0;
+  // Soft edge
+  float soft = saturate((pointZ - mapD) * 40.0);
+  blocked = max(blocked, soft * 0.35);
   return saturate(1.0 - blocked);
 }
 
@@ -326,7 +335,7 @@ float4 PSStreaks(VSOut input) : SV_Target {
   return float4(max(hdr, 0.0), 1);
 }
 
-// Extra puddle specular sheen after lighting (reads normal in src1)
+// Puddle mirror: SSR buffer + short local march + Fresnel water F0
 float4 PSPuddleSpec(VSOut input) : SV_Target {
   float3 hdr = src0Tex.Sample(linearSamp, input.uv).rgb;
   float amt = saturate(rainAmount.x) * saturate(rainWet.y);
@@ -349,21 +358,65 @@ float4 PSPuddleSpec(VSOut input) : SV_Target {
 
   float3 V = normalize(cameraPos.xyz - world);
   float ndotv = saturate(dot(n, V));
-  float fres = pow(1.0 - ndotv, 4.0);
+  float F0 = 0.02;
+  float fres = F0 + (1.0 - F0) * pow(1.0 - ndotv, 5.0);
+  fres = lerp(fres, 1.0, pow(1.0 - ndotv, 3.0) * 0.35);
 
-  // Fake env: blur HDR neighborhood + sky tint
-  float2 texel = screenSize.zw;
-  float3 env = 0;
-  env += src0Tex.Sample(linearSamp, input.uv + float2(3, 0) * texel).rgb;
-  env += src0Tex.Sample(linearSamp, input.uv + float2(-3, 0) * texel).rgb;
-  env += src0Tex.Sample(linearSamp, input.uv + float2(0, 3) * texel).rgb;
-  env += src0Tex.Sample(linearSamp, input.uv + float2(0, -3) * texel).rgb;
-  env *= 0.25;
-  env = lerp(env, rainColor.rgb * 0.35, 0.25);
-
+  float3 R = reflect(-V, n);
   float gloss = saturate(rainWet.z);
-  hdr += env * fres * puddle * gloss * 0.85;
-  hdr += fres * puddle * 0.08; // hot highlight
+
+  float4 ssr = ssrTex.SampleLevel(linearSamp, input.uv, 0);
+  float3 refl = ssr.rgb;
+  float conf = saturate(ssr.a * 1.35);
+
+  if (conf < 0.55) {
+    float2 dirSS = float2(R.x, -R.y);
+    float dirLen = length(dirSS);
+    float3 marchCol = 0;
+    float marchHit = 0;
+    if (dirLen > 1e-4) {
+      dirSS /= dirLen;
+      float2 texelM = screenSize.zw;
+      float2 uv = input.uv;
+      float prevD = depth;
+      const int steps = 24;
+      float stride = 3.0;
+      [loop] for (int i = 1; i <= steps; ++i) {
+        uv += dirSS * texelM * stride;
+        if ((i & 3) == 0) {
+          stride *= 1.25;
+        }
+        if (any(uv < 0.01) || any(uv > 0.99)) {
+          break;
+        }
+        float d = depthTex.SampleLevel(pointSamp, uv, 0).r;
+        if (d < depth - 0.002 && d < prevD - 0.001) {
+          marchCol = min(src0Tex.SampleLevel(linearSamp, uv, 0).rgb, 6.0);
+          float edge = saturate(1.0 - max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0);
+          marchHit = edge * saturate(1.0 - float(i) / float(steps));
+          break;
+        }
+        prevD = d;
+      }
+    }
+    float3 sky = rainColor.rgb * float3(0.55, 0.65, 0.85) * 0.45;
+    float3 fallback = lerp(sky, marchCol, marchHit);
+    refl = lerp(fallback, refl, conf);
+    conf = max(conf, marchHit * 0.85);
+  }
+
+  float2 texel = screenSize.zw;
+  float3 soft = 0;
+  soft += src0Tex.SampleLevel(linearSamp, input.uv + float2(4, 0) * texel, 0).rgb;
+  soft += src0Tex.SampleLevel(linearSamp, input.uv + float2(-4, 0) * texel, 0).rgb;
+  soft += src0Tex.SampleLevel(linearSamp, input.uv + float2(0, 4) * texel, 0).rgb;
+  soft += src0Tex.SampleLevel(linearSamp, input.uv + float2(0, -4) * texel, 0).rgb;
+  soft *= 0.25;
+  refl = lerp(soft * 0.65 + rainColor.rgb * 0.08, refl, saturate(conf + 0.2));
+
+  float strength = puddle * gloss * (0.75 + conf * 0.55) * saturate(sceneRain0.y);
+  hdr += refl * fres * strength;
+  hdr += fres * puddle * 0.04 * saturate(sceneRain0.y);
   return float4(max(hdr, 0.0), 1);
 }
 
@@ -434,14 +487,147 @@ struct SceneVSIn {
 };
 struct SceneVSOut {
   float4 pos : SV_Position;
-  float4 tcProj : TEXCOORD0;
-  float4 baseTC : TEXCOORD1;
-  float4 baseTC2 : TEXCOORD2;
-  float4 blendWeights : TEXCOORD3;
+  float2 uv : TEXCOORD0;
+  float4 clip : TEXCOORD1;
+  float3 world : TEXCOORD2;
+  float layer : TEXCOORD3;
 };
+
+// Root consts: viewProj + world (same RootXform as GBuffer/Shadow)
+cbuffer SceneRoot : register(b0) {
+  float4x4 rootViewProj;
+  float4x4 rootWorld;
+};
+
 SceneVSOut VSSceneRain(SceneVSIn IN) {
-  SceneVSOut o = (SceneVSOut)0;
-  o.pos = float4(0, 0, 0, 1);
+  SceneVSOut o;
+  // Mesh: (x,y) radial, z = height axis (Cry). Map to Y-up.
+  float3 lp = float3(IN.position.x, IN.position.z, IN.position.y);
+  float4 wp = mul(rootWorld, float4(lp, 1.0));
+  o.world = wp.xyz;
+  o.pos = mul(rootViewProj, wp);
+  o.clip = o.pos;
+  o.layer = sceneRain1.z;
+  float2 wind = clampWind();
+  float t = cameraPos.w;
+  float speed = max(sceneRain0.x, 0.2);
+  o.uv = float2(IN.position.x * 0.5 + 0.5, -IN.position.z * 0.35 - t * speed * 0.15) + wind * 0.05;
   return o;
 }
-float4 PSSceneRain(SceneVSOut IN) : SV_Target { return 0; }
+
+float4 PSSceneRain(SceneVSOut IN) : SV_Target {
+  float inten = saturate(rainAmount.x) * saturate(sceneRain0.z);
+  if (inten < 0.001) {
+    discard;
+  }
+  float2 ndc = IN.clip.xy / max(IN.clip.w, 1e-4);
+  float2 uv = ndc * float2(0.5, -0.5) + 0.5;
+  if (any(uv < 0.0) || any(uv > 1.0)) {
+    discard;
+  }
+
+  float sceneD = depthTex.SampleLevel(pointSamp, uv, 0).r;
+  float rainD = saturate(IN.clip.z / max(IN.clip.w, 1e-4));
+  // Soft clip: keep rain in front of opaque surfaces
+  float soft = 1.0;
+  if (sceneD < 0.9995) {
+    soft = saturate((sceneD - rainD) * 80.0 + 0.5);
+    soft = smoothstep(0.0, 1.0, soft);
+  }
+  float occ = rainOccTex.SampleLevel(linearSamp, uv, 0).r;
+
+  float rain = src1Tex.Sample(wrapSamp, IN.uv * float2(2.5, 4.0)).r;
+  float rain2 = src1Tex.Sample(wrapSamp, IN.uv * float2(3.8, 6.0) + 0.31).r;
+  float a = saturate(rain * 0.55 + rain2 * 0.45);
+  float2 nxy = unpackXYNormal(src2Tex.Sample(wrapSamp, IN.uv * 2.5));
+  a *= lerp(0.5, 1.15, saturate(length(nxy)));
+  a *= soft * lerp(0.7, 1.0, occ) * inten;
+
+  // Radial fade of cone shell
+  float radial = length(float2(IN.world.x - cameraPos.x, IN.world.z - cameraPos.z));
+  a *= saturate(1.0 - radial / max(sceneRain1.w * 0.6, 5.0));
+  a *= 0.22; // volume density
+
+  if (a < 0.002) {
+    discard;
+  }
+  float3 col = rainColor.rgb * float3(0.85, 0.92, 1.05);
+  return float4(col * a, a);
+}
+
+// World splash billboards — SV_VertexID expands 384 particles × 6 verts
+struct SplashVSOut {
+  float4 pos : SV_Position;
+  float2 uv : TEXCOORD0;
+  float life : TEXCOORD1;
+  float2 centerUV : TEXCOORD2;
+};
+
+SplashVSOut VSSplash(uint vid : SV_VertexID) {
+  SplashVSOut o;
+  uint pid = vid / 6;
+  uint corner = vid % 6;
+  // Quad tri-list corners
+  float2 corners[6] = {float2(-1, -1), float2(1, -1), float2(-1, 1), float2(-1, 1), float2(1, -1), float2(1, 1)};
+  float2 qc = corners[corner];
+
+  float2 rnd = hash22(float2(float(pid) * 0.17 + 2.1, float(pid) * 1.3 + 5.7));
+  float t = cameraPos.w;
+  // Stable-ish spawn cells that recycle with time
+  float cellShift = floor(t * 0.35 + rnd.x * 3.0);
+  float2 spawn = hash22(float2(float(pid), cellShift));
+  float2 screenUV = spawn;
+  float depth = depthTex.SampleLevel(pointSamp, screenUV, 0).r;
+  if (depth >= 0.999 || saturate(sceneRain0.w) < 0.01) {
+    o.pos = float4(2, 2, 0, 1); // offscreen
+    o.uv = qc * 0.5 + 0.5;
+    o.life = 0;
+    o.centerUV = screenUV;
+    return o;
+  }
+  float3 world = reconstructWorld(screenUV, depth);
+  float3 n = normalize(src1Tex.SampleLevel(pointSamp, screenUV, 0).xyz * 2.0 - 1.0);
+  float island = puddleIslandLevel(world.xz, saturate(rainWet.y));
+  float puddle = saturate(n.y * 5.0 - 3.5) * island * saturate(rainAmount.x);
+  if (puddle < 0.15) {
+    o.pos = float4(2, 2, 0, 1);
+    o.uv = qc * 0.5 + 0.5;
+    o.life = 0;
+    o.centerUV = screenUV;
+    return o;
+  }
+
+  float life = frac(t * (0.55 + rnd.y * 0.4) + rnd.x);
+  float pulse = smoothstep(0.0, 0.12, life) * smoothstep(0.55, 0.18, life);
+  float size = lerp(0.08, 0.22, rnd.y) * pulse * puddle * saturate(sceneRain0.w);
+
+  // Camera-facing billboard
+  float3 toCam = normalize(cameraPos.xyz - world);
+  float3 up = float3(0, 1, 0);
+  float3 right = normalize(cross(up, toCam));
+  up = normalize(cross(toCam, right));
+  float3 pos = world + n * 0.02 + right * (qc.x * size) + up * (qc.y * size);
+  o.pos = mul(viewProj, float4(pos, 1));
+  o.uv = qc * 0.5 + 0.5;
+  o.life = pulse * puddle;
+  o.centerUV = screenUV;
+  return o;
+}
+
+float4 PSSplash(SplashVSOut IN) : SV_Target {
+  if (IN.life < 0.01) {
+    discard;
+  }
+  float2 d = IN.uv * 2.0 - 1.0;
+  float r = length(d);
+  float ring = smoothstep(0.95, 0.55, r) * smoothstep(0.15, 0.45, r);
+  float fill = exp(-r * r * 4.0) * 0.35;
+  float a = (ring + fill) * IN.life * saturate(rainWet.w) * 0.85;
+  float spat = rainSpatterTex.Sample(wrapSamp, IN.uv * 0.5 + IN.centerUV).r;
+  a *= lerp(0.6, 1.2, spat);
+  if (a < 0.01) {
+    discard;
+  }
+  float3 col = rainColor.rgb * 1.1 + 0.05;
+  return float4(col * a, a);
+}

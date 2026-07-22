@@ -29,9 +29,17 @@ CMakeUserPresets.json
 **/*CRYENGINE*.md
 **/*CryEngine*.md
 
-# Package managers / tools
-/Tools/vcpkg/
-/tools/vcpkg/
+# Proprietary / large SDKs in 3thirdy (keep READMEs + scripts)
+/3thirdy/nsight-aftermath/**
+!/3thirdy/nsight-aftermath/README.md
+!/3thirdy/nsight-aftermath/.gitkeep
+/3thirdy/nsight-aftermath-samples/
+/3thirdy/_incoming/
+/3thirdy/**/*.lib
+/3thirdy/**/*.dll
+/3thirdy/**/*.pdb
+/3thirdy/**/*.exe
+
 
 # Large / regenerable content
 /Assets/Sponza/
@@ -46,3 +54,7 @@ CMakeUserPresets.json
 
 /captures/*.txt
 /captures/*.dot
+
+# Local vcpkg clone
+/Tools/vcpkg/
+

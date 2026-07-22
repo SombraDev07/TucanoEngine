@@ -16,9 +16,11 @@ public:
   uint32_t allocate(uint32_t count = 1);
   void free(uint32_t index, uint32_t count = 1);
 
-  // Deferred free — applied at end of frame (safe while GPU still uses slots).
+  // Deferred free — applied when GPU fence has completed (safe while GPU still uses slots).
   void deferFree(uint32_t index, uint32_t count = 1);
+  void deferFree(uint32_t index, uint32_t count, uint64_t fenceValue);
   void flushDeferredFrees();
+  void flushDeferredFrees(uint64_t completedFence);
 
   uint32_t capacity() const { return m_capacity; }
   uint32_t allocated() const { return m_allocated; }
@@ -28,13 +30,18 @@ private:
     uint32_t begin = 0;
     uint32_t count = 0;
   };
+  struct AgedRange {
+    uint32_t begin = 0;
+    uint32_t count = 0;
+    uint64_t fenceValue = 0;
+  };
 
   void coalesce();
 
   uint32_t m_capacity = 0;
   uint32_t m_allocated = 0;
   std::vector<Range> m_free;
-  std::vector<Range> m_deferred;
+  std::vector<AgedRange> m_deferred;
   std::mutex m_mutex;
 };
 

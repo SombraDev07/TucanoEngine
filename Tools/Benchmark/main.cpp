@@ -51,7 +51,7 @@ int main(int argc, char** argv) {
       const auto t0 = std::chrono::steady_clock::now();
       auto* cmd = device->beginFrame();
       auto& bb = swapChain->backBuffer();
-      renderer.render(*cmd, bb, scene);
+      renderer.render(cmd, bb, scene);
       cmd->transition(bb, rhi::ResourceState::Present);
       device->endFrame(*swapChain);
       const auto t1 = std::chrono::steady_clock::now();

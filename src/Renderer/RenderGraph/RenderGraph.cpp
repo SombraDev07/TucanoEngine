@@ -27,8 +27,10 @@ void RenderGraph::reset() {
   m_resources.clear();
   m_passes.clear();
   m_imports.clear();
+  m_physicalOwner.clear();
   m_aliasedBytes = 0;
   m_barrierInsertions = 0;
+  m_aliasBarrierInsertions = 0;
   m_compiled = false;
   markAllStagesDirty();
 }
@@ -91,6 +93,21 @@ rhi::Texture* RenderGraph::getTexture(RGHandle h) const {
     return r.imported;
   }
   return r.owned.get();
+}
+
+RGHandle RenderGraph::aliasRoot(RGHandle h) const {
+  if (h >= m_resources.size()) {
+    return kRGInvalid;
+  }
+  RGHandle cur = h;
+  // Follow alias chain to the physical owner handle.
+  while (m_resources[cur].aliasOf >= 0) {
+    cur = static_cast<RGHandle>(m_resources[cur].aliasOf);
+    if (cur >= m_resources.size()) {
+      return kRGInvalid;
+    }
+  }
+  return cur;
 }
 
 rhi::ResourceState RenderGraph::stateForUsage(RGUsage usage) const {
@@ -242,7 +259,7 @@ void RenderGraph::runStage(RGCompileStage stage, rhi::Device& device) {
     // Topological order == declaration order for now.
     break;
   case RGCompileStage::BarrierScheduling:
-    // Barriers inserted at execute via applyTransitions.
+    // Transition barriers at execute; aliasing barriers when logical owner of physical memory switches.
     break;
   case RGCompileStage::StateDeltas:
     break;
@@ -310,6 +327,30 @@ void RenderGraph::compile(rhi::Device& device) {
   m_compiled = true;
 }
 
+void RenderGraph::applyAliasBarriers(rhi::CommandList& cmd, const Pass& pass) {
+  auto touch = [&](const Access& a) {
+    rhi::Texture* tex = getTexture(a.handle);
+    if (!tex) {
+      return;
+    }
+    const RGHandle root = aliasRoot(a.handle);
+    auto it = m_physicalOwner.find(tex);
+    if (it != m_physicalOwner.end() && it->second != root && it->second != kRGInvalid) {
+      // Same physical memory, different logical transient — required before reinterpreting contents.
+      cmd.aliasingBarrier(nullptr, tex);
+      ++m_aliasBarrierInsertions;
+      ++m_barrierInsertions;
+    }
+    m_physicalOwner[tex] = root;
+  };
+  for (const auto& a : pass.reads) {
+    touch(a);
+  }
+  for (const auto& a : pass.writes) {
+    touch(a);
+  }
+}
+
 void RenderGraph::applyTransitions(rhi::CommandList& cmd, const Pass& pass) {
   auto touch = [&](const Access& a) {
     rhi::Texture* tex = getTexture(a.handle);
@@ -327,20 +368,73 @@ void RenderGraph::applyTransitions(rhi::CommandList& cmd, const Pass& pass) {
   }
 }
 
-void RenderGraph::execute(rhi::CommandList& cmd) {
+void RenderGraph::execute(rhi::CommandList*& cmd, rhi::Device& device) {
   if (!m_compiled) {
     throw std::runtime_error("RenderGraph::execute called before compile");
   }
+  if (!cmd) {
+    throw std::runtime_error("RenderGraph::execute null command list");
+  }
   m_barrierInsertions = 0;
-  for (auto& pass : m_passes) {
-    if (!pass.enabled) {
+  m_aliasBarrierInsertions = 0;
+  m_physicalOwner.clear();
+
+  bool usedCheckpoint = false;
+  size_t i = 0;
+  while (i < m_passes.size()) {
+    if (!m_passes[i].enabled) {
+      ++i;
       continue;
     }
-    applyTransitions(cmd, pass);
-    if (pass.execute) {
-      pass.execute(cmd, *this);
+
+    if (m_passes[i].asyncHint) {
+      // Transitions on graphics so compute sees correct states, then real async submit.
+      size_t batchEnd = i;
+      while (batchEnd < m_passes.size() && m_passes[batchEnd].enabled && m_passes[batchEnd].asyncHint) {
+        applyAliasBarriers(*cmd, m_passes[batchEnd]);
+        applyTransitions(*cmd, m_passes[batchEnd]);
+        ++batchEnd;
+      }
+      cmd->flushBarriers();
+
+      if (!usedCheckpoint) {
+        if (auto* late = device.submitGraphicsCheckpoint()) {
+          cmd = late;
+          usedCheckpoint = true;
+        }
+      }
+      device.asyncComputeWaitGraphics();
+      rhi::CommandList* computeCmd = device.beginAsyncCompute();
+      if (!computeCmd) {
+        // Fallback: run on graphics if async queue unavailable.
+        for (size_t p = i; p < batchEnd; ++p) {
+          if (m_passes[p].execute) {
+            m_passes[p].execute(*cmd, *this);
+          }
+        }
+      } else {
+        computeCmd->setDescriptorHeap();
+        for (size_t p = i; p < batchEnd; ++p) {
+          if (m_passes[p].execute) {
+            m_passes[p].execute(*computeCmd, *this);
+          }
+        }
+        device.submitAsyncCompute();
+        device.graphicsWaitAsyncCompute();
+        cmd->setDescriptorHeap();
+      }
+      i = batchEnd;
+      continue;
     }
+
+    applyAliasBarriers(*cmd, m_passes[i]);
+    applyTransitions(*cmd, m_passes[i]);
+    if (m_passes[i].execute) {
+      m_passes[i].execute(*cmd, *this);
+    }
+    ++i;
   }
+  cmd->flushBarriers();
 }
 
 void RenderGraph::exportGraphviz(const std::string& path) const {

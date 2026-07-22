@@ -12,7 +12,14 @@ struct ImageData {
   std::vector<uint8_t> pixels; // RGBA8
 };
 
+struct ImageDataF {
+  uint32_t width = 0;
+  uint32_t height = 0;
+  std::vector<float> pixels; // RGBA32F
+};
+
 ImageData loadImageRGBA8(const std::string& path);
 ImageData loadImageRGBA8FromMemory(const uint8_t* data, size_t size);
+ImageDataF loadImageRGBA32F(const std::string& path);
 
 } // namespace tucano

@@ -6,7 +6,6 @@
 #include <glm/glm.hpp>
 #include <memory>
 #include <string>
-#include <vector>
 
 namespace tucano {
 
@@ -22,8 +21,12 @@ struct MaterialGPU {
   float reflectance = 0.5f;
   float clearcoat = 0.0f;
   float clearcoatRoughness = 0.1f;
+  float fuzz = 0.0f;          // cloth / sheen amount
+  float detailScale = 0.0f;   // 0 = off; else UV scale for detail maps
   float alphaCutoff = 0.5f;
-  float _pad = 0.0f;
+  float _pad0 = 0.0f;
+  glm::vec3 fuzzColor{1, 1, 1};
+  float _pad1 = 0.0f;
 };
 
 struct Material {
@@ -35,12 +38,17 @@ struct Material {
   float reflectance = 0.5f;
   float clearcoat = 0.0f;
   float clearcoatRoughness = 0.1f;
+  float fuzz = 0.0f;
+  float detailScale = 0.0f;
+  glm::vec3 fuzzColor{1.0f, 1.0f, 1.0f};
   glm::vec3 emissiveFactor{0, 0, 0};
   std::shared_ptr<Texture> albedo;
   std::shared_ptr<Texture> normal;
   std::shared_ptr<Texture> metallicRoughness;
   std::shared_ptr<Texture> ao;
   std::shared_ptr<Texture> emissive;
+  std::shared_ptr<Texture> detailAlbedo;
+  std::shared_ptr<Texture> detailNormal;
   bool alphaMask = false;
   float alphaCutoff = 0.5f;
 
@@ -58,6 +66,8 @@ struct ShaderVariantKey {
   static constexpr uint32_t kAlphaMask = 1u << 1;
   static constexpr uint32_t kClearcoat = 1u << 2;
   static constexpr uint32_t kEmissive = 1u << 3;
+  static constexpr uint32_t kFuzz = 1u << 4;
+  static constexpr uint32_t kDetail = 1u << 5;
   uint64_t hash() const { return flags; }
 };
 

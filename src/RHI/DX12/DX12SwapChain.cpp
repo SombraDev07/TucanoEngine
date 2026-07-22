@@ -13,15 +13,35 @@ DX12SwapChain::DX12SwapChain(DX12Device* device, void* hwnd, uint32_t width, uin
   desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
   desc.BufferCount = kBackBufferCount;
   desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-  desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+  desc.Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
   ComPtr<IDXGISwapChain1> sc1;
   throwIfFailed(device->factory()->CreateSwapChainForHwnd(device->queue(), m_hwnd, &desc, nullptr, nullptr, &sc1),
                 "CreateSwapChainForHwnd");
   throwIfFailed(device->factory()->MakeWindowAssociation(m_hwnd, DXGI_MWA_NO_ALT_ENTER), "MakeWindowAssociation");
   throwIfFailed(sc1.As(&m_swapChain), "Query IDXGISwapChain3");
+  setupFrameLatency();
   m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
   createBuffers();
+}
+
+DX12SwapChain::~DX12SwapChain() {
+  // Event owned by DXGI — do not CloseHandle.
+  m_frameLatencyEvent = nullptr;
+}
+
+void DX12SwapChain::setupFrameLatency() {
+  if (FAILED(m_swapChain.As(&m_swapChain2)) || !m_swapChain2) {
+    return;
+  }
+  throwIfFailed(m_swapChain2->SetMaximumFrameLatency(kFrameLatency), "SetMaximumFrameLatency");
+  m_frameLatencyEvent = m_swapChain2->GetFrameLatencyWaitableObject();
+}
+
+void DX12SwapChain::waitForFrameLatency() {
+  if (m_frameLatencyEvent) {
+    WaitForSingleObjectEx(m_frameLatencyEvent, INFINITE, TRUE);
+  }
 }
 
 void DX12SwapChain::createBuffers() {
@@ -48,14 +68,17 @@ void DX12SwapChain::resize(uint32_t width, uint32_t height) {
   }
   m_width = width;
   m_height = height;
-  throwIfFailed(m_swapChain->ResizeBuffers(kBackBufferCount, width, height, DXGI_FORMAT_R8G8B8A8_UNORM,
-                                           DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH),
+  const UINT flags =
+      DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
+  throwIfFailed(m_swapChain->ResizeBuffers(kBackBufferCount, width, height, DXGI_FORMAT_R8G8B8A8_UNORM, flags),
                 "ResizeBuffers");
+  setupFrameLatency();
   m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
   createBuffers();
 }
 
 Texture& DX12SwapChain::backBuffer() {
+  waitForFrameLatency();
   m_frameIndex = m_swapChain->GetCurrentBackBufferIndex();
   return *m_backBuffers[m_frameIndex];
 }

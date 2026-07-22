@@ -14,6 +14,7 @@ add_library(TucanoRuntime STATIC
   RHI/DX12/PipelineCache.cpp
   RHI/DX12/GpuCrashRecovery.cpp
   RHI/DX12/SplitTransitionTracker.cpp
+  RHI/DX12/DX12ReadBack.cpp
   Renderer/Camera.cpp
   Renderer/Mesh.cpp
   Renderer/Material.cpp
@@ -25,10 +26,15 @@ add_library(TucanoRuntime STATIC
   Renderer/PostFX/TonemapPass.cpp
   Renderer/PostFX/BloomPass.cpp
   Renderer/PostFX/AOPass.cpp
+  Renderer/PostFX/ExposurePass.cpp
   Renderer/GI/IBL.cpp
   Renderer/GI/VoxelGI.cpp
+  Renderer/GI/WorldSDF.cpp
+  Renderer/GI/ReflectionProbes.cpp
+  Renderer/RayTracing/RayTracingScene.cpp
   Renderer/Shadows/ToroidalShadows.cpp
   Renderer/Shadows/OctahedralShadows.cpp
+  Renderer/Shadows/VirtualShadowMaps.cpp
   Renderer/Weather/RainSystem.cpp
   Renderer/RenderGraph/RenderGraph.cpp
   Renderer/Renderer.cpp
@@ -41,6 +47,9 @@ add_library(TucanoRuntime STATIC
   Runtime/Screenshot.cpp
   Runtime/DebugUI.cpp
   Runtime/StbImpl.cpp
+  Physics/PhysicsWorld.cpp
+  ECS/World.cpp
+  ECS/PhysicsSync.cpp
 )
 
 target_include_directories(TucanoRuntime
@@ -57,11 +66,17 @@ target_link_libraries(TucanoRuntime
     meshoptimizer
     imgui_lib
     tracy_stub
+    Jolt
     d3d12
     dxgi
     dxguid
     d3dcompiler
 )
+
+if(TUCANO_HAS_AFTERMATH)
+  target_compile_definitions(TucanoRuntime PUBLIC TUCANO_AFTERMATH=1)
+  target_link_libraries(TucanoRuntime PUBLIC NsightAftermath::NsightAftermath)
+endif()
 
 target_compile_definitions(TucanoRuntime
   PUBLIC

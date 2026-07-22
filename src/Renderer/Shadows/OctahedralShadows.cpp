@@ -20,16 +20,27 @@ void OctahedralShadowAtlas::init(rhi::Device& device, uint32_t atlasSize, uint32
 }
 
 uint32_t OctahedralShadowAtlas::updateLights(const Scene& scene) {
-  m_count = 0;
+  m_pointCount = 0;
+  m_spotCount = 0;
   for (const auto& l : scene.lights) {
-    if (l.type != LightType::Point || m_count >= kMaxLights) {
+    if (!l.castShadows) {
       continue;
     }
-    m_lights[m_count].pos = l.position;
-    m_lights[m_count].range = std::max(l.range, 0.5f);
-    ++m_count;
+    if (l.type == LightType::Point && m_pointCount < kMaxPointLights) {
+      m_points[m_pointCount].pos = l.position;
+      m_points[m_pointCount].range = std::max(l.range, 0.5f);
+      ++m_pointCount;
+    } else if (l.type == LightType::Spot && m_spotCount < kMaxSpotLights) {
+      m_spots[m_spotCount].pos = l.position;
+      m_spots[m_spotCount].dir = glm::normalize(l.direction);
+      m_spots[m_spotCount].range = std::max(l.range, 0.5f);
+      m_spots[m_spotCount].outerCos = (l.outerCone > 1.0f)
+                                          ? std::cos(glm::radians(l.outerCone))
+                                          : std::clamp(l.outerCone, -1.0f, 1.0f);
+      ++m_spotCount;
+    }
   }
-  return m_count;
+  return m_pointCount;
 }
 
 glm::vec2 OctahedralShadowAtlas::tileUvOffset(uint32_t slot) const {
@@ -43,11 +54,15 @@ float OctahedralShadowAtlas::tileUvScale() const {
   return float(m_tileSize) / float(m_atlasSize);
 }
 
-glm::mat4 OctahedralShadowAtlas::lightViewProj(uint32_t slot, int hemi) const {
-  const auto& L = m_lights[slot];
-  const glm::vec3 target = L.pos + (hemi == 0 ? glm::vec3(0, 0, 1) : glm::vec3(0, 0, -1));
-  const glm::mat4 view = glm::lookAtLH(L.pos, target, glm::vec3(0, 1, 0));
-  const glm::mat4 proj = glm::perspectiveLH_ZO(glm::radians(90.0f), 1.0f, 0.05f, L.range);
+glm::mat4 OctahedralShadowAtlas::spotViewProj(uint32_t spotIndex) const {
+  const auto& S = m_spots[spotIndex];
+  const glm::vec3 target = S.pos + S.dir;
+  const glm::vec3 up = (std::abs(S.dir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+  const glm::mat4 view = glm::lookAtLH(S.pos, target, up);
+  // Fit perspective to outer cone (+ margin)
+  const float outerDeg = glm::degrees(std::acos(std::clamp(S.outerCos, -1.f, 1.f)));
+  const float fov = glm::radians(std::min(outerDeg * 2.15f, 160.0f));
+  const glm::mat4 proj = glm::perspectiveLH_ZO(fov, 1.0f, 0.05f, S.range);
   return proj * view;
 }
 
@@ -55,7 +70,8 @@ glm::vec2 OctahedralShadowAtlas::encodeOcta(const glm::vec3& n) {
   const glm::vec3 v = n / (std::abs(n.x) + std::abs(n.y) + std::abs(n.z));
   glm::vec2 enc = {v.x, v.y};
   if (n.z < 0.0f) {
-    enc = (1.0f - glm::abs(glm::vec2(v.y, v.x))) * glm::vec2(v.x >= 0.0f ? 1.0f : -1.0f, v.y >= 0.0f ? 1.0f : -1.0f);
+    enc = (1.0f - glm::abs(glm::vec2(v.y, v.x))) *
+          glm::vec2(v.x >= 0.0f ? 1.0f : -1.0f, v.y >= 0.0f ? 1.0f : -1.0f);
   }
   return enc * 0.5f + 0.5f;
 }

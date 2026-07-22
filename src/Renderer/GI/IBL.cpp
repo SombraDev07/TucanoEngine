@@ -1,10 +1,14 @@
 #include "Renderer/GI/IBL.h"
+#include "AssetPipeline/ImageLoader.h"
+#include "Platform/FileSystem.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/constants.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
+#include <iostream>
 #include <vector>
 
 namespace tucano {
@@ -245,17 +249,20 @@ std::shared_ptr<Texture> createBRDFLUT(rhi::Device& device, uint32_t size) {
   return Texture::create(device, desc, data.data(), size * sizeof(float) * 2);
 }
 
-IBLTextures createProceduralIBL(rhi::Device& device, uint32_t envWidth, uint32_t envHeight) {
+IBLTextures createIBLFromLatLong(rhi::Device& device, const float* rgba, uint32_t envWidth, uint32_t envHeight) {
   IBLTextures out;
   out.brdfLUT = createBRDFLUT(device, 256);
 
-  const auto env = buildEnvLatLong(envWidth, envHeight);
+  std::vector<float> env(static_cast<size_t>(envWidth) * envHeight * 4);
+  if (rgba) {
+    std::memcpy(env.data(), rgba, env.size() * sizeof(float));
+  }
+
   const uint32_t irrW = 64;
   const uint32_t irrH = 32;
   const auto irr = convolveIrradiance(env, envWidth, envHeight, irrW, irrH);
   out.irradiance = uploadRGBA32F(device, irrW, irrH, irr, 1, "IBL_Irradiance");
 
-  // Prefiltered with mip chain: mip0 = envWidth, each mip halves
   uint32_t mipCount = 1;
   uint32_t mw = envWidth;
   uint32_t mh = envHeight;
@@ -286,8 +293,51 @@ IBLTextures createProceduralIBL(rhi::Device& device, uint32_t envWidth, uint32_t
     mw = std::max(1u, mw / 2);
     mh = std::max(1u, mh / 2);
   }
-
   return out;
+}
+
+IBLTextures createProceduralIBL(rhi::Device& device, uint32_t envWidth, uint32_t envHeight) {
+  const auto env = buildEnvLatLong(envWidth, envHeight);
+  return createIBLFromLatLong(device, env.data(), envWidth, envHeight);
+}
+
+IBLTextures createIBLFromHDRIFile(rhi::Device& device, const std::string& path, uint32_t maxWidth) {
+  try {
+    if (!fileExists(path)) {
+      std::cout << "[IBL] HDRI not found (" << path << ") — procedural fallback\n";
+      return createProceduralIBL(device);
+    }
+    ImageDataF img = loadImageRGBA32F(path);
+    uint32_t w = img.width;
+    uint32_t h = img.height;
+    std::vector<float> resized;
+    const float* src = img.pixels.data();
+    if (w > maxWidth) {
+      const uint32_t nw = maxWidth;
+      const uint32_t nh = std::max(1u, h * maxWidth / w);
+      resized.resize(static_cast<size_t>(nw) * nh * 4);
+      for (uint32_t y = 0; y < nh; ++y) {
+        for (uint32_t x = 0; x < nw; ++x) {
+          const uint32_t sx = x * w / nw;
+          const uint32_t sy = y * h / nh;
+          const size_t di = (static_cast<size_t>(y) * nw + x) * 4;
+          const size_t si = (static_cast<size_t>(sy) * w + sx) * 4;
+          resized[di + 0] = img.pixels[si + 0];
+          resized[di + 1] = img.pixels[si + 1];
+          resized[di + 2] = img.pixels[si + 2];
+          resized[di + 3] = 1.0f;
+        }
+      }
+      w = nw;
+      h = nh;
+      src = resized.data();
+    }
+    std::cout << "[IBL] Cooked HDRI " << path << " (" << w << "x" << h << ")\n";
+    return createIBLFromLatLong(device, src, w, h);
+  } catch (const std::exception& ex) {
+    std::cerr << "[IBL] HDRI cook failed: " << ex.what() << " — procedural fallback\n";
+    return createProceduralIBL(device);
+  }
 }
 
 } // namespace tucano

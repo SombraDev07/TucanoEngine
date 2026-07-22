@@ -28,10 +28,21 @@ struct MeshletBounds {
   glm::vec3 center{0};
   float radius = 0;
   glm::vec3 coneAxis{0, 1, 0};
-  float coneCutoff = -1.0f; // cos(angle); <0 disables cone cull
+  float coneCutoff = -1.0f;
   uint32_t indexOffset = 0;
   uint32_t indexCount = 0;
   uint32_t submeshIndex = 0;
+};
+
+struct MeshletGPU {
+  glm::vec3 center{0};
+  float radius = 0;
+  glm::vec3 coneAxis{0, 1, 0};
+  float coneCutoff = -1.0f;
+  uint32_t indexOffset = 0;
+  uint32_t indexCount = 0;
+  uint32_t materialIndex = 0;
+  uint32_t pad1 = 0;
 };
 
 class Mesh {
@@ -42,22 +53,35 @@ public:
   rhi::Buffer& vertexBuffer() { return *m_vb; }
   rhi::Buffer& indexBuffer() { return *m_ib; }
   rhi::Buffer* meshletIndexBuffer() { return m_meshletIb.get(); }
+  rhi::Buffer* meshletGpuBuffer() { return m_meshletGpu.get(); }
+  rhi::Buffer* meshPositions() { return m_posGpu.get(); }
+  rhi::Buffer* meshNormals() { return m_nrmGpu.get(); }
+  rhi::Buffer* meshUVs() { return m_uvGpu.get(); }
+  rhi::Buffer* meshPackedIndices() { return m_meshletIb.get(); } // uint structured view same buffer
   const std::vector<SubMesh>& submeshes() const { return m_submeshes; }
   const std::vector<MeshletBounds>& meshlets() const { return m_meshlets; }
+  const std::vector<glm::vec3>& cpuPositions() const { return m_cpuPositions; }
+  const std::vector<uint32_t>& packedIndices() const { return m_packedIndices; }
   uint32_t indexCount() const { return m_indexCount; }
   uint32_t meshletCount() const { return static_cast<uint32_t>(m_meshlets.size()); }
+  uint32_t vertexCount() const { return m_vertexCount; }
 
 private:
   std::shared_ptr<rhi::Buffer> m_vb;
   std::shared_ptr<rhi::Buffer> m_ib;
   std::shared_ptr<rhi::Buffer> m_meshletIb;
+  std::shared_ptr<rhi::Buffer> m_meshletGpu;
+  std::shared_ptr<rhi::Buffer> m_posGpu;
+  std::shared_ptr<rhi::Buffer> m_nrmGpu;
+  std::shared_ptr<rhi::Buffer> m_uvGpu;
   std::vector<SubMesh> m_submeshes;
   std::vector<MeshletBounds> m_meshlets;
   std::vector<uint32_t> m_packedIndices;
+  std::vector<glm::vec3> m_cpuPositions;
   uint32_t m_indexCount = 0;
+  uint32_t m_vertexCount = 0;
 };
 
-// CPU frustum + cone cull; returns surviving meshlet indices into mesh.meshlets().
 uint32_t cullMeshletsCPU(const Mesh& mesh, const glm::mat4& world, const glm::mat4& viewProj,
                          std::vector<uint32_t>& outVisible);
 

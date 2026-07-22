@@ -130,7 +130,12 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
   if (ImGui::Begin("Tucano Tools")) {
     if (ImGui::CollapsingHeader("Rain (Cry-parity)", ImGuiTreeNodeFlags_DefaultOpen)) {
       ImGui::Checkbox("Enable rain", &rain.enabled);
+      ImGui::Checkbox("SceneRain cones", &rain.enableSceneRain);
+      ImGui::Checkbox("World splashes", &rain.enableWorldSplashes);
       ImGui::SliderFloat("Amount", &rain.amount, 0.0f, 1.5f);
+      if (rain.enableSceneRain) {
+        ImGui::SliderFloat("SceneRain intensity", &rain.sceneRainIntensity, 0.0f, 2.0f);
+      }
       ImGui::SliderFloat("Streak intensity", &rain.streakIntensity, 0.0f, 2.0f);
       ImGui::SliderFloat("Streak speed", &rain.streakSpeed, 0.1f, 4.0f);
       ImGui::SliderFloat("Volume layers", &rain.streakLayers, 1.0f, 3.0f);
@@ -139,6 +144,7 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
       ImGui::SliderFloat("Drops lighting", &rain.rainDropsLighting, 0.0f, 2.0f);
       ImGui::SliderFloat("Wet darkening", &rain.diffuseDarkening, 0.0f, 1.0f);
       ImGui::SliderFloat("Puddles", &rain.puddlesAmount, 0.0f, 2.0f);
+      ImGui::SliderFloat("Puddle SSR mirror", &rain.puddlesSSR, 0.0f, 2.0f);
       ImGui::SliderFloat("Splashes", &rain.splashesAmount, 0.0f, 2.0f);
       ImGui::SliderFloat("Gloss boost", &rain.glossBoost, 0.0f, 2.0f);
       ImGui::SliderFloat("Mist", &rain.mistAmount, 0.0f, 1.5f);
@@ -169,11 +175,30 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
       ImGui::Checkbox("Shadows", &settings.enableShadows);
       ImGui::Checkbox("IBL", &settings.enableIBL);
       ImGui::Checkbox("Bloom", &settings.enableBloom);
-      ImGui::Checkbox("AO", &settings.enableAO);
+      ImGui::Checkbox("AO (GTAO)", &settings.enableAO);
+      ImGui::Checkbox("Auto Exposure", &settings.enableAutoExposure);
       ImGui::Checkbox("Contact shadows", &settings.enableContactShadows);
       ImGui::Checkbox("SSR", &settings.enableSSR);
+      ImGui::Checkbox("RT shadows (Ray Query)", &settings.enableRTShadows);
+      ImGui::Checkbox("RT reflections (Ray Query)", &settings.enableRTReflections);
       ImGui::Checkbox("Toroidal CSM", &settings.enableToroidalShadows);
       ImGui::Checkbox("Octahedral point shadows", &settings.enableOctahedralPointShadows);
+      ImGui::Checkbox("VSM (near cascade)", &settings.enableVSM);
+      ImGui::Checkbox("ESM soft shadows", &settings.enableESM);
+      ImGui::Checkbox("PCSS (CSM)", &settings.enablePCSS);
+      if (settings.enablePCSS) {
+        ImGui::SliderFloat("PCSS light size", &settings.pcssLightSize, 0.005f, 0.15f);
+      }
+      if (settings.enableESM) {
+        ImGui::SliderFloat("ESM exponent", &settings.esmExponent, 20.0f, 200.0f);
+      }
+      if (settings.enableAO) {
+        ImGui::SliderFloat("AO Intensity", &settings.aoIntensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("AO Radius", &settings.aoRadius, 0.2f, 2.5f);
+      }
+      if (settings.enableBloom) {
+        ImGui::SliderFloat("Bloom Strength", &settings.bloomStrength, 0.0f, 1.0f);
+      }
       int gi = static_cast<int>(settings.giTier);
       if (ImGui::SliderInt("GI tier", &gi, 0, 3)) {
         settings.giTier = static_cast<GITier>(gi);

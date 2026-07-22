@@ -34,4 +34,18 @@ ImageData loadImageRGBA8FromMemory(const uint8_t* data, size_t size) {
   return img;
 }
 
+ImageDataF loadImageRGBA32F(const std::string& path) {
+  int w = 0, h = 0, comp = 0;
+  float* data = stbi_loadf(path.c_str(), &w, &h, &comp, 4);
+  if (!data) {
+    throw std::runtime_error(std::string("stbi_loadf failed: ") + path + " (" + stbi_failure_reason() + ")");
+  }
+  ImageDataF img;
+  img.width = static_cast<uint32_t>(w);
+  img.height = static_cast<uint32_t>(h);
+  img.pixels.assign(data, data + static_cast<size_t>(w) * h * 4);
+  stbi_image_free(data);
+  return img;
+}
+
 } // namespace tucano

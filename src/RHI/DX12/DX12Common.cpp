@@ -36,6 +36,7 @@ D3D12_RESOURCE_STATES toD3D(ResourceState state) {
   case ResourceState::IndexBuffer: return D3D12_RESOURCE_STATE_INDEX_BUFFER;
   case ResourceState::ConstantBuffer: return D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER;
   case ResourceState::IndirectArgument: return D3D12_RESOURCE_STATE_INDIRECT_ARGUMENT;
+  case ResourceState::AccelerationStructure: return D3D12_RESOURCE_STATE_RAYTRACING_ACCELERATION_STRUCTURE;
   default: return D3D12_RESOURCE_STATE_COMMON;
   }
 }

@@ -88,13 +88,16 @@ public:
   void addPass(const std::string& name, SetupFn setup, ExecuteFn execute);
 
   void compile(rhi::Device& device);
-  void execute(rhi::CommandList& cmd);
+  // Runs enabled passes. `cmd` may be reassigned after an async checkpoint.
+  // Passes with asyncHint batch onto the async compute queue (real submit + fence wait).
+  void execute(rhi::CommandList*& cmd, rhi::Device& device);
   void exportGraphviz(const std::string& path) const;
 
   rhi::Texture* getTexture(RGHandle h) const;
   uint32_t passCount() const { return static_cast<uint32_t>(m_passes.size()); }
   uint64_t aliasedBytes() const { return m_aliasedBytes; }
   uint32_t barrierInsertions() const { return m_barrierInsertions; }
+  uint32_t aliasBarrierInsertions() const { return m_aliasBarrierInsertions; }
   bool stageDirty(RGCompileStage s) const {
     return m_stageDirty[static_cast<uint32_t>(s)];
   }
@@ -129,7 +132,9 @@ private:
     int color = 0; // async coloring
   };
 
+  RGHandle aliasRoot(RGHandle h) const;
   rhi::ResourceState stateForUsage(RGUsage usage) const;
+  void applyAliasBarriers(rhi::CommandList& cmd, const Pass& pass);
   void applyTransitions(rhi::CommandList& cmd, const Pass& pass);
   void runStage(RGCompileStage stage, rhi::Device& device);
   void packGreedyScanline();
@@ -140,8 +145,11 @@ private:
   std::vector<Resource> m_resources;
   std::vector<Pass> m_passes;
   std::unordered_map<std::string, RGHandle> m_imports;
+  // Physical texture* → last logical alias-root that used it (for aliasing barriers).
+  std::unordered_map<rhi::Texture*, RGHandle> m_physicalOwner;
   uint64_t m_aliasedBytes = 0;
   uint32_t m_barrierInsertions = 0;
+  uint32_t m_aliasBarrierInsertions = 0;
   bool m_compiled = false;
   RGPackerMode m_packer = RGPackerMode::GreedyScanline;
   bool m_stageDirty[static_cast<uint32_t>(RGCompileStage::Count)]{};

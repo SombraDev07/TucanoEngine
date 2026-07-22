@@ -9,8 +9,40 @@
 
 #include <algorithm>
 #include <iostream>
+#include <memory>
 
 using namespace tucano;
+
+namespace {
+
+void setupDefaultLights(Scene& scene) {
+  scene.lights.clear();
+  scene.addDirectional(glm::normalize(glm::vec3(-0.45f, -1.0f, 0.15f)), {1.0f, 0.96f, 0.9f}, 8.0f);
+  scene.addPoint({0.0f, 2.5f, 0.0f}, {1.0f, 0.85f, 0.6f}, 20.0f, 12.0f);
+  scene.addPoint({-4.0f, 1.5f, -1.0f}, {0.4f, 0.6f, 1.0f}, 12.0f, 8.0f);
+  scene.addPoint({4.0f, 1.5f, 1.0f}, {1.0f, 0.5f, 0.3f}, 12.0f, 8.0f);
+  scene.addPoint({0.0f, 4.0f, 3.0f}, {0.8f, 0.9f, 1.0f}, 10.0f, 10.0f);
+  scene.addSpot({-2.0f, 5.0f, 0.0f}, glm::normalize(glm::vec3(0.35f, -1.0f, 0.1f)), {1.0f, 0.92f, 0.75f}, 40.0f,
+                18.0f, 15.0f, 35.0f);
+}
+
+void setupDefaultRain(RainParams& rain) {
+  rain.enabled = true;
+  rain.amount = 0.95f;
+  rain.streakIntensity = 1.15f;
+  rain.streakSpeed = 1.85f;
+  rain.streakLayers = 3.0f;
+  rain.rainDropsAmount = 0.55f;
+  rain.rainDropsLighting = 1.2f;
+  rain.puddlesAmount = 1.45f;
+  rain.splashesAmount = 0.9f;
+  rain.diffuseDarkening = 0.75f;
+  rain.glossBoost = 1.2f;
+  rain.mistAmount = 0.35f;
+  rain.wind = {0.2f, 0.0f, 0.05f};
+}
+
+} // namespace
 
 int main(int argc, char** argv) {
   std::string scenePath = "Assets/Sponza/Sponza.gltf";
@@ -31,45 +63,90 @@ int main(int argc, char** argv) {
     Window window({1920, 1080, "Tucano — Sponza Viewer"});
     auto device = rhi::Device::create(true);
     auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
-    Renderer renderer(*device, window.width(), window.height());
+    auto renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
+    // Stable Sponza smoke path: deferred + rain; leave experimental passes off.
+    renderer->settings().enableRTReflections = false;
+    renderer->settings().enableRTShadows = false;
+    renderer->settings().enableVSM = false;
+    renderer->settings().enableAsyncCompute = false;
+    renderer->settings().enableOctahedralPointShadows = false;
+    renderer->settings().enableVisibilityBuffer = false;
+    renderer->settings().enableGpuMeshletCull = false;
+    renderer->settings().enableMeshShaders = false;
+    renderer->settings().enableMeshlets = false;
+    renderer->settings().enableHiZOcclusion = false;
+    renderer->settings().enableVoxelGI = false;
+    renderer->settings().enableSSR = false;
+    renderer->settings().enableContactShadows = false;
+    renderer->settings().enableToroidalShadows = false;
+    renderer->settings().giTier = GITier::Off;
     Input input(window.handle());
     DebugUI ui;
     ui.init(window, *device);
 
     Scene scene;
-    if (!loadGLTFScene(*device, scenePath, scene)) {
-      std::cerr << "Failed to load scene: " << scenePath << "\n";
-      std::cerr << "Place Khronos Sponza glTF under Assets/Sponza/\n";
-    }
-    scene.camera.setPerspective(glm::radians(60.0f), window.aspect(), 0.1f, 300.0f);
+    auto applyFabricFuzz = [&]() {
+      for (auto& obj : scene.objects) {
+        for (auto& mat : obj.materials) {
+          if (!mat) {
+            continue;
+          }
+          const std::string& n = mat->name;
+          const bool fabric = n.find("fabric") != std::string::npos || n.find("Fabric") != std::string::npos ||
+                              n.find("curtain") != std::string::npos || n.find("Curtain") != std::string::npos;
+          if (fabric) {
+            mat->fuzz = 0.55f;
+            mat->fuzzColor = {0.92f, 0.88f, 0.82f};
+            mat->detailScale = 8.0f;
+            mat->detailAlbedo = mat->albedo;
+            mat->detailNormal = mat->normal;
+          }
+        }
+      }
+    };
+
+    auto reloadScene = [&]() {
+      scene.objects.clear();
+      if (!loadGLTFScene(*device, scenePath, scene)) {
+        std::cerr << "Failed to load scene: " << scenePath << "\n";
+        std::cerr << "Place Khronos Sponza glTF under Assets/Sponza/\n";
+      }
+      applyFabricFuzz();
+      scene.camera.setPerspective(glm::radians(60.0f), window.aspect(), 0.1f, 300.0f);
+      setupDefaultLights(scene);
+    };
+
+    reloadScene();
     scene.camera.setPosition({0.0f, 2.0f, 0.0f});
     scene.camera.lookAt({1.0f, 2.0f, 0.0f});
-    scene.addDirectional(glm::normalize(glm::vec3(-0.45f, -1.0f, 0.15f)), {1.0f, 0.96f, 0.9f}, 8.0f);
-    scene.addPoint({0.0f, 2.5f, 0.0f}, {1.0f, 0.85f, 0.6f}, 20.0f, 12.0f);
-    scene.addPoint({-4.0f, 1.5f, -1.0f}, {0.4f, 0.6f, 1.0f}, 12.0f, 8.0f);
-    scene.addPoint({4.0f, 1.5f, 1.0f}, {1.0f, 0.5f, 0.3f}, 12.0f, 8.0f);
-    scene.addPoint({0.0f, 4.0f, 3.0f}, {0.8f, 0.9f, 1.0f}, 10.0f, 10.0f);
-    scene.addSpot({-2.0f, 5.0f, 0.0f}, glm::normalize(glm::vec3(0.35f, -1.0f, 0.1f)), {1.0f, 0.92f, 0.75f}, 40.0f,
-                  18.0f, 15.0f, 35.0f);
+    setupDefaultRain(renderer->rain());
 
-    // Start with a rich storm so Cry-quality rain is visible immediately.
-    renderer.rain().enabled = true;
-    renderer.rain().amount = 0.95f;
-    renderer.rain().streakIntensity = 1.15f;
-    renderer.rain().streakSpeed = 1.85f;
-    renderer.rain().streakLayers = 3.0f;
-    renderer.rain().rainDropsAmount = 0.55f;
-    renderer.rain().rainDropsLighting = 1.2f;
-    renderer.rain().puddlesAmount = 1.45f;
-    renderer.rain().splashesAmount = 0.9f;
-    renderer.rain().diffuseDarkening = 0.75f;
-    renderer.rain().glossBoost = 1.2f;
-    renderer.rain().mistAmount = 0.35f;
-    renderer.rain().wind = {0.2f, 0.0f, 0.05f};
+
+    device->setDeviceLostCallback([&]() {
+      std::cerr << "[SponzaViewer] Rebuilding swapchain / renderer / scene after device recovery...\n";
+      const Camera cam = scene.camera;
+      const RendererSettings settings = renderer->settings();
+      const RainParams rain = renderer->rain();
+
+      ui.shutdown();
+      renderer.reset();
+      swapChain.reset();
+
+      swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
+      renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
+      renderer->settings() = settings;
+      renderer->rain() = rain;
+      reloadScene();
+      scene.camera = cam;
+      ui.init(window, *device);
+    });
 
     window.setResizeCallback([&](uint32_t w, uint32_t h) {
+      if (!swapChain || !renderer) {
+        return;
+      }
       swapChain->resize(w, h);
-      renderer.resize(w, h);
+      renderer->resize(w, h);
       scene.camera.setPerspective(glm::radians(60.0f), window.aspect(), 0.1f, 300.0f);
     });
 
@@ -79,41 +156,48 @@ int main(int argc, char** argv) {
       window.pollEvents();
       input.beginFrame();
       ui.beginFrame();
-      ui.drawPerfHud(renderer.lastFrameMs(), renderer.drawCalls(), window.width(), window.height());
-      ui.drawWeatherAndLights(renderer.rain(), scene, renderer.settings());
+      ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
+      ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
 
       if (!ui.wantCaptureKeyboard()) {
+        if (input.keyPressed(GLFW_KEY_0)) {
+          if (device->supportsMeshShaders()) {
+            renderer->settings().enableMeshShaders = !renderer->settings().enableMeshShaders;
+          } else {
+            std::cout << "[SponzaViewer] Mesh shaders unavailable on this device\n";
+          }
+        }
         if (input.keyPressed(GLFW_KEY_F12) && screenshotPath.empty()) {
           screenshotPath = "sponza_capture.png";
           shotDone = false;
         }
         if (input.keyPressed(GLFW_KEY_1)) {
-          renderer.settings().enableShadows = !renderer.settings().enableShadows;
+          renderer->settings().enableShadows = !renderer->settings().enableShadows;
         }
         if (input.keyPressed(GLFW_KEY_2)) {
-          renderer.settings().enableIBL = !renderer.settings().enableIBL;
+          renderer->settings().enableIBL = !renderer->settings().enableIBL;
         }
         if (input.keyPressed(GLFW_KEY_3)) {
-          renderer.settings().enableBloom = !renderer.settings().enableBloom;
+          renderer->settings().enableBloom = !renderer->settings().enableBloom;
         }
         if (input.keyPressed(GLFW_KEY_4)) {
-          renderer.settings().enableAO = !renderer.settings().enableAO;
+          renderer->settings().enableAO = !renderer->settings().enableAO;
         }
         if (input.keyPressed(GLFW_KEY_5)) {
-          auto& t = renderer.settings().giTier;
+          auto& t = renderer->settings().giTier;
           t = static_cast<GITier>((static_cast<uint32_t>(t) + 1) % 4);
         }
         if (input.keyPressed(GLFW_KEY_6)) {
-          renderer.settings().enableVisibilityBuffer = !renderer.settings().enableVisibilityBuffer;
+          renderer->settings().enableVisibilityBuffer = !renderer->settings().enableVisibilityBuffer;
         }
         if (input.keyPressed(GLFW_KEY_7)) {
-          renderer.settings().enableMeshlets = !renderer.settings().enableMeshlets;
+          renderer->settings().enableMeshlets = !renderer->settings().enableMeshlets;
         }
         if (input.keyPressed(GLFW_KEY_8)) {
-          renderer.settings().enableSSR = !renderer.settings().enableSSR;
+          renderer->settings().enableSSR = !renderer->settings().enableSSR;
         }
         if (input.keyPressed(GLFW_KEY_9)) {
-          renderer.rain().enabled = !renderer.rain().enabled;
+          renderer->rain().enabled = !renderer->rain().enabled;
         }
       }
 
@@ -149,15 +233,15 @@ int main(int argc, char** argv) {
       }
 
       if (frame % 60 == 0) {
-        const float fps = 1000.0f / std::max(1.0f, renderer.lastFrameMs());
+        const float fps = 1000.0f / std::max(1.0f, renderer->lastFrameMs());
         window.setTitle("Tucano Sponza | " + std::to_string(int(fps)) + " FPS | rain " +
-                        (renderer.rain().enabled ? "on" : "off") + " | Tools panel | 9 rain | F12");
+                        (renderer->rain().enabled ? "on" : "off") + " | Tools panel | 9 rain | F12");
       }
       input.endFrame();
 
       auto* cmd = device->beginFrame();
       auto& bb = swapChain->backBuffer();
-      renderer.render(*cmd, bb, scene);
+      renderer->render(cmd, bb, scene);
       ui.endFrame(*cmd, bb);
 
       ScreenshotPending shot;

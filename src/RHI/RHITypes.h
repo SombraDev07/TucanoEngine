@@ -5,8 +5,11 @@
 
 namespace tucano::rhi {
 
-inline constexpr uint32_t kMaxFramesInFlight = 2;
-inline constexpr uint32_t kBackBufferCount = 3;
+inline constexpr uint32_t kMaxFramesInFlight = 4;
+inline constexpr uint32_t kFrameLatency = 2;
+// Flip model: frames-in-flight + 1 back buffer (Dagor-style).
+inline constexpr uint32_t kBackBufferCount = kMaxFramesInFlight + 1;
+inline constexpr uint32_t kDynamicBufferDiscardCount = kMaxFramesInFlight;
 
 enum class Format : uint32_t {
   Unknown = 0,
@@ -40,6 +43,7 @@ enum class ResourceState : uint32_t {
   IndexBuffer,
   ConstantBuffer,
   IndirectArgument,
+  AccelerationStructure,
 };
 
 enum class BufferUsage : uint32_t {
@@ -50,6 +54,9 @@ enum class BufferUsage : uint32_t {
   Upload = 1u << 4,
   Readback = 1u << 5,
   Indirect = 1u << 6,
+  Dynamic = 1u << 7, // multi-backing discard ring
+  UnorderedAccess = 1u << 8,
+  AccelerationStructure = 1u << 9,
 };
 
 inline BufferUsage operator|(BufferUsage a, BufferUsage b) {
@@ -89,6 +96,7 @@ enum class PrimitiveTopology : uint32_t { TriangleList, TriangleStrip, LineList 
 struct BufferDesc {
   uint64_t size = 0;
   BufferUsage usage = BufferUsage::Vertex;
+  uint32_t stride = 0; // structured / typed UAV element stride (0 = raw bytes)
   std::string debugName;
 };
 

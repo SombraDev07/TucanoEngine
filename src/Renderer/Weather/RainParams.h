@@ -13,6 +13,7 @@ struct RainParams {
   float puddlesAmount = 1.2f;
   float puddlesMask = 0.7f;
   float puddlesRipple = 1.5f;
+  float puddlesSSR = 1.0f; // mirror strength (SSR + local march)
   float splashesAmount = 1.0f;
   float rainDropsAmount = 0.45f;  // lens drops
   float rainDropsSpeed = 1.0f;
@@ -22,6 +23,9 @@ struct RainParams {
   float streakLayers = 3.0f;
   float mistAmount = 0.4f;
   float glossBoost = 0.9f; // smoothness increase when wet
+  bool enableSceneRain = true;       // volumetric cones
+  bool enableWorldSplashes = true;   // ground splash billboards
+  float sceneRainIntensity = 0.9f;
   glm::vec3 color{0.75f, 0.82f, 0.9f};
   glm::vec3 wind{0.15f, 0.0f, 0.05f};
   glm::vec3 worldPos{0.0f, 0.0f, 0.0f};

@@ -1,15 +1,15 @@
-// Contact shadows — short screen-space ray march for fine contact detail CSM misses.
-// Fullscreen pass; darkens HDR where contact occlusion is found.
+// Contact shadows — sun-aligned ray march in screen space
 
 cbuffer ContactCB : register(b1) {
   float4x4 invViewProj;
   float4 cameraPos;
   float4 screenSize; // w,h,1/w,1/h
   float4 params;     // rayLengthMeters, steps, thickness, intensity
+  float4 sunDir;     // xyz = light direction (towards scene), w unused
+  uint4 texIds;      // depth, hdr, _, _
 };
 
-Texture2D depthTex : register(t0);
-Texture2D hdrTex : register(t1);
+Texture2D bindlessHeap[] : register(t0, space0);
 SamplerState linearSamp : register(s0);
 
 struct VSOut {
@@ -32,6 +32,8 @@ float3 reconstructWorld(float2 uv, float depth) {
 }
 
 float4 PSMain(VSOut input) : SV_Target {
+  Texture2D depthTex = bindlessHeap[NonUniformResourceIndex(texIds.x)];
+  Texture2D hdrTex = bindlessHeap[NonUniformResourceIndex(texIds.y)];
   float depth = depthTex.Sample(linearSamp, input.uv).r;
   float3 hdr = hdrTex.Sample(linearSamp, input.uv).rgb;
   if (depth >= 0.9999) {
@@ -39,9 +41,12 @@ float4 PSMain(VSOut input) : SV_Target {
   }
 
   float3 worldPos = reconstructWorld(input.uv, depth);
-  float3 viewDir = normalize(cameraPos.xyz - worldPos);
-  // March toward light-ish up-bias for contact under objects (cheap approximation).
-  float3 rayDir = normalize(viewDir + float3(0, 0.35, 0));
+  // March towards the sun (opposite of light travel direction stored as -sunDir in lighting)
+  float3 rayDir = normalize(-sunDir.xyz);
+  if (dot(rayDir, rayDir) < 1e-4) {
+    float3 viewDir = normalize(cameraPos.xyz - worldPos);
+    rayDir = normalize(viewDir + float3(0, 0.35, 0));
+  }
 
   float rayLen = params.x;
   int steps = (int)params.y;
@@ -52,7 +57,7 @@ float4 PSMain(VSOut input) : SV_Target {
   for (int i = 1; i <= steps; ++i) {
     float t = (float(i) / float(steps)) * rayLen;
     float3 samplePos = worldPos + rayDir * t;
-    // Project sample back to UV via depth comparison in screen space.
+    // Project delta into UV (approximate screen-space step along sun)
     float2 uv = input.uv + float2(rayDir.x, -rayDir.z) * (t * screenSize.z * 40.0);
     if (any(uv < 0) || any(uv > 1))
       break;

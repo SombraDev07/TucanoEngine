@@ -10,7 +10,6 @@ MaterialGPU Material::toGPU() const {
 
 void Material::bindParameters(MaterialGPU& out) const {
   const Material* src = this;
-  // Inherit from master then apply local overrides.
   if (master) {
     out.baseColorFactor = master->baseColorFactor;
     out.emissiveFactor = glm::vec4(master->emissiveFactor, 0.0f);
@@ -20,6 +19,9 @@ void Material::bindParameters(MaterialGPU& out) const {
     out.reflectance = master->reflectance;
     out.clearcoat = master->clearcoat;
     out.clearcoatRoughness = master->clearcoatRoughness;
+    out.fuzz = master->fuzz;
+    out.detailScale = master->detailScale;
+    out.fuzzColor = master->fuzzColor;
     out.alphaCutoff = master->alphaCutoff;
   }
   out.baseColorFactor = src->baseColorFactor;
@@ -30,6 +32,9 @@ void Material::bindParameters(MaterialGPU& out) const {
   out.reflectance = src->reflectance;
   out.clearcoat = src->clearcoat;
   out.clearcoatRoughness = src->clearcoatRoughness;
+  out.fuzz = src->fuzz;
+  out.detailScale = src->detailScale;
+  out.fuzzColor = src->fuzzColor;
   out.alphaCutoff = src->alphaCutoff;
 }
 

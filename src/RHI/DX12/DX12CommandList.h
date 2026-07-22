@@ -9,14 +9,17 @@ class DX12Device;
 
 class DX12CommandList final : public CommandList {
 public:
-  DX12CommandList(DX12Device* device, ID3D12CommandAllocator* allocator);
+  DX12CommandList(DX12Device* device, ID3D12CommandAllocator* allocator,
+                  D3D12_COMMAND_LIST_TYPE type = D3D12_COMMAND_LIST_TYPE_DIRECT);
 
   void reset(ID3D12CommandAllocator* allocator);
   void close();
   ID3D12GraphicsCommandList* get() const { return m_cmd.Get(); }
+  D3D12_COMMAND_LIST_TYPE type() const { return m_type; }
   BarrierBatcher& barriers() { return m_barriers; }
 
   void transition(Texture& texture, ResourceState state) override;
+  void transition(Texture& texture, ResourceState state, uint32_t mip, uint32_t arraySlice) override;
   void transition(Buffer& buffer, ResourceState state) override;
   void setPipeline(PipelineState& pso) override;
   void setRootSignature(RootSignature& rs) override;
@@ -43,14 +46,24 @@ public:
   void draw(uint32_t vertexCount, uint32_t startVertex) override;
   void drawIndexed(uint32_t indexCount, uint32_t startIndex, int32_t baseVertex) override;
   void drawIndexedIndirect(Buffer& args, uint64_t offset) override;
+  void drawIndexedIndirectCount(Buffer& args, uint64_t argsOffset, Buffer& count, uint64_t countOffset,
+                                uint32_t maxCount) override;
   void dispatch(uint32_t x, uint32_t y, uint32_t z) override;
+  void dispatchMesh(uint32_t x, uint32_t y, uint32_t z) override;
   void flushBarriers() override;
+  void uavBarrier(Texture* resource) override;
+  void aliasingBarrier(Texture* before, Texture* after) override;
   void copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t width, uint32_t height, Format format) override;
   void copyTextureRegion(Texture& dst, uint32_t dstX, uint32_t dstY, Texture& src, uint32_t srcX, uint32_t srcY,
                          uint32_t width, uint32_t height) override;
 
+  void buildBottomLevelAS(Buffer& dest, Buffer& scratch, const BlasTriangleGeometry& geo) override;
+  void buildTopLevelAS(Buffer& dest, Buffer& scratch, Buffer& instanceDescs, uint32_t instanceCount) override;
+  void setComputeRootAccelerationStructure(uint32_t rootIndex, Buffer& asBuffer) override;
+
 private:
   DX12Device* m_device = nullptr;
+  D3D12_COMMAND_LIST_TYPE m_type = D3D12_COMMAND_LIST_TYPE_DIRECT;
   ComPtr<ID3D12GraphicsCommandList> m_cmd;
   BarrierBatcher m_barriers;
 };

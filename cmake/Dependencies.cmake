@@ -63,3 +63,50 @@ target_compile_definitions(imgui_lib PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
 # Tracy optional stub — keep header-only macros disabled by default
 add_library(tracy_stub INTERFACE)
 target_compile_definitions(tracy_stub INTERFACE TRACY_ENABLE=0)
+
+FetchContent_Declare(joltphysics
+  GIT_REPOSITORY https://github.com/jrouwe/JoltPhysics.git
+  GIT_TAG v5.6.0
+  GIT_SHALLOW TRUE)
+set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
+set(ENABLE_OBJECT_STREAM OFF CACHE BOOL "" FORCE)
+set(TARGET_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+set(TARGET_HELLO_WORLD OFF CACHE BOOL "" FORCE)
+set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
+set(TARGET_SAMPLES OFF CACHE BOOL "" FORCE)
+set(TARGET_VIEWER OFF CACHE BOOL "" FORCE)
+FetchContent_GetProperties(joltphysics)
+if(NOT joltphysics_POPULATED)
+  FetchContent_Populate(joltphysics)
+  add_subdirectory(${joltphysics_SOURCE_DIR}/Build ${joltphysics_BINARY_DIR})
+endif()
+if(TARGET Jolt)
+  set_target_properties(Jolt PROPERTIES FOLDER "third_party")
+  set(TUCANO_HAS_JOLT ON CACHE BOOL "Jolt Physics available" FORCE)
+else()
+  message(WARNING "Tucano: Jolt target not found — physics deferred")
+  set(TUCANO_HAS_JOLT OFF CACHE BOOL "Jolt Physics available" FORCE)
+endif()
+
+# --- 3thirdy: Nsight Aftermath (optional, NVIDIA) ---
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+find_package(NsightAftermath QUIET)
+if(NsightAftermath_FOUND)
+  message(STATUS "Tucano: Nsight Aftermath ENABLED (${NsightAftermath_INCLUDE_DIR})")
+  set(TUCANO_HAS_AFTERMATH ON CACHE BOOL "Nsight Aftermath linked" FORCE)
+  function(tucano_copy_aftermath_dll TARGET_NAME)
+    if(NsightAftermath_DLL)
+      add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${NsightAftermath_DLL}"
+          "$<TARGET_FILE_DIR:${TARGET_NAME}>"
+        COMMENT "Copy Aftermath DLL → ${TARGET_NAME}"
+        VERBATIM)
+    endif()
+  endfunction()
+else()
+  message(STATUS "Tucano: Nsight Aftermath not found — drop SDK in 3thirdy/nsight-aftermath (see README)")
+  set(TUCANO_HAS_AFTERMATH OFF CACHE BOOL "Nsight Aftermath linked" FORCE)
+  function(tucano_copy_aftermath_dll TARGET_NAME)
+  endfunction()
+endif()

@@ -50,6 +50,33 @@ float specularAO(float ao, float nDotV, float roughness) {
   return saturate(pow(nDotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao);
 }
 
+// Charlie distribution (Estevez/Kulla) — cloth / fuzz sheen
+float distributionCharlie(float roughness, float nDotH) {
+  float invA = 1.0 / max(roughness * roughness, 0.01);
+  float cos2h = nDotH * nDotH;
+  float sin2h = max(1.0 - cos2h, 0.0078125);
+  return (2.0 + invA) * pow(sin2h, invA * 0.5) / (2.0 * PI);
+}
+
+float3 evaluateFuzz(float3 fuzzColor, float fuzz, float3 n, float3 v, float3 l, float3 radiance) {
+  if (fuzz <= 1e-4) {
+    return 0;
+  }
+  float3 h = normalize(v + l);
+  float nDotL = max(dot(n, l), 0.0);
+  float nDotV = max(dot(n, v), 0.0);
+  float nDotH = max(dot(n, h), 0.0);
+  float vDotH = max(dot(v, h), 0.0);
+  // Soft cloth: Charlie D + velvet V (Ashikhmin-style approx)
+  float D = distributionCharlie(0.5, nDotH);
+  float V = 1.0 / max(4.0 * (nDotL + nDotV - nDotL * nDotV), 1e-4);
+  float3 F = fuzzColor * (1.0 - pow(1.0 - vDotH, 5.0));
+  // Wrap diffuse for fabric scatter
+  float wrap = saturate(dot(n, l) * 0.5 + 0.5);
+  float3 clothDiff = fuzzColor * INV_PI * wrap * wrap;
+  return fuzz * (clothDiff + D * V * F) * radiance * max(nDotL, wrap * 0.35);
+}
+
 float3 evaluateDirectBRDF(float3 albedo, float3 f0, float metallic, float roughness, float3 n, float3 v,
                           float3 l, float3 radiance) {
   float3 h = normalize(v + l);
@@ -74,6 +101,25 @@ float2 dirToLatLong(float3 d) {
   float u = atan2(d.z, d.x) * INV_PI * 0.5 + 0.5;
   float v = asin(clamp(d.y, -1.0, 1.0)) * INV_PI + 0.5;
   return float2(u, 1.0 - v);
+}
+
+// Octahedral encode/decode, Y-up world space (Snorm → [0,1] UV).
+float2 encodeOctaYUp(float3 n) {
+  n = normalize(n);
+  float2 p = n.xz / max(abs(n.x) + abs(n.y) + abs(n.z), 1e-6);
+  if (n.y < 0.0) {
+    p = (1.0 - abs(p.yx)) * float2(p.x >= 0.0 ? 1.0 : -1.0, p.y >= 0.0 ? 1.0 : -1.0);
+  }
+  return p * 0.5 + 0.5;
+}
+
+float3 decodeOctaYUp(float2 e) {
+  float2 f = e * 2.0 - 1.0;
+  float3 n = float3(f.x, 1.0 - abs(f.x) - abs(f.y), f.y);
+  float t = saturate(-n.y);
+  n.x += n.x >= 0.0 ? -t : t;
+  n.z += n.z >= 0.0 ? -t : t;
+  return normalize(n);
 }
 
 float3 acesTonemap(float3 x) {

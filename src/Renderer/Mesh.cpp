@@ -4,11 +4,31 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <stdexcept>
+#include <string>
+
+static_assert(sizeof(tucano::MeshletGPU) == 48, "MeshletGPU must match MeshletCull.hlsl");
 
 namespace tucano {
 
 std::shared_ptr<Mesh> Mesh::create(rhi::Device& device, const std::vector<Vertex>& vertices,
                                    const std::vector<uint32_t>& indices, std::vector<SubMesh> submeshes) {
+  for (uint32_t idx : indices) {
+    if (idx >= vertices.size()) {
+      throw std::runtime_error("Mesh::create: index out of range (idx=" + std::to_string(idx) +
+                               " verts=" + std::to_string(vertices.size()) + ")");
+    }
+  }
+  for (const auto& sub : submeshes) {
+    if (sub.indexCount == 0) {
+      continue;
+    }
+    if (uint64_t(sub.indexOffset) + sub.indexCount > indices.size()) {
+      throw std::runtime_error("Mesh::create: submesh range out of bounds");
+    }
+  }
+
   auto mesh = std::shared_ptr<Mesh>(new Mesh());
   rhi::BufferDesc vb{};
   vb.size = vertices.size() * sizeof(Vertex);
@@ -16,7 +36,6 @@ std::shared_ptr<Mesh> Mesh::create(rhi::Device& device, const std::vector<Vertex
   vb.debugName = "MeshVB";
   mesh->m_vb = device.createBuffer(vb, vertices.data());
 
-  // Build meshlets and a packed index buffer for fine-grained draws.
   std::vector<uint32_t> packedIndices;
   packedIndices.reserve(indices.size());
 
@@ -82,35 +101,72 @@ std::shared_ptr<Mesh> Mesh::create(rhi::Device& device, const std::vector<Vertex
       }
       mesh->m_meshlets.push_back(mb);
     }
-
-    // Keep original submesh offsets pointing into packed buffer start for classic path fallback —
-    // classic path still uses original `indices`; store original ranges unchanged.
   }
 
-  // Classic IB = original indices; meshlet draws use packed IB when enableMeshlets.
   rhi::BufferDesc ib{};
   ib.size = indices.size() * sizeof(uint32_t);
   ib.usage = rhi::BufferUsage::Index;
   ib.debugName = "MeshIB";
   mesh->m_ib = device.createBuffer(ib, indices.data());
 
-  if (!packedIndices.empty()) {
-    rhi::BufferDesc mib{};
-    mib.size = packedIndices.size() * sizeof(uint32_t);
-    mib.usage = rhi::BufferUsage::Index;
-    mib.debugName = "MeshletIB";
-    // Store meshlet IB by replacing... we need a second buffer. Add m_meshletIb to Mesh.
-  }
-
   mesh->m_submeshes = std::move(submeshes);
   mesh->m_indexCount = static_cast<uint32_t>(indices.size());
+  mesh->m_vertexCount = static_cast<uint32_t>(vertices.size());
+  mesh->m_cpuPositions.resize(vertices.size());
+  for (size_t i = 0; i < vertices.size(); ++i) {
+    mesh->m_cpuPositions[i] = vertices[i].position;
+  }
   mesh->m_packedIndices = std::move(packedIndices);
   if (!mesh->m_packedIndices.empty()) {
     rhi::BufferDesc mib{};
     mib.size = mesh->m_packedIndices.size() * sizeof(uint32_t);
-    mib.usage = rhi::BufferUsage::Index;
+    mib.usage = rhi::BufferUsage::Index | rhi::BufferUsage::Structured;
+    mib.stride = sizeof(uint32_t);
     mib.debugName = "MeshletIB";
     mesh->m_meshletIb = device.createBuffer(mib, mesh->m_packedIndices.data());
+  }
+  if (!mesh->m_meshlets.empty()) {
+    std::vector<MeshletGPU> gpu(mesh->m_meshlets.size());
+    for (size_t i = 0; i < mesh->m_meshlets.size(); ++i) {
+      const auto& src = mesh->m_meshlets[i];
+      gpu[i].center = src.center;
+      gpu[i].radius = src.radius;
+      gpu[i].coneAxis = src.coneAxis;
+      gpu[i].coneCutoff = src.coneCutoff;
+      gpu[i].indexOffset = src.indexOffset;
+      gpu[i].indexCount = src.indexCount;
+      const uint32_t si = src.submeshIndex;
+      gpu[i].materialIndex =
+          (si < mesh->m_submeshes.size()) ? mesh->m_submeshes[si].materialIndex : 0u;
+    }
+    rhi::BufferDesc gdb{};
+    gdb.size = gpu.size() * sizeof(MeshletGPU);
+    gdb.usage = rhi::BufferUsage::Structured;
+    gdb.stride = sizeof(MeshletGPU);
+    gdb.debugName = "MeshletGPU";
+    mesh->m_meshletGpu = device.createBuffer(gdb, gpu.data());
+  }
+  {
+    std::vector<glm::vec4> pos(vertices.size());
+    std::vector<glm::vec4> nrm(vertices.size());
+    std::vector<glm::vec2> uvs(vertices.size());
+    for (size_t i = 0; i < vertices.size(); ++i) {
+      pos[i] = glm::vec4(vertices[i].position, 0.0f);
+      nrm[i] = glm::vec4(vertices[i].normal, 0.0f);
+      uvs[i] = vertices[i].uv;
+    }
+    rhi::BufferDesc bd{};
+    bd.usage = rhi::BufferUsage::Structured;
+    bd.size = pos.size() * sizeof(glm::vec4);
+    bd.stride = sizeof(glm::vec4);
+    bd.debugName = "MeshPos";
+    mesh->m_posGpu = device.createBuffer(bd, pos.data());
+    bd.debugName = "MeshNrm";
+    mesh->m_nrmGpu = device.createBuffer(bd, nrm.data());
+    bd.size = uvs.size() * sizeof(glm::vec2);
+    bd.stride = sizeof(glm::vec2);
+    bd.debugName = "MeshUV";
+    mesh->m_uvGpu = device.createBuffer(bd, uvs.data());
   }
   return mesh;
 }
@@ -118,10 +174,10 @@ std::shared_ptr<Mesh> Mesh::create(rhi::Device& device, const std::vector<Vertex
 uint32_t cullMeshletsCPU(const Mesh& mesh, const glm::mat4& world, const glm::mat4& viewProj,
                          std::vector<uint32_t>& outVisible) {
   outVisible.clear();
-  // Conservative: keep meshlets whose world-space sphere intersects the view frustum AABB
-  // approximated by testing clip-space center within expanded NDC bounds.
   const auto& mls = mesh.meshlets();
   outVisible.reserve(mls.size());
+  const glm::mat4 invVP = glm::inverse(viewProj);
+  const glm::vec3 camW = glm::vec3(invVP * glm::vec4(0, 0, 0, 1));
   for (uint32_t i = 0; i < mls.size(); ++i) {
     const auto& m = mls[i];
     const glm::vec4 cw = world * glm::vec4(m.center, 1.0f);
@@ -141,6 +197,13 @@ uint32_t cullMeshletsCPU(const Mesh& mesh, const glm::mat4& world, const glm::ma
     if (cx < -1.0f - pad || cx > 1.0f + pad || cy < -1.0f - pad || cy > 1.0f + pad || cz < -pad ||
         cz > 1.0f + pad) {
       continue;
+    }
+    if (m.coneCutoff >= 0.0f) {
+      const glm::vec3 axisWorld = glm::normalize(glm::mat3(world) * m.coneAxis);
+      const glm::vec3 dir = glm::normalize(glm::vec3(cw) - camW);
+      if (-glm::dot(dir, axisWorld) > m.coneCutoff) {
+        continue;
+      }
     }
     outVisible.push_back(i);
   }

@@ -29,10 +29,12 @@ cbuffer ObjectCB : register(b2) {
   float4 materialParams;   // metallic, roughness, ao, alphaCutoff
   float4 emissiveFactor;   // rgb, dielectricF0
   uint4 textureIndices;    // bindless: albedo, normal, orm, emissive
-  float4 materialExt;      // clearcoat, clearcoatRoughness, 0, 0
+  float4 materialExt;      // clearcoat, clearcoatRoughness, fuzz, detailScale
+  uint4 textureIndices2;   // detailAlbedo, detailNormal, _, _
+  float4 fuzzColor;        // rgb, _
 };
 
-// Unbounded heap — root table bound once to bindless base (index 0).
+// Unbounded heap — root table bound once to bindless base (index 0 = null SRV).
 Texture2D bindlessHeap[] : register(t0, space0);
 SamplerState samp : register(s0);
 
@@ -43,6 +45,15 @@ struct GBufferOut {
   float4 emissive : SV_Target3;
   float linearDepth : SV_Target4;
 };
+
+uint safeIdx(uint i) {
+  return (i < 8192u) ? i : 0u;
+}
+
+float4 sampleBindless(uint idx, float2 uv) {
+  // SampleLevel avoids anisotropic footprint blow-ups on dense meshes / extreme UVs.
+  return bindlessHeap[NonUniformResourceIndex(safeIdx(idx))].SampleLevel(samp, uv, 0);
+}
 
 VSOutput VSMain(VSInput input) {
   VSOutput o;
@@ -60,24 +71,35 @@ VSOutput VSMain(VSInput input) {
 }
 
 GBufferOut PSMain(VSOutput input) {
-  Texture2D albedoMap = bindlessHeap[NonUniformResourceIndex(textureIndices.x)];
-  Texture2D normalMap = bindlessHeap[NonUniformResourceIndex(textureIndices.y)];
-  Texture2D ormMap = bindlessHeap[NonUniformResourceIndex(textureIndices.z)];
-  Texture2D emissiveMap = bindlessHeap[NonUniformResourceIndex(textureIndices.w)];
-
-  float4 albedo = albedoMap.Sample(samp, input.uv) * baseColorFactor * input.color;
+  float4 albedo = sampleBindless(textureIndices.x, input.uv) * baseColorFactor * input.color;
   if (materialParams.w > 0.0 && albedo.a < materialParams.w) {
     discard;
   }
 
+  float detailScale = materialExt.w;
+  if (detailScale > 1e-4) {
+    float2 duv = input.uv * detailScale;
+    float4 detailA = sampleBindless(textureIndices2.x, duv);
+    albedo.rgb = lerp(albedo.rgb, albedo.rgb * detailA.rgb * 2.0, saturate(detailScale * 0.05));
+  }
+
   float3 n = normalize(input.normal);
-  float3 nm = normalMap.Sample(samp, input.uv).xyz * 2.0 - 1.0;
+  float3 nm = sampleBindless(textureIndices.y, input.uv).xyz * 2.0 - 1.0;
   if (length(nm - float3(0, 0, 1)) > 0.01) {
     float3x3 tbn = float3x3(normalize(input.tangent), normalize(input.bitangent), n);
     n = normalize(mul(nm, tbn));
   }
+  if (detailScale > 1e-4) {
+    float2 duv = input.uv * detailScale;
+    float3 dn = sampleBindless(textureIndices2.y, duv).xyz * 2.0 - 1.0;
+    if (length(dn - float3(0, 0, 1)) > 0.01) {
+      float3x3 tbn = float3x3(normalize(input.tangent), normalize(input.bitangent), n);
+      float3 nd = normalize(mul(dn, tbn));
+      n = normalize(lerp(n, nd, 0.35));
+    }
+  }
 
-  float3 orm = ormMap.Sample(samp, input.uv).rgb;
+  float3 orm = sampleBindless(textureIndices.z, input.uv).rgb;
   float ao = saturate(orm.r * materialParams.z);
   float roughness = saturate(max(orm.g * materialParams.y, 0.04));
   float metallic = saturate(orm.b * materialParams.x);
@@ -85,12 +107,14 @@ GBufferOut PSMain(VSOutput input) {
   if (dielectricF0 < 1e-4) {
     dielectricF0 = 0.04;
   }
-  float3 emissive = emissiveMap.Sample(samp, input.uv).rgb * emissiveFactor.rgb;
+  float3 emissive = sampleBindless(textureIndices.w, input.uv).rgb * emissiveFactor.rgb;
   float clearcoat = materialExt.x;
+  float clearcoatRoughness = saturate(max(materialExt.y, 0.05));
+  float fuzz = saturate(materialExt.z);
 
   GBufferOut o;
-  o.albedo = float4(max(albedo.rgb, float3(0.02, 0.02, 0.02)), 1.0);
-  o.normal = float4(n * 0.5 + 0.5, 1.0);
+  o.albedo = float4(max(albedo.rgb, float3(0.02, 0.02, 0.02)), clearcoatRoughness);
+  o.normal = float4(n * 0.5 + 0.5, fuzz);
   o.orm = float4(ao, roughness, metallic, dielectricF0);
   o.emissive = float4(emissive, clearcoat);
   o.linearDepth = input.position.z;

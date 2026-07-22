@@ -1,5 +1,6 @@
 #include "RHI/DX12/PipelineCache.h"
 
+#include <chrono>
 #include <fstream>
 
 namespace tucano::rhi {
@@ -85,6 +86,33 @@ std::vector<uint8_t> PipelineCache::find(uint64_t key) const {
 void PipelineCache::store(uint64_t key, const void* data, size_t size) {
   std::lock_guard lock(m_mutex);
   m_entries[key] = std::vector<uint8_t>(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+}
+
+void PipelineCache::storeAsync(uint64_t key, std::vector<uint8_t> blob) {
+  std::lock_guard lock(m_asyncMutex);
+  AsyncJob job;
+  job.key = key;
+  job.future = std::async(std::launch::async, [b = std::move(blob)]() mutable { return std::move(b); });
+  m_async.push_back(std::move(job));
+}
+
+void PipelineCache::pumpAsync() {
+  std::lock_guard lock(m_asyncMutex);
+  std::vector<AsyncJob> keep;
+  for (auto& job : m_async) {
+    if (job.future.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+      auto blob = job.future.get();
+      store(job.key, blob.data(), blob.size());
+    } else {
+      keep.push_back(std::move(job));
+    }
+  }
+  m_async = std::move(keep);
+}
+
+uint32_t PipelineCache::asyncPending() const {
+  std::lock_guard lock(m_asyncMutex);
+  return static_cast<uint32_t>(m_async.size());
 }
 
 } // namespace tucano::rhi

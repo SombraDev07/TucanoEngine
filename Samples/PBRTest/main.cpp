@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
 
       auto* cmd = device->beginFrame();
       auto& bb = swapChain->backBuffer();
-      renderer.render(*cmd, bb, scene);
+      renderer.render(cmd, bb, scene);
       if (frame == 0) {
         std::cout << "drawCalls=" << renderer.drawCalls() << " frameMs=" << renderer.lastFrameMs() << "\n"
                   << std::flush;

@@ -3,6 +3,9 @@
 namespace tucano::rhi {
 
 void DX12UploadAllocator::init(ID3D12Device* device, uint64_t size) {
+  // Skip Unmap — during TDR recovery the old device is already removed.
+  m_mapped = nullptr;
+  m_buffer.Reset();
   m_size = size;
   m_offset = 0;
   D3D12_HEAP_PROPERTIES heapProps{};

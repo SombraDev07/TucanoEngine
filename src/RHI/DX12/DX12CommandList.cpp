@@ -1,11 +1,14 @@
 #include "RHI/DX12/DX12CommandList.h"
 #include "RHI/DX12/DX12Device.h"
 
+#include <algorithm>
+
 namespace tucano::rhi {
 
-DX12CommandList::DX12CommandList(DX12Device* device, ID3D12CommandAllocator* allocator) : m_device(device) {
-  throwIfFailed(device->device()->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator, nullptr,
-                                                   IID_PPV_ARGS(&m_cmd)),
+DX12CommandList::DX12CommandList(DX12Device* device, ID3D12CommandAllocator* allocator,
+                                 D3D12_COMMAND_LIST_TYPE type)
+    : m_device(device), m_type(type) {
+  throwIfFailed(device->device()->CreateCommandList(0, type, allocator, nullptr, IID_PPV_ARGS(&m_cmd)),
                 "CreateCommandList");
   m_cmd->Close();
 }
@@ -18,26 +21,79 @@ void DX12CommandList::reset(ID3D12CommandAllocator* allocator) {
 
 void DX12CommandList::flushBarriers() { m_barriers.flush(m_cmd.Get()); }
 
+void DX12CommandList::uavBarrier(Texture* resource) {
+  if (!resource) {
+    return;
+  }
+  m_barriers.uav(static_cast<DX12Texture*>(resource)->get());
+}
+
+void DX12CommandList::aliasingBarrier(Texture* before, Texture* after) {
+  ID3D12Resource* a = before ? static_cast<DX12Texture*>(before)->get() : nullptr;
+  ID3D12Resource* b = after ? static_cast<DX12Texture*>(after)->get() : nullptr;
+  m_barriers.aliasing(a, b);
+}
+
 void DX12CommandList::close() {
   flushBarriers();
+  m_barriers.decayTracked(m_cmd.Get());
   throwIfFailed(m_cmd->Close(), "CommandList Close");
 }
 
 void DX12CommandList::transition(Texture& texture, ResourceState state) {
   auto& tex = static_cast<DX12Texture&>(texture);
-  if (tex.state == state) {
+  tex.ensureSubresourceTracking();
+  // Whole-resource: transition all subresources that differ.
+  const uint32_t n = tex.subresourceCount();
+  const D3D12_RESOURCE_STATES afterDx = toD3D(state);
+  bool any = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    if (tex.subresourceStates[i] == state) {
+      continue;
+    }
+    any = true;
+    m_barriers.trackCpuState(tex.get(), &tex.state);
+    m_barriers.transition(tex.get(), toD3D(tex.subresourceStates[i]), afterDx, i);
+    tex.subresourceStates[i] = state;
+  }
+  if (any) {
+    tex.state = state;
+  } else if (tex.state != state) {
+    // Fallback ALL_SUBRESOURCES if tracking empty mismatch
+    m_barriers.trackCpuState(tex.get(), &tex.state);
+    m_barriers.transition(tex.get(), toD3D(tex.state), afterDx);
+    tex.state = state;
+  }
+}
+
+void DX12CommandList::transition(Texture& texture, ResourceState state, uint32_t mip, uint32_t arraySlice) {
+  auto& tex = static_cast<DX12Texture&>(texture);
+  tex.ensureSubresourceTracking();
+  const uint32_t mips = std::max(1u, tex.desc.mipLevels);
+  const uint32_t idx = DX12Texture::subresourceIndex(mip, arraySlice, mips);
+  if (idx >= tex.subresourceStates.size()) {
+    transition(texture, state);
     return;
   }
-  m_barriers.transition(tex.get(), toD3D(tex.state), toD3D(state));
-  tex.state = state;
+  if (tex.subresourceStates[idx] == state) {
+    return;
+  }
+  m_barriers.trackCpuState(tex.get(), &tex.state);
+  m_barriers.transition(tex.get(), toD3D(tex.subresourceStates[idx]), toD3D(state), idx);
+  tex.subresourceStates[idx] = state;
 }
 
 void DX12CommandList::transition(Buffer& buffer, ResourceState state) {
   auto& buf = static_cast<DX12Buffer&>(buffer);
-  if (buf.state == state || any(buf.usage, BufferUsage::Upload)) {
-    buf.state = state;
+  // Upload-heap buffers stay GENERIC_READ for their lifetime; never barrier them.
+  if (buf.mappedPtr != nullptr || any(buf.usage, BufferUsage::Upload)) {
+    (void)state;
     return;
   }
+  if (buf.state == state) {
+    return;
+  }
+  m_barriers.trackCpuState(buf.get(), &buf.state);
   m_barriers.transition(buf.get(), toD3D(buf.state), toD3D(state));
   buf.state = state;
 }
@@ -192,9 +248,27 @@ void DX12CommandList::drawIndexedIndirect(Buffer& args, uint64_t offset) {
   m_cmd->ExecuteIndirect(m_device->drawIndexedIndirectSig(), 1, buf.get(), offset, nullptr, 0);
 }
 
+void DX12CommandList::drawIndexedIndirectCount(Buffer& args, uint64_t argsOffset, Buffer& count,
+                                               uint64_t countOffset, uint32_t maxCount) {
+  m_barriers.flush(m_cmd.Get());
+  auto& buf = static_cast<DX12Buffer&>(args);
+  auto& cnt = static_cast<DX12Buffer&>(count);
+  m_cmd->ExecuteIndirect(m_device->drawIndexedIndirectSig(), maxCount, buf.get(), argsOffset, cnt.get(),
+                         countOffset);
+}
+
 void DX12CommandList::dispatch(uint32_t x, uint32_t y, uint32_t z) {
   m_barriers.flush(m_cmd.Get());
   m_cmd->Dispatch(x, y, z);
+}
+
+void DX12CommandList::dispatchMesh(uint32_t x, uint32_t y, uint32_t z) {
+  m_barriers.flush(m_cmd.Get());
+  ComPtr<ID3D12GraphicsCommandList6> list6;
+  if (FAILED(m_cmd.As(&list6)) || !list6) {
+    return;
+  }
+  list6->DispatchMesh(x, y, z);
 }
 
 void DX12CommandList::copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t width, uint32_t height, Format format) {
@@ -240,6 +314,86 @@ void DX12CommandList::copyTextureRegion(Texture& dst, uint32_t dstX, uint32_t ds
   box.back = 1;
   m_barriers.flush(m_cmd.Get());
   m_cmd->CopyTextureRegion(&dstLoc, dstX, dstY, 0, &srcLoc, &box);
+}
+
+void DX12CommandList::buildBottomLevelAS(Buffer& dest, Buffer& scratch, const BlasTriangleGeometry& geo) {
+  if (!m_device->device5() || !geo.vertexBuffer || !geo.indexBuffer || geo.indexCount < 3) {
+    return;
+  }
+  auto& destBuf = static_cast<DX12Buffer&>(dest);
+  auto& scratchBuf = static_cast<DX12Buffer&>(scratch);
+  auto& vb = static_cast<DX12Buffer&>(*geo.vertexBuffer);
+  auto& ib = static_cast<DX12Buffer&>(*geo.indexBuffer);
+
+  D3D12_RAYTRACING_GEOMETRY_DESC geom{};
+  geom.Type = D3D12_RAYTRACING_GEOMETRY_TYPE_TRIANGLES;
+  geom.Flags = D3D12_RAYTRACING_GEOMETRY_FLAG_OPAQUE;
+  geom.Triangles.Transform3x4 = 0;
+  geom.Triangles.IndexFormat = DXGI_FORMAT_R32_UINT;
+  geom.Triangles.VertexFormat = DXGI_FORMAT_R32G32B32_FLOAT;
+  geom.Triangles.IndexCount = geo.indexCount;
+  geom.Triangles.VertexCount = geo.vertexCount;
+  geom.Triangles.IndexBuffer = ib.gpuAddress;
+  geom.Triangles.VertexBuffer.StartAddress = vb.gpuAddress;
+  geom.Triangles.VertexBuffer.StrideInBytes = geo.vertexStride ? geo.vertexStride : 16u;
+
+  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
+  build.DestAccelerationStructureData = destBuf.gpuAddress;
+  build.ScratchAccelerationStructureData = scratchBuf.gpuAddress;
+  build.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL;
+  build.Inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE;
+  build.Inputs.NumDescs = 1;
+  build.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+  build.Inputs.pGeometryDescs = &geom;
+
+  m_barriers.flush(m_cmd.Get());
+  ComPtr<ID3D12GraphicsCommandList4> list4;
+  if (FAILED(m_cmd.As(&list4))) {
+    return;
+  }
+  list4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+  D3D12_RESOURCE_BARRIER uav{};
+  uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uav.UAV.pResource = destBuf.get();
+  m_cmd->ResourceBarrier(1, &uav);
+  dest.state = ResourceState::AccelerationStructure;
+}
+
+void DX12CommandList::buildTopLevelAS(Buffer& dest, Buffer& scratch, Buffer& instanceDescs,
+                                      uint32_t instanceCount) {
+  if (!m_device->device5() || instanceCount == 0) {
+    return;
+  }
+  auto& destBuf = static_cast<DX12Buffer&>(dest);
+  auto& scratchBuf = static_cast<DX12Buffer&>(scratch);
+  auto& instBuf = static_cast<DX12Buffer&>(instanceDescs);
+
+  D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_DESC build{};
+  build.DestAccelerationStructureData = destBuf.gpuAddress;
+  build.ScratchAccelerationStructureData = scratchBuf.gpuAddress;
+  build.Inputs.Type = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL;
+  build.Inputs.Flags = D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_PREFER_FAST_TRACE |
+                       D3D12_RAYTRACING_ACCELERATION_STRUCTURE_BUILD_FLAG_ALLOW_UPDATE;
+  build.Inputs.NumDescs = instanceCount;
+  build.Inputs.DescsLayout = D3D12_ELEMENTS_LAYOUT_ARRAY;
+  build.Inputs.InstanceDescs = instBuf.gpuAddress;
+
+  m_barriers.flush(m_cmd.Get());
+  ComPtr<ID3D12GraphicsCommandList4> list4;
+  if (FAILED(m_cmd.As(&list4))) {
+    return;
+  }
+  list4->BuildRaytracingAccelerationStructure(&build, 0, nullptr);
+  D3D12_RESOURCE_BARRIER uav{};
+  uav.Type = D3D12_RESOURCE_BARRIER_TYPE_UAV;
+  uav.UAV.pResource = destBuf.get();
+  m_cmd->ResourceBarrier(1, &uav);
+  dest.state = ResourceState::AccelerationStructure;
+}
+
+void DX12CommandList::setComputeRootAccelerationStructure(uint32_t rootIndex, Buffer& asBuffer) {
+  auto& buf = static_cast<DX12Buffer&>(asBuffer);
+  m_cmd->SetComputeRootShaderResourceView(rootIndex, buf.gpuAddress);
 }
 
 } // namespace tucano::rhi
