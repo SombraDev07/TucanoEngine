@@ -1,0 +1,2 @@
+add_executable(TucanoWorldTest main.cpp)
+target_link_libraries(TucanoWorldTest PRIVATE TucanoRuntime)

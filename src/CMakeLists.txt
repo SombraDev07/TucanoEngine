@@ -60,6 +60,15 @@ add_library(TucanoRuntime STATIC
   AssetPipeline/TinyExrImpl.cpp
   Renderer/Sky/Celestial.cpp
   Core/Json.cpp
+  Audio/Audio.cpp
+  Core/TaskScheduler.cpp
+  World/WorldGrid.cpp
+  World/StreamingBudget.cpp
+  World/StreamingScheduler.cpp
+  World/CellPersistence.cpp
+  World/MovementPredictor.cpp
+  World/FrustumCull.cpp
+  World/GpuCellCuller.cpp
   ECS/ComponentTypes.cpp
   ECS/Components.cpp
   ECS/EntityManager.cpp
@@ -82,6 +91,7 @@ target_link_libraries(TucanoRuntime
     stb_headers
     cgltf_headers
     tinyexr_headers
+    miniaudio_headers
     meshoptimizer
     imgui_lib
     tracy_stub

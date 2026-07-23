@@ -208,6 +208,16 @@ public sealed class RuntimeHost : IDisposable
     public float MoonIllumination =>
         _handle == IntPtr.Zero ? 0f : TucanoApi.tucano_sky_moon_illumination(_handle);
 
+    // ── World Machine (WM-4) ──────────────────────────
+    /// Runs the GPU cell-cull parity self-test. Returns the number of CPU/GPU disagreements
+    /// (0 = the compute shader matches the reference); negative values are harness errors.
+    public int WorldCullSelfTest() =>
+        _handle == IntPtr.Zero ? -1 : TucanoApi.tucano_world_cull_selftest(_handle);
+
+    /// Visible-cell count the reference finds in the self-test scene.
+    public int WorldCullVisibleCount() =>
+        _handle == IntPtr.Zero ? -1 : TucanoApi.tucano_world_cull_selftest_visible_count(_handle);
+
     public bool Screenshot(string pngPath) =>
         _handle != IntPtr.Zero && TucanoApi.tucano_runtime_screenshot(_handle, pngPath);
 
@@ -554,10 +564,105 @@ public sealed class RuntimeHost : IDisposable
     public uint FailedColliderCount =>
         _handle != IntPtr.Zero ? TucanoApi.tucano_play_failed_collider_count(_handle) : 0;
 
+    // ── Audio (Phase I-2) ──
+
+    public bool AudioInit() =>
+        _handle != IntPtr.Zero && TucanoApi.tucano_audio_init(_handle);
+
+    public void AudioShutdown()
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_shutdown(_handle);
+    }
+
+    public bool AudioInitialized =>
+        _handle != IntPtr.Zero && TucanoApi.tucano_audio_is_initialized(_handle);
+
+    public float MasterVolume
+    {
+        get => _handle != IntPtr.Zero ? TucanoApi.tucano_audio_get_master_volume(_handle) : 0f;
+        set { if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_set_master_volume(_handle, value); }
+    }
+
+    public bool AudioPaused
+    {
+        get => _handle != IntPtr.Zero && TucanoApi.tucano_audio_is_paused(_handle);
+        set { if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_set_paused(_handle, value); }
+    }
+
+    public int AudioLoadClip(string path) =>
+        _handle != IntPtr.Zero ? TucanoApi.tucano_audio_load_clip(_handle, path) : -1;
+
+    public void AudioUnloadClip(int clipId)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_unload_clip(_handle, clipId);
+    }
+
+    public float AudioClipDuration(int clipId) =>
+        _handle != IntPtr.Zero ? TucanoApi.tucano_audio_clip_duration(_handle, clipId) : 0f;
+
+    public int AudioCreateSource() =>
+        _handle != IntPtr.Zero ? TucanoApi.tucano_audio_create_source(_handle) : -1;
+
+    public void AudioDestroySource(int sourceId)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_destroy_source(_handle, sourceId);
+    }
+
+    public void AudioSourcePlay(int sourceId, int clipId, float volume, bool loop)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_source_play(_handle, sourceId, clipId, volume, loop);
+    }
+
+    public void AudioSourceStop(int sourceId)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_source_stop(_handle, sourceId);
+    }
+
+    public void AudioSourcePause(int sourceId)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_source_pause(_handle, sourceId);
+    }
+
+    public void AudioSourceResume(int sourceId)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_source_resume(_handle, sourceId);
+    }
+
+    public bool AudioSourceIsPlaying(int sourceId) =>
+        _handle != IntPtr.Zero && TucanoApi.tucano_audio_source_is_playing(_handle, sourceId);
+
+    public void AudioSourceSetPosition(int sourceId, float x, float y, float z)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_source_set_position(_handle, sourceId, new TucanoVec3(x, y, z));
+    }
+
+    public void AudioSourceSetVolume(int sourceId, float volume)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_source_set_volume(_handle, sourceId, volume);
+    }
+
+    public void AudioSourceSetLooping(int sourceId, bool loop)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_source_set_looping(_handle, sourceId, loop);
+    }
+
+    public void AudioListenerSetPosition(float x, float y, float z)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_listener_set_position(_handle, new TucanoVec3(x, y, z));
+    }
+
+    public void AudioListenerSetOrientation(float fx, float fy, float fz, float ux, float uy, float uz)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_audio_listener_set_orientation(_handle,
+            new TucanoVec3(fx, fy, fz), new TucanoVec3(ux, uy, uz));
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
+
+        AudioShutdown();
 
         if (_scene != IntPtr.Zero)
         {

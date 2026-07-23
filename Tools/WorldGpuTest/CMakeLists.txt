@@ -1,0 +1,2 @@
+add_executable(TucanoWorldGpuTest main.cpp)
+target_link_libraries(TucanoWorldGpuTest PRIVATE TucanoRuntime)

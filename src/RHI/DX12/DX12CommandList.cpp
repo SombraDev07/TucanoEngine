@@ -300,6 +300,18 @@ void DX12CommandList::copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t wi
   m_cmd->CopyTextureRegion(&dstLoc, 0, 0, 0, &srcLoc, nullptr);
 }
 
+void DX12CommandList::copyBuffer(Buffer& dst, uint64_t dstOffset, Buffer& src, uint64_t srcOffset,
+                                 uint64_t size) {
+  auto& d = static_cast<DX12Buffer&>(dst);
+  auto& s = static_cast<DX12Buffer&>(src);
+  // The source must be a copy source and the destination a copy dest. transition() records the
+  // barrier against each buffer's tracked state; the batcher flushes them before the copy.
+  transition(src, ResourceState::CopySrc);
+  transition(dst, ResourceState::CopyDst);
+  m_barriers.flush(m_cmd.Get());
+  m_cmd->CopyBufferRegion(d.get(), dstOffset, s.get(), srcOffset, size);
+}
+
 void DX12CommandList::copyBufferToTexture(Buffer& src, Texture& dst, uint32_t width, uint32_t height,
                                           uint32_t depth, Format format) {
   auto& buf = static_cast<DX12Buffer&>(src);

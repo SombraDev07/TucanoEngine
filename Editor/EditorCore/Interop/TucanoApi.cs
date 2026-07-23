@@ -362,6 +362,12 @@ public static class TucanoApi
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern float tucano_sky_moon_illumination(IntPtr rt);
 
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_world_cull_selftest(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_world_cull_selftest_visible_count(IntPtr rt);
+
     // ── Skybox ──
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -526,4 +532,76 @@ public static class TucanoApi
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]
     public static extern bool tucano_settings_get_enable_atmosphere(IntPtr rt);
+
+    // ── Audio (Phase I-2) ──
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_audio_init(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_shutdown(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_audio_is_initialized(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_set_master_volume(IntPtr rt, float volume);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_audio_get_master_volume(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_set_paused(IntPtr rt, [MarshalAs(UnmanagedType.I1)] bool paused);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_audio_is_paused(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_audio_load_clip(IntPtr rt, [MarshalAs(UnmanagedType.LPStr)] string path);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_unload_clip(IntPtr rt, int clipId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_audio_clip_duration(IntPtr rt, int clipId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_audio_create_source(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_destroy_source(IntPtr rt, int sourceId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_source_play(IntPtr rt, int sourceId, int clipId, float volume, [MarshalAs(UnmanagedType.I1)] bool loop);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_source_stop(IntPtr rt, int sourceId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_source_pause(IntPtr rt, int sourceId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_source_resume(IntPtr rt, int sourceId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_audio_source_is_playing(IntPtr rt, int sourceId);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_source_set_position(IntPtr rt, int sourceId, TucanoVec3 pos);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_source_set_volume(IntPtr rt, int sourceId, float volume);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_source_set_looping(IntPtr rt, int sourceId, [MarshalAs(UnmanagedType.I1)] bool loop);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_listener_set_position(IntPtr rt, TucanoVec3 pos);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_audio_listener_set_orientation(IntPtr rt, TucanoVec3 forward, TucanoVec3 up);
 }

@@ -56,6 +56,8 @@ public:
   void uavBarrier(Texture* resource) override;
   void aliasingBarrier(Texture* before, Texture* after) override;
   void copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t width, uint32_t height, Format format) override;
+  void copyBuffer(Buffer& dst, uint64_t dstOffset, Buffer& src, uint64_t srcOffset,
+                  uint64_t size) override;
   void copyBufferToTexture(Buffer& src, Texture& dst, uint32_t width, uint32_t height, uint32_t depth,
                            Format format) override;
   void copyTextureRegion(Texture& dst, uint32_t dstX, uint32_t dstY, Texture& src, uint32_t srcX, uint32_t srcY,

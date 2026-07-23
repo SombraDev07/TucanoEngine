@@ -591,6 +591,17 @@ void DX12Device::asyncComputeWaitGraphics() {
   queueWait(m_computeQueue.Get(), m_fence.Get(), m_fenceValue);
 }
 
+void DX12Device::submitAndWaitHeadless() {
+  // Close and execute the primary list of the current frame, then block on the fence. No swapchain,
+  // no late list — the next beginFrame() resets cleanly, so this is safe to call once per frame in
+  // a loop (which submitGraphicsCheckpoint is not, because it leaves the late list open).
+  static_cast<DX12CommandList*>(m_cmdLists[m_frameIndex].get())->close();
+  ID3D12CommandList* lists[] = {static_cast<DX12CommandList*>(m_cmdLists[m_frameIndex].get())->get()};
+  m_queue->ExecuteCommandLists(1, lists);
+  waitForGpu();
+  m_fenceValues[m_frameIndex] = m_fenceValue;
+}
+
 CommandList* DX12Device::submitGraphicsCheckpoint() {
   if (m_graphicsLate) {
     throw std::runtime_error("submitGraphicsCheckpoint: already on late graphics list");
@@ -786,6 +797,13 @@ std::shared_ptr<Buffer> DX12Device::createBuffer(const BufferDesc& desc, const v
       if (initialData && i == 0) {
         memcpy(buf->mappedPtrs[i], initialData, static_cast<size_t>(desc.size));
       }
+    }
+    // Readback heaps are persistently mapped for CPU read after a GPU→CPU copy completes. Passing a
+    // null read range means "the whole buffer may have been written by the GPU". Readback buffers
+    // are single-backed, so mappedPtr (what mapped() returns) mirrors backing 0.
+    if (heap.Type == D3D12_HEAP_TYPE_READBACK) {
+      throwIfFailed(buf->backings[i]->Map(0, nullptr, &buf->mappedPtrs[i]), "Map readback buffer");
+      if (i == 0) buf->mappedPtr = buf->mappedPtrs[i];
     }
     if (!desc.debugName.empty()) {
       std::wstring w(desc.debugName.begin(), desc.debugName.end());

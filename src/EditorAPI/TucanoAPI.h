@@ -385,6 +385,14 @@ TUCANO_API float tucano_sky_moon_phase(TucanoRuntime* rt);
 /// Fraction of the lunar disc that is lit, 0..1.
 TUCANO_API float tucano_sky_moon_illumination(TucanoRuntime* rt);
 
+// ── World Machine (WM-4) ─────────────────────────────
+// GPU cell-cull parity self-test. Culls a known scene on both CPU and GPU and returns the number
+// of disagreements: 0 = the compute shader matches the reference exactly. Negative values are
+// harness errors (-1 no device, -2 shader/PSO failed, -3 degenerate scene).
+TUCANO_API int tucano_world_cull_selftest(TucanoRuntime* rt);
+// Visible-cell count the reference finds in that scene — confirms the test exercised the frustum.
+TUCANO_API int tucano_world_cull_selftest_visible_count(TucanoRuntime* rt);
+
 // ── Environment ──────────────────────────────────────
 // One flat struct instead of a setter per field. Booleans are int32_t so the layout is blittable
 // from C# with no marshalling attributes.
@@ -498,6 +506,35 @@ TUCANO_API void tucano_settings_set_enable_clouds(TucanoRuntime* rt, bool b);
 TUCANO_API bool tucano_settings_get_enable_clouds(TucanoRuntime* rt);
 TUCANO_API void tucano_settings_set_enable_atmosphere(TucanoRuntime* rt, bool b);
 TUCANO_API bool tucano_settings_get_enable_atmosphere(TucanoRuntime* rt);
+
+// ── Audio (Phase I-2) ────────────────────────────────
+
+TUCANO_API bool tucano_audio_init(TucanoRuntime* rt);
+TUCANO_API void tucano_audio_shutdown(TucanoRuntime* rt);
+TUCANO_API bool tucano_audio_is_initialized(TucanoRuntime* rt);
+
+TUCANO_API void tucano_audio_set_master_volume(TucanoRuntime* rt, float volume);
+TUCANO_API float tucano_audio_get_master_volume(TucanoRuntime* rt);
+TUCANO_API void tucano_audio_set_paused(TucanoRuntime* rt, bool paused);
+TUCANO_API bool tucano_audio_is_paused(TucanoRuntime* rt);
+
+TUCANO_API int32_t tucano_audio_load_clip(TucanoRuntime* rt, const char* path);
+TUCANO_API void tucano_audio_unload_clip(TucanoRuntime* rt, int32_t clipId);
+TUCANO_API float tucano_audio_clip_duration(TucanoRuntime* rt, int32_t clipId);
+
+TUCANO_API int32_t tucano_audio_create_source(TucanoRuntime* rt);
+TUCANO_API void tucano_audio_destroy_source(TucanoRuntime* rt, int32_t sourceId);
+TUCANO_API void tucano_audio_source_play(TucanoRuntime* rt, int32_t sourceId, int32_t clipId, float volume, bool loop);
+TUCANO_API void tucano_audio_source_stop(TucanoRuntime* rt, int32_t sourceId);
+TUCANO_API void tucano_audio_source_pause(TucanoRuntime* rt, int32_t sourceId);
+TUCANO_API void tucano_audio_source_resume(TucanoRuntime* rt, int32_t sourceId);
+TUCANO_API bool tucano_audio_source_is_playing(TucanoRuntime* rt, int32_t sourceId);
+TUCANO_API void tucano_audio_source_set_position(TucanoRuntime* rt, int32_t sourceId, TucanoVec3 pos);
+TUCANO_API void tucano_audio_source_set_volume(TucanoRuntime* rt, int32_t sourceId, float volume);
+TUCANO_API void tucano_audio_source_set_looping(TucanoRuntime* rt, int32_t sourceId, bool loop);
+
+TUCANO_API void tucano_audio_listener_set_position(TucanoRuntime* rt, TucanoVec3 pos);
+TUCANO_API void tucano_audio_listener_set_orientation(TucanoRuntime* rt, TucanoVec3 forward, TucanoVec3 up);
 
 #ifdef __cplusplus
 }

@@ -12,6 +12,13 @@
 #include "Renderer/Mesh.h"
 #include "Runtime/Screenshot.h"
 #include "Runtime/DebugUI.h"
+#include "Audio/Audio.h"
+#include "Audio/AudioClip.h"
+#include "Audio/AudioListener.h"
+#include "Audio/AudioSource.h"
+#include "World/FrustumCull.h"
+#include "World/GpuCellCuller.h"
+#include "World/WorldGrid.h"
 
 #include <GLFW/glfw3.h>
 
@@ -318,6 +325,10 @@ struct TucanoRuntime {
   bool gizmoWorldSpace = true;
   float gizmoSnap = 0.0f;
   bool gizmoBlocking = false;
+
+  // Audio (Phase I-2)
+  std::vector<tucano::AudioClip*> audioClips;
+  std::vector<std::unique_ptr<tucano::AudioSource>> audioSources;
 };
 
 // `data` aliases the runtime's scene rather than copying it: the renderer draws runtime->scene, so
@@ -2465,4 +2476,246 @@ TUCANO_API void tucano_settings_set_enable_atmosphere(TucanoRuntime* rt, bool b)
 TUCANO_API bool tucano_settings_get_enable_atmosphere(TucanoRuntime* rt) {
   if (!rt || !rt->renderer) return false;
   return rt->renderer->settings().enableAtmosphere;
+}
+
+// ── World Machine: GPU cell-cull parity self-test (WM-4) ─────────────────────
+// Builds a known set of cell boxes and a known camera, culls them on the CPU (the reference) and
+// on the GPU (CellCull.hlsl via GpuCellCuller), and returns the number of DISAGREEMENTS between
+// the two visible sets. Zero means the compute shader matches the reference exactly — the proof
+// that the GPU path is correct. Exposed here because the parity test needs a live device, which
+// only exists inside the runtime.
+TUCANO_API int tucano_world_cull_selftest(TucanoRuntime* rt) {
+  if (!rt || !rt->device) return -1;
+
+  using namespace tucano::world;
+
+  // A deterministic field of cells spread across a volume, plus a camera looking down +z. Some
+  // cells sit inside the frustum, some outside, some straddling an edge — the cases that catch a
+  // plane-convention bug.
+  WorldGrid grid(WorldGridDesc{glm::vec3(0.0f), 65536.0f, 10});
+  const float cell = grid.cellSize(10);
+  std::vector<CellId> ids;
+  std::vector<glm::vec3> mins, maxs;
+  for (int z = -6; z <= 40; ++z) {
+    for (int y = -6; y <= 6; ++y) {
+      for (int x = -20; x <= 20; ++x) {
+        const CellId id{x, y, z, 10};
+        glm::vec3 bmin, bmax;
+        grid.boundsOf(id, bmin, bmax);
+        ids.push_back(id);
+        mins.push_back(bmin);
+        maxs.push_back(bmax);
+      }
+    }
+  }
+
+  // Camera at the origin looking down +z (left-handed), matching the engine's projection.
+  const glm::vec3 eye(cell * 0.5f, cell * 0.5f, -cell);
+  const glm::mat4 view = glm::lookAtLH(eye, eye + glm::vec3(0, 0, 1), glm::vec3(0, 1, 0));
+  const glm::mat4 proj = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.5f, 5000.0f);
+  const glm::mat4 viewProj = proj * view;
+
+  CullConfig cfg;
+  cfg.lodStep = 200.0f;
+  cfg.maxLod = 4;
+  cfg.maxDistance = 3000.0f;
+
+  // Reference.
+  WorldCuller cpuCuller;
+  std::vector<VisibleCell> cpu;
+  cpuCuller.cullBoxes(ids, mins, maxs, viewProj, eye, cfg, cpu);
+
+  // GPU. Build a throwaway compute root signature + PSO for CellCull.
+  std::shared_ptr<tucano::rhi::RootSignature> root;
+  std::shared_ptr<tucano::rhi::PipelineState> pso;
+  try {
+    root = rt->device->createComputeRootSignature();
+    tucano::rhi::ComputePipelineDesc pd;
+    pd.rootSignature = root;
+    pd.cs = tucano::rhi::ShaderBytecode::loadFromFile(
+        std::string(TUCANO_SHADER_DIR) + "/CellCull_CSMain.cso");
+    pso = rt->device->createComputePipeline(pd);
+  } catch (...) {
+    return -2; // shader missing or PSO creation failed
+  }
+
+  GpuCellCuller gpuCuller(*rt->device, *root, *pso);
+  std::vector<VisibleCell> gpu = gpuCuller.cull(ids, mins, maxs, viewProj, eye, cfg);
+  std::fprintf(stderr, "[cullselftest] cells=%zu cpuVisible=%zu gpuVisible=%zu\n", ids.size(),
+               cpu.size(), gpu.size());
+
+  // Compare as sets keyed by cell, checking LOD agrees too. A mismatch is any cell one side found
+  // and the other did not, or a cell both found but assigned a different LOD.
+  std::unordered_map<uint64_t, uint32_t> cpuMap, gpuMap;
+  for (const auto& v : cpu) cpuMap[v.id.key()] = v.lod;
+  for (const auto& v : gpu) gpuMap[v.id.key()] = v.lod;
+
+  int mismatches = 0;
+  for (const auto& [key, lod] : cpuMap) {
+    auto it = gpuMap.find(key);
+    if (it == gpuMap.end() || it->second != lod) ++mismatches;
+  }
+  for (const auto& [key, lod] : gpuMap) {
+    if (cpuMap.find(key) == cpuMap.end()) ++mismatches;
+  }
+
+  // Encode both the mismatch count and a sanity signal: if the CPU found nothing, the scene was
+  // degenerate and the test proves nothing — report that as a failure rather than a false pass.
+  if (cpu.empty()) return -3;
+  return mismatches;
+}
+
+// Returns how many cells the CPU reference finds visible in the self-test scene — lets the caller
+// confirm the test actually exercised the frustum (a non-trivial visible count).
+TUCANO_API int tucano_world_cull_selftest_visible_count(TucanoRuntime* rt) {
+  if (!rt || !rt->device) return -1;
+  using namespace tucano::world;
+  WorldGrid grid(WorldGridDesc{glm::vec3(0.0f), 65536.0f, 10});
+  std::vector<CellId> ids;
+  std::vector<glm::vec3> mins, maxs;
+  for (int z = -6; z <= 40; ++z)
+    for (int y = -6; y <= 6; ++y)
+      for (int x = -20; x <= 20; ++x) {
+        const CellId id{x, y, z, 10};
+        glm::vec3 bmin, bmax;
+        grid.boundsOf(id, bmin, bmax);
+        ids.push_back(id);
+        mins.push_back(bmin);
+        maxs.push_back(bmax);
+      }
+  const float c = grid.cellSize(10);
+  const glm::vec3 eye(c * 0.5f, c * 0.5f, -c);
+  const glm::mat4 view = glm::lookAtLH(eye, eye + glm::vec3(0, 0, 1), glm::vec3(0, 1, 0));
+  const glm::mat4 proj = glm::perspectiveLH_ZO(glm::radians(60.0f), 16.0f / 9.0f, 0.5f, 5000.0f);
+  CullConfig cfg;
+  cfg.maxDistance = 3000.0f;
+  WorldCuller cpuCuller;
+  std::vector<VisibleCell> cpu;
+  cpuCuller.cullBoxes(ids, mins, maxs, proj * view, eye, cfg, cpu);
+  return int(cpu.size());
+}
+
+// ── Audio (Phase I-2) ────────────────────────────────
+
+TUCANO_API bool tucano_audio_init(TucanoRuntime* rt) {
+  if (!rt) return false;
+  tucano::Audio::instance().init();
+  return tucano::Audio::instance().isInitialized();
+}
+
+TUCANO_API void tucano_audio_shutdown(TucanoRuntime* rt) {
+  (void)rt;
+  tucano::Audio::instance().shutdown();
+}
+
+TUCANO_API bool tucano_audio_is_initialized(TucanoRuntime* rt) {
+  (void)rt;
+  return tucano::Audio::instance().isInitialized();
+}
+
+TUCANO_API void tucano_audio_set_master_volume(TucanoRuntime* rt, float volume) {
+  (void)rt;
+  tucano::Audio::instance().setMasterVolume(glm::clamp(volume, 0.0f, 1.0f));
+}
+
+TUCANO_API float tucano_audio_get_master_volume(TucanoRuntime* rt) {
+  (void)rt;
+  return tucano::Audio::instance().masterVolume();
+}
+
+TUCANO_API void tucano_audio_set_paused(TucanoRuntime* rt, bool paused) {
+  (void)rt;
+  tucano::Audio::instance().setPaused(paused);
+}
+
+TUCANO_API bool tucano_audio_is_paused(TucanoRuntime* rt) {
+  (void)rt;
+  return tucano::Audio::instance().isPaused();
+}
+
+TUCANO_API int32_t tucano_audio_load_clip(TucanoRuntime* rt, const char* path) {
+  if (!rt || !path) return -1;
+  auto* clip = tucano::AudioClip::loadWav(path);
+  if (!clip) return -1;
+  rt->audioClips.push_back(clip);
+  return static_cast<int32_t>(rt->audioClips.size() - 1);
+}
+
+TUCANO_API void tucano_audio_unload_clip(TucanoRuntime* rt, int32_t clipId) {
+  if (!rt || clipId < 0 || clipId >= static_cast<int32_t>(rt->audioClips.size())) return;
+  if (rt->audioClips[clipId]) {
+    rt->audioClips[clipId]->release();
+    rt->audioClips[clipId] = nullptr;
+  }
+}
+
+TUCANO_API float tucano_audio_clip_duration(TucanoRuntime* rt, int32_t clipId) {
+  if (!rt || clipId < 0 || clipId >= static_cast<int32_t>(rt->audioClips.size())) return 0.0f;
+  return rt->audioClips[clipId] ? rt->audioClips[clipId]->durationSeconds() : 0.0f;
+}
+
+TUCANO_API int32_t tucano_audio_create_source(TucanoRuntime* rt) {
+  if (!rt) return -1;
+  auto src = std::make_unique<tucano::AudioSource>();
+  rt->audioSources.push_back(std::move(src));
+  return static_cast<int32_t>(rt->audioSources.size() - 1);
+}
+
+TUCANO_API void tucano_audio_destroy_source(TucanoRuntime* rt, int32_t sourceId) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  rt->audioSources[sourceId].reset();
+}
+
+TUCANO_API void tucano_audio_source_play(TucanoRuntime* rt, int32_t sourceId, int32_t clipId,
+                                          float volume, bool loop) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  auto* clip = (clipId >= 0 && clipId < static_cast<int32_t>(rt->audioClips.size()))
+                    ? rt->audioClips[clipId] : nullptr;
+  if (!clip) return;
+  rt->audioSources[sourceId]->play(clip, volume, loop);
+}
+
+TUCANO_API void tucano_audio_source_stop(TucanoRuntime* rt, int32_t sourceId) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  rt->audioSources[sourceId]->stop();
+}
+
+TUCANO_API void tucano_audio_source_pause(TucanoRuntime* rt, int32_t sourceId) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  rt->audioSources[sourceId]->pause();
+}
+
+TUCANO_API void tucano_audio_source_resume(TucanoRuntime* rt, int32_t sourceId) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  rt->audioSources[sourceId]->resume();
+}
+
+TUCANO_API bool tucano_audio_source_is_playing(TucanoRuntime* rt, int32_t sourceId) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return false;
+  return rt->audioSources[sourceId]->isPlaying();
+}
+
+TUCANO_API void tucano_audio_source_set_position(TucanoRuntime* rt, int32_t sourceId, TucanoVec3 pos) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  rt->audioSources[sourceId]->setPosition({pos.x, pos.y, pos.z});
+}
+
+TUCANO_API void tucano_audio_source_set_volume(TucanoRuntime* rt, int32_t sourceId, float volume) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  rt->audioSources[sourceId]->setVolume(glm::clamp(volume, 0.0f, 1.0f));
+}
+
+TUCANO_API void tucano_audio_source_set_looping(TucanoRuntime* rt, int32_t sourceId, bool loop) {
+  if (!rt || sourceId < 0 || sourceId >= static_cast<int32_t>(rt->audioSources.size())) return;
+  rt->audioSources[sourceId]->setLooping(loop);
+}
+
+TUCANO_API void tucano_audio_listener_set_position(TucanoRuntime* rt, TucanoVec3 pos) {
+  (void)rt;
+  tucano::AudioListener::instance().setPosition({pos.x, pos.y, pos.z});
+}
+
+TUCANO_API void tucano_audio_listener_set_orientation(TucanoRuntime* rt, TucanoVec3 forward, TucanoVec3 up) {
+  (void)rt;
+  tucano::AudioListener::instance().setOrientation({forward.x, forward.y, forward.z}, {up.x, up.y, up.z});
 }

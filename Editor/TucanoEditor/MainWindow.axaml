@@ -121,7 +121,17 @@
                     <NumericUpDown Name="GizmoSnap" Value="0" Minimum="0" Maximum="90" Increment="0.25"
                                    FormatString="F2" Width="60" Height="26" VerticalAlignment="Center"
                                    ValueChanged="OnGizmoSnapChanged"
-                                   ToolTip.Tip="0 = off. Metres when moving, degrees when rotating." />
+                                    ToolTip.Tip="0 = off. Metres when moving, degrees when rotating." />
+
+                    <Border Classes="sep" />
+
+                    <!-- Audio controls (Phase I-2) -->
+                    <Button Classes="tool" Name="AudioMuteBtn" Content="🔊" Width="34" Height="26"
+                            Click="OnAudioMuteToggle" ToolTip.Tip="Toggle mute" />
+                    <Slider Name="AudioVolume" Width="80" Height="26" Minimum="0" Maximum="1"
+                            Value="1.0" VerticalAlignment="Center"
+                            ValueChanged="OnAudioVolumeChanged"
+                            ToolTip.Tip="Master volume" />
 
                     <Border Classes="sep" />
 

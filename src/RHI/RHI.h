@@ -93,6 +93,12 @@ public:
   // Mid-frame: close+execute+signal early graphics list; returns late list for continued recording.
   virtual CommandList* submitGraphicsCheckpoint() { return nullptr; }
 
+  // Close, execute and wait on the current beginFrame() command list WITHOUT presenting or using
+  // the mid-frame checkpoint machinery. For headless compute + readback (no swapchain), and unlike
+  // submitGraphicsCheckpoint it leaves no dangling late-list state, so it can be called once per
+  // beginFrame() repeatedly. Default no-op for non-DX12 backends.
+  virtual void submitAndWaitHeadless() {}
+
   virtual void beginGpuMarker(CommandList& /*cmd*/, const char* /*name*/) {}
   virtual void endGpuMarker(CommandList& /*cmd*/) {}
   virtual std::string dumpGpuCrashInfo() { return {}; }
@@ -217,6 +223,17 @@ public:
   }
   virtual void copyTextureToBuffer(Texture& src, Buffer& dst, uint32_t width, uint32_t height,
                                    Format format) = 0;
+  // Buffer-to-buffer region copy. The workhorse for GPU→CPU readback of a compute result: dispatch
+  // into a DEFAULT-heap UAV, copy it here into a READBACK-heap buffer, then map that buffer.
+  // Default no-op so non-DX12 backends need no change; DX12 overrides it.
+  virtual void copyBuffer(Buffer& dst, uint64_t dstOffset, Buffer& src, uint64_t srcOffset,
+                          uint64_t size) {
+    (void)dst;
+    (void)dstOffset;
+    (void)src;
+    (void)srcOffset;
+    (void)size;
+  }
   // Copy an upload buffer (256-aligned rows) into a texture (2D or 3D) on this command list —
   // avoids the shared upload-arena reset that uploadTexture() does mid-frame.
   virtual void copyBufferToTexture(Buffer& src, Texture& dst, uint32_t width, uint32_t height, uint32_t depth,

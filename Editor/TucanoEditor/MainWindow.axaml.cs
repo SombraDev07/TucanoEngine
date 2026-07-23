@@ -69,6 +69,9 @@ public partial class MainWindow : Window
         {
             _runtime = new RuntimeHost(enableDebug: true);
 
+            // Audio (Phase I-2). If the engine has audio devices, init now.
+            try { _runtime.AudioInit(); } catch { /* silent fallback */ }
+
             // The runtime owns the fly camera while the viewport has focus; its ImGui HUD stays off
             // so the editor's status bar is the single FPS readout.
             _runtime.CameraNavigation = true;
@@ -1295,6 +1298,22 @@ public partial class MainWindow : Window
 
     private TucanoGizmoOp _lastGizmoOp = TucanoGizmoOp.Translate;
     private bool _lastGizmoWorld = true;
+
+    // ── Audio (Phase I-2) ──────────────────────────────
+
+    private void OnAudioVolumeChanged(object? sender, Avalonia.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        _runtime.MasterVolume = (float)e.NewValue;
+    }
+
+    private void OnAudioMuteToggle(object? sender, RoutedEventArgs e)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        var newMuted = !_runtime.AudioPaused;
+        _runtime.AudioPaused = newMuted;
+        AudioMuteBtn.Content = newMuted ? "🔇" : "🔊";
+    }
 
     // ── Selection ↔ inspector plumbing ────────────────
 

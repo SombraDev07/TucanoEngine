@@ -57,6 +57,7 @@ public:
   void graphicsWaitAsyncCompute() override;
   void asyncComputeWaitGraphics() override;
   CommandList* submitGraphicsCheckpoint() override;
+  void submitAndWaitHeadless() override;
   void beginGpuMarker(CommandList& cmd, const char* name) override;
   void endGpuMarker(CommandList& cmd) override;
   std::string dumpGpuCrashInfo() override;
