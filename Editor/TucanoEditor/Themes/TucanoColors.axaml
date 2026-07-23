@@ -1,0 +1,101 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ── Tucano Palette: Black + Yellow ── -->
+
+    <!-- Accent (Yellow / Gold) -->
+    <Color x:Key="SystemAccentColor">#FFC107</Color>
+    <Color x:Key="SystemAccentColorLight1">#FFD54F</Color>
+    <Color x:Key="SystemAccentColorLight2">#FFE082</Color>
+    <Color x:Key="SystemAccentColorLight3">#FFECB3</Color>
+    <Color x:Key="SystemAccentColorDark1">#FFB300</Color>
+    <Color x:Key="SystemAccentColorDark2">#FFA000</Color>
+    <Color x:Key="SystemAccentColorDark3">#FF8F00</Color>
+
+    <SolidColorBrush x:Key="SystemAccentBrush" Color="#FFC107" />
+    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#FFC107" />
+    <SolidColorBrush x:Key="SystemControlHighlightListAccentLowBrush" Color="#33FFC107" />
+    <SolidColorBrush x:Key="SystemControlHighlightListAccentMediumBrush" Color="#66FFC107" />
+    <SolidColorBrush x:Key="SystemControlHighlightListAccentHighBrush" Color="#B3FFC107" />
+    <SolidColorBrush x:Key="SystemControlForegroundAccentBrush" Color="#FFC107" />
+
+    <!-- Backgrounds: deep black -->
+    <Color x:Key="SystemBaseHighColor">#FF1A1A1A</Color>
+    <Color x:Key="SystemBaseMediumColor">#FF2A2A2A</Color>
+    <Color x:Key="SystemBaseLowColor">#FF0D0D0D</Color>
+    <Color x:Key="SystemAltHighColor">#FF1E1E1E</Color>
+    <Color x:Key="SystemAltMediumColor">#FF252525</Color>
+    <Color x:Key="SystemAltLowColor">#FF151515</Color>
+    <Color x:Key="SystemChromeBlackHighColor">#FF0A0A0A</Color>
+    <Color x:Key="SystemChromeBlackMediumColor">#FF141414</Color>
+    <Color x:Key="SystemChromeBlackLowColor">#FF1A1A1A</Color>
+
+    <!-- Background brushes -->
+    <SolidColorBrush x:Key="SystemControlBackgroundBaseLowBrush" Color="#0D0D0D" />
+    <SolidColorBrush x:Key="SystemControlBackgroundBaseMediumLowBrush" Color="#151515" />
+    <SolidColorBrush x:Key="SystemControlBackgroundBaseMediumBrush" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="SystemControlBackgroundBaseHighBrush" Color="#2A2A2A" />
+    <SolidColorBrush x:Key="SystemControlBackgroundAltHighBrush" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="SystemControlBackgroundAltMediumLowBrush" Color="#181818" />
+    <SolidColorBrush x:Key="SystemControlBackgroundAltMediumBrush" Color="#222222" />
+    <SolidColorBrush x:Key="SystemControlBackgroundAltLowBrush" Color="#111111" />
+
+    <!-- Chrome / surface brushes -->
+    <SolidColorBrush x:Key="SystemControlBackgroundChromeMediumLowBrush" Color="#1A1A1A" />
+    <SolidColorBrush x:Key="SystemControlBackgroundChromeMediumBrush" Color="#252525" />
+    <SolidColorBrush x:Key="SystemControlBackgroundChromeHighBrush" Color="#2E2E2E" />
+    <SolidColorBrush x:Key="SystemControlBackgroundChromeWhiteBrush" Color="#3A3A3A" />
+    <SolidColorBrush x:Key="SystemControlBackgroundListLowBrush" Color="#0D0D0D" />
+    <SolidColorBrush x:Key="SystemControlBackgroundListMediumBrush" Color="#1E1E1E" />
+
+    <!-- Page / window background -->
+    <SolidColorBrush x:Key="SystemControlPageBackgroundMediumBrush" Color="#0D0D0D" />
+    <SolidColorBrush x:Key="ApplicationPageBackgroundThemeBrush" Color="#0D0D0D" />
+
+    <!-- Foreground (text) -->
+    <SolidColorBrush x:Key="SystemControlForegroundBaseHighBrush" Color="#F5F5F5" />
+    <SolidColorBrush x:Key="SystemControlForegroundBaseMediumBrush" Color="#AAAAAA" />
+    <SolidColorBrush x:Key="SystemControlForegroundBaseMediumLowBrush" Color="#777777" />
+    <SolidColorBrush x:Key="SystemControlForegroundBaseLowBrush" Color="#555555" />
+    <SolidColorBrush x:Key="SystemControlForegroundAltHighBrush" Color="#F5F5F5" />
+    <SolidColorBrush x:Key="SystemControlForegroundChromeBlackHighBrush" Color="#F5F5F5" />
+    <SolidColorBrush x:Key="SystemControlForegroundChromeDisabledBrush" Color="#FFC107" />
+
+    <!-- Selection -->
+    <SolidColorBrush x:Key="SystemControlHighlightListAccentSelectedBrush" Color="#FFC107" />
+    <SolidColorBrush x:Key="SystemControlHighlightListSelectedBrush" Color="#33FFC107" />
+
+    <!-- Borders -->
+    <SolidColorBrush x:Key="SystemControlForegroundChromeBlackMediumLowBrush" Color="#333333" />
+    <SolidColorBrush x:Key="SystemControlForegroundListLowBrush" Color="#2A2A2A" />
+    <SolidColorBrush x:Key="SystemControlTransparentBrush" Color="Transparent" />
+    <SolidColorBrush x:Key="SystemControlTransparentRevealBorderBrush" Color="#33FFC107" />
+
+    <!-- Buttons -->
+    <SolidColorBrush x:Key="SystemControlForegroundChromeHighBrush" Color="#E0E0E0" />
+    <SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#FFC107" />
+    <SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="#0D0D0D" />
+
+    <!-- Scrollbar -->
+    <SolidColorBrush x:Key="SystemControlBackgroundChromeBlackLowBrush" Color="#1A1A1A" />
+    <SolidColorBrush x:Key="ScrollBarThumbFill" Color="#444444" />
+    <SolidColorBrush x:Key="ScrollBarThumbPointerOverFill" Color="#FFC107" />
+
+    <!-- Expander -->
+    <SolidColorBrush x:Key="ExpanderHeaderForeground" Color="#FFC107" />
+    <SolidColorBrush x:Key="ExpanderHeaderForegroundDisabled" Color="#665500" />
+
+    <!-- TextBox -->
+    <SolidColorBrush x:Key="TextControlBackground" Color="#151515" />
+    <SolidColorBrush x:Key="TextControlBackgroundFocused" Color="#1A1A0A" />
+    <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="#FFC107" />
+    <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="#FFA000" />
+
+    <!-- Menu -->
+    <SolidColorBrush x:Key="MenuFlyoutPresenterBackground" Color="#1E1E1E" />
+    <SolidColorBrush x:Key="MenuFlyoutPresenterBorderBrush" Color="#333333" />
+
+    <!-- CheckBox / Toggle -->
+    <SolidColorBrush x:Key="SystemControlHighlightAccent3FillColorBrush" Color="#FFC107" />
+
+</ResourceDictionary>

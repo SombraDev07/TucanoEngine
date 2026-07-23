@@ -55,8 +55,13 @@ add_library(imgui_lib STATIC
   ${imgui_SOURCE_DIR}/imgui_demo.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp
+  # ImGuizmo (MIT) — vendored, needs imgui_internal.h so it builds alongside imgui itself.
+  ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.cpp
 )
-target_include_directories(imgui_lib PUBLIC ${imgui_SOURCE_DIR} ${imgui_SOURCE_DIR}/backends)
+target_include_directories(imgui_lib PUBLIC
+  ${imgui_SOURCE_DIR}
+  ${imgui_SOURCE_DIR}/backends
+  ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo)
 target_link_libraries(imgui_lib PUBLIC glfw d3d12 dxgi)
 target_compile_definitions(imgui_lib PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
 

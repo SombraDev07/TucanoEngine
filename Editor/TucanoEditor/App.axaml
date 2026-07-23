@@ -1,0 +1,19 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:conv="clr-namespace:TucanoEditor.Converters"
+             x:Class="TucanoEditor.App">
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceInclude Source="/Themes/TucanoColors.axaml" />
+                <ResourceInclude Source="/Styles/Icons.axaml" />
+            </ResourceDictionary.MergedDictionaries>
+            <conv:IconConverter x:Key="IconConverter" />
+        </ResourceDictionary>
+    </Application.Resources>
+    <Application.Styles>
+        <FluentTheme />
+        <!-- Editor look on top of Fluent: dark neutral base, single amber accent. -->
+        <StyleInclude Source="/Styles/EditorTheme.axaml" />
+    </Application.Styles>
+</Application>

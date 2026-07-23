@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RootNamespace>TucanoEditor</RootNamespace>
+    <AssemblyName>TucanoEditor</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Desktop" Version="11.2.7" />
+    <PackageReference Include="Avalonia.ReactiveUI" Version="11.2.7" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.2.7" />
+    <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.7" />
+    <PackageReference Include="Dock.Avalonia" Version="11.2.6" />
+    <PackageReference Include="Dock.Model.ReactiveUI" Version="11.2.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\EditorCore\EditorCore.csproj" />
+  </ItemGroup>
+
+  <!-- Native runtime DLL (C ABI) built by CMake. Without this next to the exe the P/Invoke in
+       EditorCore fails with DllNotFoundException. Override with -p:TucanoNativeDir=<path>. -->
+  <PropertyGroup>
+    <TucanoNativeDir Condition="'$(TucanoNativeDir)' == ''">$(MSBuildThisFileDirectory)..\..\build\windows-release\src\</TucanoNativeDir>
+  </PropertyGroup>
+
+  <Target Name="CopyTucanoNative" AfterTargets="Build">
+    <ItemGroup>
+      <TucanoNativeDll Include="$(TucanoNativeDir)TucanoEditorAPI.dll" />
+    </ItemGroup>
+    <Warning Condition="!Exists('$(TucanoNativeDir)TucanoEditorAPI.dll')"
+             Text="TucanoEditorAPI.dll not found in $(TucanoNativeDir). Build the CMake target 'TucanoEditorAPI' first." />
+    <Copy SourceFiles="@(TucanoNativeDll)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true"
+          Condition="Exists('$(TucanoNativeDir)TucanoEditorAPI.dll')" />
+  </Target>
+
+</Project>

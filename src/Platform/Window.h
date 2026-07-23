@@ -13,6 +13,7 @@ struct WindowDesc {
   uint32_t height = 720;
   std::string title = "Tucano Engine";
   bool resizable = true;
+  bool decorated = true;
 };
 
 class Window {

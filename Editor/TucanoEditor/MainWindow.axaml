@@ -1,0 +1,647 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:TucanoEditor.Views"
+        xmlns:models="clr-namespace:TucanoEditor.Models"
+        x:Class="TucanoEditor.MainWindow"
+        Title="TUCANO EDITOR"
+        Width="1680" Height="940"
+        MinWidth="1100" MinHeight="640"
+        Background="#0B0B0D"
+        Foreground="#E8E8EC"
+        FontFamily="Segoe UI">
+
+    <Window.Resources>
+        <!-- Outliner rows: eye toggle + icon + name + muted detail, indented by the tree itself. -->
+        <TreeDataTemplate x:Key="NodeTemplate" DataType="models:SceneNode" ItemsSource="{Binding Children}">
+            <Grid ColumnDefinitions="Auto,Auto,*,Auto" Height="22"
+                  Background="Transparent"
+                  DragDrop.AllowDrop="True">
+                <!-- Eye: hides the object (and its shadow) from the viewport -->
+                <Button Grid.Column="0" Classes="eye" Click="OnToggleNodeVisibility"
+                        IsVisible="{Binding CanToggleVisibility}"
+                        ToolTip.Tip="Show / hide in the viewport">
+                    <Path Width="13" Height="13" Stretch="Uniform"
+                          Data="{Binding EyeIconKey, Converter={StaticResource IconConverter}}"
+                          Stroke="#8A8A96" StrokeThickness="1.4" Fill="Transparent" />
+                </Button>
+
+                <Path Grid.Column="1" Width="14" Height="14" Stretch="Uniform"
+                      Data="{Binding IconKey, Converter={StaticResource IconConverter}}"
+                      Stroke="{Binding IconBrush}" StrokeThickness="1.5"
+                      Fill="Transparent" VerticalAlignment="Center" Margin="2,0,7,0" />
+                <TextBlock Grid.Column="2" Text="{Binding Name}" VerticalAlignment="Center"
+                           FontSize="11.5" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" Text="{Binding Detail}" VerticalAlignment="Center"
+                           FontSize="10" Foreground="#6C6C78" Margin="8,0,4,0" />
+            </Grid>
+        </TreeDataTemplate>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- ═══════════════════ Menu ═══════════════════ -->
+        <Menu DockPanel.Dock="Top" BorderBrush="#2A2A31" BorderThickness="0,0,0,1">
+            <MenuItem Header="_File">
+                <MenuItem Header="New Scene" Click="OnNewScene" />
+                <Separator />
+                <MenuItem Header="Open Scene..." InputGesture="Ctrl+O" Click="OnOpenScene" />
+                <MenuItem Header="Save Scene" InputGesture="Ctrl+S" Click="OnSaveScene" />
+                <MenuItem Header="Save Scene As..." Click="OnSaveSceneAs" />
+                <Separator />
+                <MenuItem Header="Exit" Click="OnExit" />
+            </MenuItem>
+            <MenuItem Header="_Edit">
+                <MenuItem Header="Undo" InputGesture="Ctrl+Z" Click="OnUndo" />
+                <MenuItem Header="Redo" InputGesture="Ctrl+Y" Click="OnRedo" />
+                <Separator />
+                <MenuItem Header="Duplicate" InputGesture="Ctrl+D" Click="OnDuplicate" />
+                <MenuItem Header="Delete" InputGesture="Delete" Click="OnDeleteSelected" />
+            </MenuItem>
+            <MenuItem Header="_Assets">
+                <MenuItem Header="Import Mesh (glTF)..." Click="OnImportMesh" />
+                <MenuItem Header="New Material" Click="OnNewMaterial" />
+                <Separator />
+                <MenuItem Header="Rescan Asset Folders" Click="OnRescanAssets" />
+            </MenuItem>
+            <MenuItem Header="E_ntity">
+                <MenuItem Header="Create Cube" Click="OnCreateCube" />
+                <MenuItem Header="Create Sphere" Click="OnCreateSphere" />
+                <MenuItem Header="Create Plane" Click="OnCreatePlane" />
+                <Separator />
+                <MenuItem Header="Delete Selected" InputGesture="Delete" Click="OnDeleteSelected" />
+                <MenuItem Header="Clear Scene" Click="OnClearScene" />
+            </MenuItem>
+            <MenuItem Header="_Tools">
+                <MenuItem Header="Environment..." Click="OnOpenEnvironment"
+                          ToolTip.Tip="Sun, sky, fog, clouds, rain, post, shadows and GI" />
+                <Separator />
+                <MenuItem Header="Add Point Light" Click="OnAddPointLight" />
+                <MenuItem Header="Add Spot Light" Click="OnAddSpotLight" />
+                <MenuItem Header="Add Directional Light" Click="OnAddDirectionalLight" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="About Tucano Editor" Click="OnAbout" />
+            </MenuItem>
+        </Menu>
+
+        <!-- ═══════════════════ Toolbar ════════════════ -->
+        <Border DockPanel.Dock="Top" Height="42" Background="#17171B"
+                BorderBrush="#2A2A31" BorderThickness="0,0,0,1">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0" Spacing="4">
+
+                    <Button Classes="tool" Click="OnSaveScene" ToolTip.Tip="Save scene (Ctrl+S)">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="ico" Data="{StaticResource IcoFolder}" />
+                            <TextBlock Text="Save" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="tool" Content="Undo" Click="OnUndo" ToolTip.Tip="Ctrl+Z" />
+                    <Button Classes="tool" Content="Redo" Click="OnRedo" ToolTip.Tip="Ctrl+Y" />
+
+                    <Border Classes="sep" />
+
+                    <Button Name="PlayButton" Classes="transport" Content="▶" Click="OnPlay"
+                            Foreground="#5FBF66" ToolTip.Tip="Play (F5) — simulate physics" />
+                    <Button Name="PauseButton" Classes="transport" Content="❚❚" Click="OnPause"
+                            Foreground="#FFC107" FontSize="10" ToolTip.Tip="Pause (F7)" />
+                    <Button Name="StopButton" Classes="transport" Content="■" Click="OnStop"
+                            Foreground="#E5534B" ToolTip.Tip="Stop (Esc) — restores authored transforms" />
+                    <TextBlock Name="PlayStatus" Text="" VerticalAlignment="Center" Margin="6,0,0,0"
+                               Foreground="#5FBF66" FontSize="11" FontWeight="Bold" />
+
+                    <Border Classes="sep" />
+
+                    <RadioButton Name="GizmoMove" Content="Move" GroupName="Gizmo" IsChecked="True"
+                                 VerticalAlignment="Center" IsCheckedChanged="OnGizmoOpChanged"
+                                 ToolTip.Tip="Translate (W)" />
+                    <RadioButton Name="GizmoRotate" Content="Rotate" GroupName="Gizmo" Margin="6,0,0,0"
+                                 VerticalAlignment="Center" IsCheckedChanged="OnGizmoOpChanged"
+                                 ToolTip.Tip="Rotate (E)" />
+                    <RadioButton Name="GizmoScale" Content="Scale" GroupName="Gizmo" Margin="6,0,0,0"
+                                 VerticalAlignment="Center" IsCheckedChanged="OnGizmoOpChanged"
+                                 ToolTip.Tip="Scale (R)" />
+                    <CheckBox Name="GizmoWorld" Content="World" IsChecked="True" Margin="10,0,0,0"
+                              VerticalAlignment="Center" IsCheckedChanged="OnGizmoSpaceChanged"
+                              ToolTip.Tip="World vs local axes (X)" />
+                    <TextBlock Text="Snap" Classes="dim" VerticalAlignment="Center" Margin="10,0,4,0" />
+                    <NumericUpDown Name="GizmoSnap" Value="0" Minimum="0" Maximum="90" Increment="0.25"
+                                   FormatString="F2" Width="60" Height="26" VerticalAlignment="Center"
+                                   ValueChanged="OnGizmoSnapChanged"
+                                   ToolTip.Tip="0 = off. Metres when moving, degrees when rotating." />
+
+                    <Border Classes="sep" />
+
+                    <Button Classes="tool" Click="OnCreateCube" ToolTip.Tip="Cube in front of the camera">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="ico" Data="{StaticResource IcoCube}" />
+                            <TextBlock Text="Cube" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="tool" Click="OnCreateSphere" ToolTip.Tip="Sphere in front of the camera">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="ico" Data="{StaticResource IcoSphere}" />
+                            <TextBlock Text="Sphere" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="tool" Click="OnCreatePlane" ToolTip.Tip="Plane in front of the camera">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="ico" Data="{StaticResource IcoPlane}" />
+                            <TextBlock Text="Plane" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Classes="tool" Click="OnAddPointLight" ToolTip.Tip="Point light">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="ico" Data="{StaticResource IcoLight}" />
+                            <TextBlock Text="Light" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Classes="sep" />
+
+                    <Button Classes="tool" Content="Duplicate" Click="OnDuplicate" ToolTip.Tip="Ctrl+D" />
+                    <Button Classes="tool" Click="OnDeleteSelected" Foreground="#E5534B" ToolTip.Tip="Delete">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="ico" Data="{StaticResource IcoTrash}" Stroke="#E5534B" />
+                            <TextBlock Text="Delete" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+
+                    <Border Classes="sep" />
+                    <Button Classes="tool accent" Click="OnOpenEnvironment">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Path Classes="ico" Data="{StaticResource IcoSun}" Stroke="#FFC107" />
+                            <TextBlock Text="Environment" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <!-- ═══════════════════ Status bar ═════════════ -->
+        <Border DockPanel.Dock="Bottom" Height="26" Background="#17171B"
+                BorderBrush="#2A2A31" BorderThickness="0,1,0,0">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Right" Name="StatusFPS" Text="0 FPS"
+                           VerticalAlignment="Center" Margin="0,0,12,0"
+                           Foreground="#FFC107" FontSize="11" FontWeight="Bold" />
+                <TextBlock Name="StatusHint"
+                           Text="Click selects · gizmo W/E/R, X world-local · right mouse looks · WASD flies (with RMB) · scroll zoom"
+                           VerticalAlignment="Center" Margin="12,0"
+                           Foreground="#6C6C78" FontSize="11" TextTrimming="CharacterEllipsis" />
+            </DockPanel>
+        </Border>
+
+        <!-- ═══════════ Docked panels (all resizable) ═══════════ -->
+        <Grid ColumnDefinitions="280,4,*,4,340" RowDefinitions="*,4,220">
+
+            <!-- ── Outliner ─────────────────────────── -->
+            <Border Grid.Row="0" Grid.Column="0" Classes="panel">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Classes="header">
+                        <DockPanel>
+                            <Path DockPanel.Dock="Left" Classes="ico" Data="{StaticResource IcoScene}"
+                                  Stroke="#FFC107" Margin="12,0,7,0" />
+                            <TextBlock DockPanel.Dock="Left" Text="OUTLINER" Classes="h" />
+                            <Button DockPanel.Dock="Right" Classes="tool" Padding="6,1" Height="21"
+                                    Margin="0,0,8,0" Click="OnCtxNewFolder" ToolTip.Tip="New folder">
+                                <Path Classes="ico" Width="12" Height="12"
+                                      Data="{StaticResource IcoFolder}" />
+                            </Button>
+                            <TextBlock DockPanel.Dock="Right" Name="OutlinerCount" Text=""
+                                       Classes="dim" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        </DockPanel>
+                    </Border>
+
+                    <Border DockPanel.Dock="Top" Height="30" Background="#121215"
+                            BorderBrush="#202027" BorderThickness="0,0,0,1">
+                        <Grid ColumnDefinitions="Auto,*" Margin="8,0">
+                            <Path Grid.Column="0" Classes="ico" Data="{StaticResource IcoSearch}"
+                                  Stroke="#6C6C78" Margin="0,0,6,0" />
+                            <!-- Doubles as the inline prompt when creating/renaming a folder -->
+                            <TextBox Grid.Column="1" Name="OutlinerFilter" Watermark="Filter…"
+                                     BorderThickness="0" Background="Transparent" FontSize="11"
+                                     VerticalAlignment="Center" TextChanged="OnOutlinerFilterChanged"
+                                     KeyDown="OnOutlinerFilterKeyDown" />
+                        </Grid>
+                    </Border>
+
+                    <TreeView Name="OutlinerTree" Margin="4"
+                              ItemTemplate="{StaticResource NodeTemplate}"
+                              SelectionChanged="OnOutlinerSelectionChanged"
+                              DragDrop.AllowDrop="True"
+                              PointerPressed="OnOutlinerPointerPressed"
+                              PointerMoved="OnOutlinerPointerMoved"
+                              DragDrop.DragOver="OnOutlinerDragOver"
+                              DragDrop.Drop="OnOutlinerDrop">
+                        <TreeView.ContextMenu>
+                            <ContextMenu>
+                                <MenuItem Header="Rename" Click="OnCtxRename" InputGesture="F2" />
+                                <MenuItem Header="Duplicate" Click="OnDuplicate" InputGesture="Ctrl+D" />
+                                <MenuItem Header="Delete" Click="OnCtxDelete" InputGesture="Delete" />
+                                <Separator />
+                                <MenuItem Header="Show / Hide" Click="OnCtxToggleVisibility" />
+                                <Separator />
+                                <MenuItem Header="New Folder" Click="OnCtxNewFolder" />
+                                <MenuItem Header="Move to Scene Root" Click="OnCtxMoveToRoot" />
+                                <Separator />
+                                <MenuItem Header="Focus in Viewport" Click="OnCtxFocus" />
+                            </ContextMenu>
+                        </TreeView.ContextMenu>
+                    </TreeView>
+                </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Row="0" Grid.Column="1" ResizeDirection="Columns" />
+
+            <!-- ── Viewport ─────────────────────────── -->
+            <Border Grid.Row="0" Grid.Column="2" Background="#000000">
+                <views:ViewportControl Name="Viewport" />
+            </Border>
+
+            <GridSplitter Grid.Row="0" Grid.Column="3" ResizeDirection="Columns" />
+
+            <!-- ── Inspector ────────────────────────── -->
+            <Border Grid.Row="0" Grid.Column="4" Classes="panel">
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Classes="header">
+                        <DockPanel>
+                            <Path DockPanel.Dock="Left" Classes="ico" Data="{StaticResource IcoTag}"
+                                  Stroke="#FFC107" Margin="12,0,7,0" />
+                            <TextBlock Text="INSPECTOR" Classes="h" />
+                        </DockPanel>
+                    </Border>
+
+                    <ScrollViewer>
+                        <StackPanel Spacing="8" Margin="10">
+
+                            <!-- Identity -->
+                            <Border Classes="card">
+                                <StackPanel Spacing="6">
+                                    <Grid ColumnDefinitions="Auto,*">
+                                        <Path Grid.Column="0" Name="InspectorIcon" Classes="ico"
+                                              Data="{StaticResource IcoCube}" Stroke="#8FB8E8"
+                                              Width="18" Height="18" Margin="0,0,8,0" />
+                                        <TextBox Grid.Column="1" Name="InspectorNameBox" Text=""
+                                                 FontSize="13" FontWeight="SemiBold"
+                                                 Watermark="(no selection)"
+                                                 KeyDown="OnRenameKeyDown" LostFocus="OnRenameCommit" />
+                                    </Grid>
+                                    <TextBlock Name="InspectorSub" Text="Select something in the viewport or outliner"
+                                               Classes="dim" TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Transform -->
+                            <Expander Name="CompTransform" IsExpanded="True">
+                                <Expander.Header>
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <Path Classes="ico" Data="{StaticResource IcoTransform}" Stroke="#FFB300" />
+                                        <TextBlock Text="TRANSFORM" Classes="section" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Expander.Header>
+
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Position" Classes="label" />
+                                    <Grid ColumnDefinitions="12,*,6,12,*,6,12,*">
+                                        <TextBlock Grid.Column="0" Text="X" Classes="axis" Foreground="#E5534B" />
+                                        <NumericUpDown Grid.Column="1" Name="PosX" Value="0" Increment="0.25"
+                                                       FormatString="F2" ValueChanged="OnTransformEdited" />
+                                        <TextBlock Grid.Column="3" Text="Y" Classes="axis" Foreground="#5FBF66" />
+                                        <NumericUpDown Grid.Column="4" Name="PosY" Value="0" Increment="0.25"
+                                                       FormatString="F2" ValueChanged="OnTransformEdited" />
+                                        <TextBlock Grid.Column="6" Text="Z" Classes="axis" Foreground="#4C8DF6" />
+                                        <NumericUpDown Grid.Column="7" Name="PosZ" Value="0" Increment="0.25"
+                                                       FormatString="F2" ValueChanged="OnTransformEdited" />
+                                    </Grid>
+
+                                    <TextBlock Text="Rotation (degrees)" Classes="label" />
+                                    <Grid ColumnDefinitions="12,*,6,12,*,6,12,*">
+                                        <TextBlock Grid.Column="0" Text="X" Classes="axis" Foreground="#E5534B" />
+                                        <NumericUpDown Grid.Column="1" Name="RotX" Value="0" Increment="5"
+                                                       FormatString="F1" ValueChanged="OnTransformEdited" />
+                                        <TextBlock Grid.Column="3" Text="Y" Classes="axis" Foreground="#5FBF66" />
+                                        <NumericUpDown Grid.Column="4" Name="RotY" Value="0" Increment="5"
+                                                       FormatString="F1" ValueChanged="OnTransformEdited" />
+                                        <TextBlock Grid.Column="6" Text="Z" Classes="axis" Foreground="#4C8DF6" />
+                                        <NumericUpDown Grid.Column="7" Name="RotZ" Value="0" Increment="5"
+                                                       FormatString="F1" ValueChanged="OnTransformEdited" />
+                                    </Grid>
+
+                                    <TextBlock Text="Scale" Classes="label" />
+                                    <Grid ColumnDefinitions="12,*,6,12,*,6,12,*">
+                                        <TextBlock Grid.Column="0" Text="X" Classes="axis" Foreground="#E5534B" />
+                                        <NumericUpDown Grid.Column="1" Name="ScaleX" Value="1" Increment="0.1"
+                                                       FormatString="F2" ValueChanged="OnTransformEdited" />
+                                        <TextBlock Grid.Column="3" Text="Y" Classes="axis" Foreground="#5FBF66" />
+                                        <NumericUpDown Grid.Column="4" Name="ScaleY" Value="1" Increment="0.1"
+                                                       FormatString="F2" ValueChanged="OnTransformEdited" />
+                                        <TextBlock Grid.Column="6" Text="Z" Classes="axis" Foreground="#4C8DF6" />
+                                        <NumericUpDown Grid.Column="7" Name="ScaleZ" Value="1" Increment="0.1"
+                                                       FormatString="F2" ValueChanged="OnTransformEdited" />
+                                    </Grid>
+
+                                    <Button Content="Reset transform" Classes="tool" Margin="0,8,0,0"
+                                            HorizontalAlignment="Stretch" Click="OnResetTransform" />
+                                </StackPanel>
+                            </Expander>
+
+                            <!-- Material -->
+                            <Expander Name="CompMaterial" IsExpanded="True">
+                                <Expander.Header>
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <Path Classes="ico" Data="{StaticResource IcoMaterial}" Stroke="#FFB300" />
+                                        <TextBlock Text="MATERIAL" Classes="section" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Expander.Header>
+
+                                <StackPanel Spacing="2">
+                                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4">
+                                        <Border Grid.Column="0" Name="MatSwatch" Height="26" CornerRadius="3"
+                                                Background="#B7B7BF" BorderBrush="#2A2A31" BorderThickness="1" />
+                                        <Button Grid.Column="1" Classes="tool" Content="Save as asset"
+                                                Margin="6,0,0,0" Click="OnSaveMaterialAsset"
+                                                ToolTip.Tip="Write these values to a reusable .tmat asset" />
+                                    </Grid>
+
+                                    <TextBlock Text="Base colour" Classes="label" />
+                                    <Grid ColumnDefinitions="12,*,6,12,*,6,12,*">
+                                        <TextBlock Grid.Column="0" Text="R" Classes="axis" Foreground="#E5534B" />
+                                        <NumericUpDown Grid.Column="1" Name="ColR" Value="1" Increment="0.05"
+                                                       Minimum="0" Maximum="1" FormatString="F2"
+                                                       ValueChanged="OnColorEdited" />
+                                        <TextBlock Grid.Column="3" Text="G" Classes="axis" Foreground="#5FBF66" />
+                                        <NumericUpDown Grid.Column="4" Name="ColG" Value="1" Increment="0.05"
+                                                       Minimum="0" Maximum="1" FormatString="F2"
+                                                       ValueChanged="OnColorEdited" />
+                                        <TextBlock Grid.Column="6" Text="B" Classes="axis" Foreground="#4C8DF6" />
+                                        <NumericUpDown Grid.Column="7" Name="ColB" Value="1" Increment="0.05"
+                                                       Minimum="0" Maximum="1" FormatString="F2"
+                                                       ValueChanged="OnColorEdited" />
+                                    </Grid>
+
+                                    <Grid ColumnDefinitions="66,*" Margin="0,8,0,0">
+                                        <TextBlock Grid.Column="0" Text="Metallic" Classes="dim"
+                                                   VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Name="MatMetallic" Minimum="0" Maximum="1"
+                                                Value="0" ValueChanged="OnMaterialEdited" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="66,*">
+                                        <TextBlock Grid.Column="0" Text="Roughness" Classes="dim"
+                                                   VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Name="MatRoughness" Minimum="0.02" Maximum="1"
+                                                Value="0.55" ValueChanged="OnMaterialEdited" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="66,*">
+                                        <TextBlock Grid.Column="0" Text="Emissive" Classes="dim"
+                                                   VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Name="MatEmissive" Minimum="0" Maximum="5"
+                                                Value="0" ValueChanged="OnMaterialEdited"
+                                                ToolTip.Tip="Needs an emissive texture to show in the G-buffer path" />
+                                    </Grid>
+                                </StackPanel>
+                            </Expander>
+
+                            <!-- Physics (optional component) -->
+                            <Expander Name="CompPhysics" IsExpanded="True" IsVisible="False">
+                                <Expander.Header>
+                                    <Grid ColumnDefinitions="Auto,*,Auto" Width="270">
+                                        <Path Grid.Column="0" Classes="ico" Data="{StaticResource IcoPhysics}"
+                                              Stroke="#FFB300" Margin="0,0,7,0" />
+                                        <TextBlock Grid.Column="1" Text="PHYSICS BODY" Classes="section"
+                                                   VerticalAlignment="Center" />
+                                        <Button Grid.Column="2" Content="✕" Classes="tool" Padding="6,0"
+                                                Click="OnRemovePhysicsComponent"
+                                                ToolTip.Tip="Remove this component" />
+                                    </Grid>
+                                </Expander.Header>
+
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="Body type" Classes="label" />
+                                    <ComboBox Name="PhysKind" SelectedIndex="0" HorizontalAlignment="Stretch"
+                                              SelectionChanged="OnPhysicsChanged">
+                                        <ComboBoxItem Content="None" />
+                                        <ComboBoxItem Content="Static — floors, walls" />
+                                        <ComboBoxItem Content="Dynamic — falls, collides" />
+                                    </ComboBox>
+
+                                    <Grid ColumnDefinitions="66,*" Margin="0,6,0,0">
+                                        <TextBlock Grid.Column="0" Text="Mass" Classes="dim"
+                                                   VerticalAlignment="Center" />
+                                        <NumericUpDown Grid.Column="1" Name="PhysMass" Value="1" Minimum="0.01"
+                                                       Maximum="10000" Increment="0.5" FormatString="F2"
+                                                       ValueChanged="OnPhysicsMassChanged" />
+                                    </Grid>
+                                    <TextBlock Text="Box collider (sphere for sphere primitives). Press ▶ to simulate."
+                                               Classes="dim" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                </StackPanel>
+                            </Expander>
+
+                            <!-- Light (shown when a light is selected) -->
+                            <Expander Name="CompLight" IsExpanded="True" IsVisible="False">
+                                <Expander.Header>
+                                    <StackPanel Orientation="Horizontal" Spacing="7">
+                                        <Path Classes="ico" Data="{StaticResource IcoLight}" Stroke="#FFB300" />
+                                        <TextBlock Text="LIGHT" Classes="section" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Expander.Header>
+
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Type" Classes="label" />
+                                    <ComboBox Name="LightType" SelectedIndex="1" HorizontalAlignment="Stretch"
+                                              SelectionChanged="OnLightEdited">
+                                        <ComboBoxItem Content="Directional" />
+                                        <ComboBoxItem Content="Point" />
+                                        <ComboBoxItem Content="Spot" />
+                                    </ComboBox>
+
+                                    <TextBlock Text="Position" Classes="label" />
+                                    <Grid ColumnDefinitions="12,*,6,12,*,6,12,*">
+                                        <TextBlock Grid.Column="0" Text="X" Classes="axis" Foreground="#E5534B" />
+                                        <NumericUpDown Grid.Column="1" Name="LightPosX" Value="0" Increment="0.5"
+                                                       FormatString="F2" ValueChanged="OnLightNumberEdited" />
+                                        <TextBlock Grid.Column="3" Text="Y" Classes="axis" Foreground="#5FBF66" />
+                                        <NumericUpDown Grid.Column="4" Name="LightPosY" Value="0" Increment="0.5"
+                                                       FormatString="F2" ValueChanged="OnLightNumberEdited" />
+                                        <TextBlock Grid.Column="6" Text="Z" Classes="axis" Foreground="#4C8DF6" />
+                                        <NumericUpDown Grid.Column="7" Name="LightPosZ" Value="0" Increment="0.5"
+                                                       FormatString="F2" ValueChanged="OnLightNumberEdited" />
+                                    </Grid>
+
+                                    <TextBlock Text="Colour" Classes="label" />
+                                    <Grid ColumnDefinitions="12,*,6,12,*,6,12,*">
+                                        <TextBlock Grid.Column="0" Text="R" Classes="axis" Foreground="#E5534B" />
+                                        <NumericUpDown Grid.Column="1" Name="LightR" Value="1" Increment="0.05"
+                                                       Minimum="0" Maximum="1" FormatString="F2"
+                                                       ValueChanged="OnLightNumberEdited" />
+                                        <TextBlock Grid.Column="3" Text="G" Classes="axis" Foreground="#5FBF66" />
+                                        <NumericUpDown Grid.Column="4" Name="LightG" Value="1" Increment="0.05"
+                                                       Minimum="0" Maximum="1" FormatString="F2"
+                                                       ValueChanged="OnLightNumberEdited" />
+                                        <TextBlock Grid.Column="6" Text="B" Classes="axis" Foreground="#4C8DF6" />
+                                        <NumericUpDown Grid.Column="7" Name="LightB" Value="1" Increment="0.05"
+                                                       Minimum="0" Maximum="1" FormatString="F2"
+                                                       ValueChanged="OnLightNumberEdited" />
+                                    </Grid>
+
+                                    <Grid ColumnDefinitions="66,*" Margin="0,8,0,0">
+                                        <TextBlock Grid.Column="0" Text="Intensity" Classes="dim"
+                                                   VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Name="LightIntensity" Minimum="0" Maximum="60"
+                                                Value="10" ValueChanged="OnLightEditedSlider" />
+                                    </Grid>
+                                    <Grid ColumnDefinitions="66,*">
+                                        <TextBlock Grid.Column="0" Text="Range" Classes="dim"
+                                                   VerticalAlignment="Center" />
+                                        <Slider Grid.Column="1" Name="LightRange" Minimum="0.5" Maximum="200"
+                                                Value="25" ValueChanged="OnLightEditedSlider" />
+                                    </Grid>
+                                    <CheckBox Name="LightShadows" Content="Cast shadows" Margin="0,4,0,0"
+                                              IsCheckedChanged="OnLightEdited" />
+                                    <Button Content="Delete light" Classes="tool" Foreground="#E5534B"
+                                            HorizontalAlignment="Stretch" Margin="0,8,0,0"
+                                            Click="OnDeleteLight" />
+                                </StackPanel>
+                            </Expander>
+
+                            <!-- Add component -->
+                            <Button Name="AddComponentButton" Classes="accent" HorizontalAlignment="Stretch"
+                                    Height="32" Click="OnAddComponent">
+                                <StackPanel Orientation="Horizontal" Spacing="7" HorizontalAlignment="Center">
+                                    <Path Classes="ico" Data="{StaticResource IcoPlus}" Stroke="#FFC107" />
+                                    <TextBlock Text="ADD COMPONENT" VerticalAlignment="Center"
+                                               FontWeight="Bold" FontSize="11" />
+                                </StackPanel>
+                                <Button.Flyout>
+                                    <MenuFlyout>
+                                        <MenuItem Header="Physics Body" Click="OnAddPhysicsComponent" />
+                                    </MenuFlyout>
+                                </Button.Flyout>
+                            </Button>
+                        </StackPanel>
+                    </ScrollViewer>
+                </DockPanel>
+            </Border>
+
+            <GridSplitter Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="5" ResizeDirection="Rows" />
+
+            <!-- ── Bottom dock ─────────────────────── -->
+            <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Classes="panel">
+                <TabControl>
+                    <TabItem Header="Content Browser">
+                        <Grid ColumnDefinitions="190,4,*">
+                            <!-- Folder tree -->
+                            <Border Grid.Column="0" Background="#0F0F12">
+                                <DockPanel>
+                                    <Border DockPanel.Dock="Top" Height="30" Background="#121215"
+                                            BorderBrush="#202027" BorderThickness="0,0,0,1">
+                                        <TextBlock Text="FOLDERS" Classes="h" FontSize="10" Margin="10,0" />
+                                    </Border>
+                                    <TreeView Name="FolderTree" Margin="2"
+                                              ItemTemplate="{StaticResource NodeTemplate}"
+                                              SelectionChanged="OnFolderSelectionChanged">
+                                        <TreeView.ContextMenu>
+                                            <ContextMenu>
+                                                <MenuItem Header="New Folder" Click="OnAssetNewFolder" />
+                                                <MenuItem Header="Rename Folder" Click="OnAssetRenameFolder" />
+                                                <MenuItem Header="Delete Folder" Click="OnAssetDeleteFolder" />
+                                                <Separator />
+                                                <MenuItem Header="Reveal in Explorer" Click="OnAssetReveal" />
+                                            </ContextMenu>
+                                        </TreeView.ContextMenu>
+                                    </TreeView>
+                                </DockPanel>
+                            </Border>
+
+                            <GridSplitter Grid.Column="1" ResizeDirection="Columns" />
+
+                            <!-- Asset grid -->
+                            <DockPanel Grid.Column="2">
+                                <Border DockPanel.Dock="Top" Height="34" Background="#121215"
+                                        BorderBrush="#202027" BorderThickness="0,0,0,1">
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                                Margin="8,0" Spacing="6">
+                                        <Button Classes="tool" Click="OnRescanAssets">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <Path Classes="ico" Data="{StaticResource IcoRefresh}" />
+                                                <TextBlock Text="Rescan" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Classes="tool" Click="OnNewMaterial">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <Path Classes="ico" Data="{StaticResource IcoMaterial}" />
+                                                <TextBlock Text="New Material" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Classes="tool" Content="Apply to selection"
+                                                Click="OnApplyMaterialToSelection" />
+                                        <Button Classes="tool" Content="Import" Click="OnImportSelectedAsset" />
+
+                                        <Border Classes="sep" />
+                                        <!-- Type filter. Textures are off by default: importing one
+                                             model drags in hundreds of them and buries everything. -->
+                                        <ToggleButton Name="FilterMeshes" Content="Meshes" IsChecked="True"
+                                                      Classes="chip" IsCheckedChanged="OnAssetFilterChanged" />
+                                        <ToggleButton Name="FilterMaterials" Content="Materials" IsChecked="True"
+                                                      Classes="chip" IsCheckedChanged="OnAssetFilterChanged" />
+                                        <ToggleButton Name="FilterScenes" Content="Scenes" IsChecked="True"
+                                                      Classes="chip" IsCheckedChanged="OnAssetFilterChanged" />
+                                        <ToggleButton Name="FilterTextures" Content="Textures" IsChecked="False"
+                                                      Classes="chip" IsCheckedChanged="OnAssetFilterChanged" />
+
+                                        <TextBlock Name="AssetHint" Text="" Classes="dim"
+                                                   VerticalAlignment="Center" Margin="6,0" />
+                                    </StackPanel>
+                                </Border>
+
+                                <ListBox Name="AssetList" Margin="6" DoubleTapped="OnAssetDoubleTapped"
+                                         SelectionMode="Single">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Use / Place" Click="OnImportSelectedAsset" />
+                                            <MenuItem Header="Apply Material to Selection"
+                                                      Click="OnApplyMaterialToSelection" />
+                                            <Separator />
+                                            <MenuItem Header="Duplicate Material" Click="OnDuplicateMaterial" />
+                                            <MenuItem Header="Rename Material" Click="OnRenameMaterial" />
+                                            <MenuItem Header="Delete Material" Click="OnDeleteMaterial" />
+                                            <Separator />
+                                            <MenuItem Header="Reveal in Explorer" Click="OnAssetRevealFile" />
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ListBox.ItemsPanel>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate DataType="models:AssetItem">
+                                            <StackPanel Width="92" Height="94" Spacing="6" Margin="2">
+                                                <Border Width="60" Height="52" CornerRadius="5"
+                                                        Background="#1E1E23" BorderBrush="#2A2A31"
+                                                        BorderThickness="1" HorizontalAlignment="Center">
+                                                    <Path Width="26" Height="26" Stretch="Uniform"
+                                                          Data="{Binding IconKey, Converter={StaticResource IconConverter}}"
+                                                          Stroke="{Binding IconBrush}" StrokeThickness="1.4"
+                                                          Fill="Transparent"
+                                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                </Border>
+                                                <TextBlock Text="{Binding Name}" FontSize="10.5"
+                                                           HorizontalAlignment="Center" TextAlignment="Center"
+                                                           TextWrapping="Wrap" MaxLines="2"
+                                                           TextTrimming="CharacterEllipsis" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Console">
+                        <ListBox Name="ConsoleList" Margin="4" FontFamily="Consolas,monospace" />
+                    </TabItem>
+                </TabControl>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>

@@ -15,6 +15,7 @@ Window::Window(const WindowDesc& desc) : m_width(desc.width), m_height(desc.heig
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, desc.resizable ? GLFW_TRUE : GLFW_FALSE);
+  glfwWindowHint(GLFW_DECORATED, desc.decorated ? GLFW_TRUE : GLFW_FALSE);
   glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
 
   m_window = glfwCreateWindow(static_cast<int>(desc.width), static_cast<int>(desc.height),
