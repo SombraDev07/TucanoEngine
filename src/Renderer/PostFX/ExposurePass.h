@@ -42,6 +42,8 @@ struct TonemapPassContext {
   rhi::Sampler& linearSamp;
   float bloomStrength = 0.25f;
   float exposureFallback = 1.0f;
+  /// Purkinje strength: how strongly dim parts of the frame desaturate toward blue. 0 disables it.
+  float purkinjeStrength = 0.0f;
   rhi::Viewport viewport{};
   rhi::Scissor scissor{};
 };

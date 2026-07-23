@@ -130,6 +130,45 @@ typedef enum {
 TUCANO_API uint32_t tucano_scene_spawn_primitive(TucanoScene* scene, TucanoPrimitive prim, TucanoVec3 pos,
                                                  float scale);
 
+// ── Animation (Phase I-1) ────────────────────────────
+
+// Imports a .gltf/.glb *with* its skeleton and animation clips, if it has them. Falls back to a
+// plain mesh import when the file has no skin. Returns the first object index or 0xFFFFFFFF.
+TUCANO_API uint32_t tucano_scene_import_animated_mesh(TucanoScene* scene, const char* path,
+                                                      TucanoVec3 position, float scale);
+
+// Clips available on an object (0 when it has no animation).
+TUCANO_API uint32_t tucano_anim_clip_count(TucanoScene* scene, uint32_t object);
+TUCANO_API const char* tucano_anim_clip_name(TucanoScene* scene, uint32_t object, uint32_t clip);
+TUCANO_API float tucano_anim_clip_duration(TucanoScene* scene, uint32_t object, uint32_t clip);
+TUCANO_API uint32_t tucano_anim_bone_count(TucanoScene* scene, uint32_t object);
+
+// Playback. The runtime advances time and rebuilds the skinning palette every frame.
+TUCANO_API void tucano_anim_play(TucanoScene* scene, uint32_t object, uint32_t clip, bool loop);
+TUCANO_API void tucano_anim_stop(TucanoScene* scene, uint32_t object);
+TUCANO_API void tucano_anim_pause(TucanoScene* scene, uint32_t object, bool paused);
+TUCANO_API bool tucano_anim_is_playing(TucanoScene* scene, uint32_t object);
+TUCANO_API int32_t tucano_anim_current_clip(TucanoScene* scene, uint32_t object);
+TUCANO_API float tucano_anim_get_time(TucanoScene* scene, uint32_t object);
+TUCANO_API void tucano_anim_set_time(TucanoScene* scene, uint32_t object, float time);
+TUCANO_API float tucano_anim_get_speed(TucanoScene* scene, uint32_t object);
+TUCANO_API void tucano_anim_set_speed(TucanoScene* scene, uint32_t object, float speed);
+
+// ── Skinning (Phase I-1) ─────────────────────────────
+
+// Uploads this object's skinning palette: `count` matrices of 16 floats each, in the order the
+// vertices' bone indices expect (world x inverseBindPose per bone). Passing count 0 makes the
+// object rigid again. The renderer picks these up on the next frame.
+TUCANO_API void tucano_scene_set_skinning_matrices(TucanoScene* scene, uint32_t index,
+                                                   const float* matrices, uint32_t count);
+TUCANO_API uint32_t tucano_scene_get_skinning_bone_count(TucanoScene* scene, uint32_t index);
+
+// Replaces an object's mesh with a skinned test rig: a tall box split into `segments` rings, each
+// ring weighted to one bone in a straight chain. Used to verify GPU skinning end to end without a
+// character asset.
+TUCANO_API uint32_t tucano_scene_spawn_skinned_test(TucanoScene* scene, TucanoVec3 pos,
+                                                    uint32_t segments);
+
 // Moves an existing object (index from spawn / object_count).
 TUCANO_API void tucano_scene_set_object_position(TucanoScene* scene, uint32_t index, TucanoVec3 pos);
 
@@ -293,6 +332,59 @@ TUCANO_API bool tucano_scene_save(TucanoScene* scene, const char* path);
 // Replaces the current scene with the one in `path`. Returns false if it can't be read or parsed.
 TUCANO_API bool tucano_scene_load(TucanoScene* scene, const char* path);
 
+// ── Input (Phase I-0: virtual input) ─────────────────
+// Physical codes are engine-stable (see src/Input/InputFwd.h ButtonCode) — not GLFW values — so
+// saved bindings keep working if the windowing backend changes.
+
+TUCANO_API bool tucano_input_is_button_down(TucanoRuntime* rt, int buttonCode);
+TUCANO_API bool tucano_input_is_button_held(TucanoRuntime* rt, int buttonCode);
+TUCANO_API void tucano_input_get_mouse_delta(TucanoRuntime* rt, float* dx, float* dy);
+TUCANO_API float tucano_input_get_scroll(TucanoRuntime* rt);
+
+// Virtual buttons and axes are addressed by name, so rebinding never touches gameplay code.
+TUCANO_API bool tucano_input_is_virtual_button_down(TucanoRuntime* rt, const char* name);
+TUCANO_API bool tucano_input_is_virtual_button_held(TucanoRuntime* rt, const char* name);
+TUCANO_API bool tucano_input_is_virtual_button_up(TucanoRuntime* rt, const char* name);
+TUCANO_API float tucano_input_get_virtual_axis(TucanoRuntime* rt, const char* name);
+
+// Binding management. `modifiers` is a bitmask: 1=Shift, 2=Ctrl, 4=Alt.
+TUCANO_API void tucano_input_bind_button(TucanoRuntime* rt, const char* name, int buttonCode,
+                                         int modifiers, bool repeatable);
+TUCANO_API void tucano_input_unbind_button(TucanoRuntime* rt, const char* name);
+TUCANO_API void tucano_input_bind_axis(TucanoRuntime* rt, const char* name, int axis,
+                                       float deadZone, float sensitivity, bool invert,
+                                       bool normalize);
+TUCANO_API void tucano_input_reset_bindings(TucanoRuntime* rt);
+
+// Name of a physical button, for binding UI. Never null.
+TUCANO_API const char* tucano_input_button_name(int buttonCode);
+TUCANO_API int tucano_input_button_from_name(const char* name);
+TUCANO_API int tucano_input_button_count(void);
+
+// ── Skybox / environment lighting (Phase I-1) ────────
+
+// Re-cooks image-based lighting from an .hdr equirectangular map: diffuse irradiance plus the
+// filtered specular chain. Path is resolved against the engine assets folder first, then as given.
+// Returns false and keeps the current environment when the file can't be used.
+TUCANO_API bool tucano_skybox_set_texture(TucanoRuntime* rt, const char* hdriPath);
+TUCANO_API const char* tucano_skybox_get_texture(TucanoRuntime* rt);
+
+// Brightness multiplier applied to the environment lighting.
+TUCANO_API void tucano_skybox_set_brightness(TucanoRuntime* rt, float brightness);
+TUCANO_API float tucano_skybox_get_brightness(TucanoRuntime* rt);
+
+// ── Celestial bodies ─────────────────────────────────
+// Read-only: these are derived from timeOfDay, dayOfYear and latitude in the environment struct.
+// Directions point FROM the body TOWARD the scene, matching how light directions are stored, so
+// negate one to get the direction you look to see the body.
+
+TUCANO_API TucanoVec3 tucano_sky_sun_direction(TucanoRuntime* rt);
+TUCANO_API TucanoVec3 tucano_sky_moon_direction(TucanoRuntime* rt);
+/// 0 = new, 0.5 = full, 1 = new again.
+TUCANO_API float tucano_sky_moon_phase(TucanoRuntime* rt);
+/// Fraction of the lunar disc that is lit, 0..1.
+TUCANO_API float tucano_sky_moon_illumination(TucanoRuntime* rt);
+
 // ── Environment ──────────────────────────────────────
 // One flat struct instead of a setter per field. Booleans are int32_t so the layout is blittable
 // from C# with no marshalling attributes.
@@ -346,6 +438,19 @@ typedef struct {
   int32_t giTier; // 0=Off 1=Low 2=Medium 3=High (GITier)
   int32_t shadowMapSize;
   float pcssLightSize;
+
+  // Night sky. Appended at the end so older layouts stay binary-compatible.
+  int32_t enableMoon;
+  int32_t enableStars;
+  float moonIntensity;         // moonlight on the scene
+  float moonDiscBrightness;    // the disc itself
+  float moonAngularRadiusDeg;  // real moon is 0.26; larger reads better on screen
+  float starIntensity;
+  float starTwinkle;
+  float starSizeDeg;
+  float purkinjeStrength;      // night-vision desaturation in the tonemapper
+  float latitudeDeg;           // observer position: decides which constellations are up
+  float dayOfYear;             // 0..365; with latitude it sets the sidereal rotation
 } TucanoEnvironment;
 
 typedef struct {

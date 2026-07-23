@@ -13,6 +13,9 @@ using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using EditorCore;
 using EditorCore.Interop;
+using EditorCore.Testing;
+using TucanoEditor.Extensibility;
+using TucanoEditor.Inspector;
 using TucanoEditor.Models;
 using TucanoEditor.Views;
 
@@ -31,9 +34,17 @@ public partial class MainWindow : Window
     private string _outlinerFilter = "";
     private int _selectedLight = -1;
     private readonly UndoStack _undo = new();
-    private EnvironmentWindow? _environmentWindow;
+    /// The Environment window when it happens to be open. It is an ordinary registered panel now;
+    /// this is just a typed shortcut for the few places that talk to it directly.
+    private EnvironmentWindow? _environmentWindow =>
+        _openPanels.TryGetValue("environment", out var w) ? w as EnvironmentWindow : null;
     private string? _scenePath;
     private readonly ObservableCollection<string> _console = new();
+
+    // Everything pluggable hangs off these two. The runtime grows constantly, so new features
+    // register here instead of being wired through the window by hand.
+    private readonly EditorExtensions _extensions = new();
+    private InspectorHost? _inspectorHost;
 
     /// Status-bar message that also lands in the Console tab, so nothing scrolls away unseen.
     private void Log(string message)
@@ -62,6 +73,8 @@ public partial class MainWindow : Window
             // so the editor's status bar is the single FPS readout.
             _runtime.CameraNavigation = true;
             _runtime.OverlayVisible = false;
+
+            RegisterExtensions();
 
             OutlinerTree.ItemsSource = _outlinerRoots;
             FolderTree.ItemsSource = _folderRoots;
@@ -301,6 +314,72 @@ public partial class MainWindow : Window
                         break;
 
                     case 14:
+                        // The Tools menu is generated from the panel registry — an entry per panel
+                        // plus the fixed light commands. If registration silently failed the menu
+                        // would come up empty and nothing else would notice.
+                        var toolItems = ToolsMenu.Items.OfType<MenuItem>().ToList();
+                        var envItem = toolItems.FirstOrDefault(m => (m.Header as string)?.StartsWith("Environment") == true);
+                        Record(envItem is not null && toolItems.Count >= _extensions.Panels.Count + 3
+                            ? $"selftest: tools menu built from registry ({_extensions.Panels.Count} panel(s))"
+                            : $"selftest: FAILED - tools menu has {toolItems.Count} item(s), no Environment entry");
+                        break;
+
+                    case 15:
+                        // Skybox round trip: set an HDRI, read it back, then return to procedural.
+                        var hdri = _allAssets.FirstOrDefault(a => a.Kind == AssetKind.Texture &&
+                                                                 a.Path.EndsWith(".hdr", StringComparison.OrdinalIgnoreCase));
+                        if (hdri is not null && _runtime is not null)
+                        {
+                            var applied = _runtime.SetSkyboxTexture(hdri.Path) &&
+                                          _runtime.GetSkyboxTexture().Length > 0;
+                            _runtime.SetSkyboxTexture("");
+                            Record(applied && _runtime.GetSkyboxTexture().Length == 0
+                                ? "selftest: skybox HDRI set and cleared"
+                                : "selftest: FAILED - skybox round trip");
+                        }
+                        else
+                        {
+                            // Not a failure: the sample assets carry no .hdr. Still prove the getter
+                            // and the brightness property are wired.
+                            _runtime!.SkyboxBrightness = 1.5f;
+                            Record(Math.Abs(_runtime.SkyboxBrightness - 1.5f) < 0.001f
+                                ? "selftest: skybox brightness ok (no .hdr asset to load)"
+                                : "selftest: FAILED - skybox brightness did not stick");
+                        }
+                        break;
+
+                    case 16:
+                        // The whole point of the extensibility work: importing a rig must make the
+                        // Animation section appear in the inspector on its own.
+                        var fixturePath = SkinnedGltfFixture.Write(
+                            Path.Combine(Path.GetTempPath(), "tucano_selftest_rig"));
+                        ImportMeshAt(fixturePath);
+                        Record(SelectedObjectIndex >= 0 && _runtime!.GetBoneCount((uint)SelectedObjectIndex) > 0
+                            ? $"selftest: imported rig with {_runtime.GetBoneCount((uint)SelectedObjectIndex)} bones"
+                            : "selftest: FAILED - animated import produced no skeleton");
+                        break;
+
+                    case 17:
+                        var animExpander = DynamicSections.Children.OfType<Expander>()
+                            .FirstOrDefault(x => x.IsVisible);
+                        if (animExpander is null || SelectedObjectIndex < 0)
+                        {
+                            Record("selftest: FAILED - animation section did not appear for the rig");
+                            break;
+                        }
+
+                        var obj = (uint)SelectedObjectIndex;
+                        var clipCount = _runtime!.GetClipCount(obj);
+                        _runtime.PlayClip(obj, 0, true);
+                        _runtime.SetClipTime(obj, 0.5f);
+                        Record(clipCount > 0 && _runtime.IsClipPlaying(obj) &&
+                               Math.Abs(_runtime.GetClipTime(obj) - 0.5f) < 0.05f
+                            ? $"selftest: animation section live ('{_runtime.GetClipName(obj, 0)}', {clipCount} clip(s), scrub ok)"
+                            : "selftest: FAILED - clip playback/scrub did not take");
+                        _runtime.StopClip(obj);
+                        break;
+
+                    case 18:
                         Record($"selftest: still alive, {StatusFPS.Text}");
                         break;
 
@@ -615,7 +694,7 @@ public partial class MainWindow : Window
             _undo.Clear();
             Title = $"TUCANO EDITOR — {Path.GetFileName(path)}";
             RefreshOutliner();
-            _environmentWindow?.LoadFromRuntime(); // the scene carries its own environment
+            NotifyPanelsSceneChanged(); // the scene carries its own environment
             Log($"Loaded {path} — {_runtime.ObjectCount} objects");
         }
         else
@@ -1041,7 +1120,9 @@ public partial class MainWindow : Window
         var fwd = _runtime.GetCameraForward();
         const float distance = 10f;
         var before = _runtime.ObjectCount;
-        var index = _runtime.ImportMesh(path,
+        // Always import through the animated path: it falls back to plain geometry when the file
+        // has no skin, and a rig that reaches the runtime is what makes the Animation section show up.
+        var index = _runtime.ImportAnimatedMesh(path,
             eye.X + fwd.X * distance, eye.Y + fwd.Y * distance, eye.Z + fwd.Z * distance, 1f);
 
         if (index == RuntimeHost.InvalidObject)
@@ -1055,12 +1136,17 @@ public partial class MainWindow : Window
         var rt = _runtime;
         _undo.Push(new UndoAction($"Import {Path.GetFileName(path)}",
             undo: () => { for (uint k = 0; k < added; ++k) rt.RemoveObject(rt.ObjectCount - 1); },
-            redo: () => rt.ImportMesh(path, eye.X + fwd.X * distance, eye.Y + fwd.Y * distance,
-                                      eye.Z + fwd.Z * distance, 1f)));
+            redo: () => rt.ImportAnimatedMesh(path, eye.X + fwd.X * distance, eye.Y + fwd.Y * distance,
+                                              eye.Z + fwd.Z * distance, 1f)));
 
         RefreshOutliner();
         SelectObject((int)index);
-        Log($"Imported {Path.GetFileName(path)} — {added} object(s)");
+
+        var bones = _runtime.GetBoneCount(index);
+        var clips = bones > 0 ? _runtime.GetClipCount(index) : 0;
+        Log(bones > 0
+            ? $"Imported {Path.GetFileName(path)} — {added} object(s), {bones} bones, {clips} clip(s)"
+            : $"Imported {Path.GetFileName(path)} — {added} object(s)");
     }
 
     // ── Lights ────────────────────────────────────────
@@ -1157,20 +1243,8 @@ public partial class MainWindow : Window
 
     // ── Environment window ────────────────────────────
 
-    private void OnOpenEnvironment(object? sender, RoutedEventArgs e)
-    {
-        if (_runtime is not { IsAlive: true }) return;
-
-        if (_environmentWindow is { } win && win.IsVisible)
-        {
-            win.Activate();
-            return;
-        }
-
-        _environmentWindow = new EnvironmentWindow(_runtime);
-        _environmentWindow.Closed += (_, _) => _environmentWindow = null;
-        _environmentWindow.Show(this);
-    }
+    /// Kept for the F-key shortcut; the menu entry now comes from the panel registry.
+    private void OnOpenEnvironment(object? sender, RoutedEventArgs e) => OpenPanel("environment");
 
     // ── Gizmo ─────────────────────────────────────────
 
@@ -1371,6 +1445,88 @@ public partial class MainWindow : Window
         {
             _syncingUi = false;
         }
+
+        UpdateDynamicSections(index, -1);
+    }
+
+    // ── Extensibility ─────────────────────────────────
+
+    private void RegisterExtensions()
+    {
+        _inspectorHost = new InspectorHost(DynamicSections, _extensions);
+
+        // Built-ins. Anything added here appears in the inspector and the Tools menu automatically.
+        _extensions.AddSection(new AnimationSection());
+        _extensions.AddPanel(new EnvironmentPanel());
+
+        BuildToolsMenu();
+    }
+
+    /// Rebuilds the Tools menu from the registry, keeping the fixed entries below it.
+    private void BuildToolsMenu()
+    {
+        ToolsMenu.Items.Clear();
+        foreach (var panel in _extensions.Panels)
+        {
+            var item = new MenuItem { Header = panel.Title + "..." };
+            var id = panel.Id;
+            item.Click += (_, _) => OpenPanel(id);
+            ToolsMenu.Items.Add(item);
+        }
+
+        ToolsMenu.Items.Add(new Separator());
+        var pointLight = new MenuItem { Header = "Add Point Light" };
+        pointLight.Click += OnAddPointLight;
+        var spotLight = new MenuItem { Header = "Add Spot Light" };
+        spotLight.Click += OnAddSpotLight;
+        var dirLight = new MenuItem { Header = "Add Directional Light" };
+        dirLight.Click += OnAddDirectionalLight;
+        ToolsMenu.Items.Add(pointLight);
+        ToolsMenu.Items.Add(spotLight);
+        ToolsMenu.Items.Add(dirLight);
+    }
+
+    private readonly Dictionary<string, Window> _openPanels = new();
+
+    /// Opens (or focuses) a registered panel. One live window per id.
+    private void OpenPanel(string id)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        if (_extensions.FindPanel(id) is not { } panel) return;
+
+        if (_openPanels.TryGetValue(id, out var existing) && existing.IsVisible)
+        {
+            existing.Activate();
+            return;
+        }
+
+        var window = panel.CreateWindow(_runtime);
+        window.Closed += (_, _) => _openPanels.Remove(id);
+        _openPanels[id] = window;
+        window.Show(this);
+    }
+
+    /// Tells every open panel the scene was replaced, so none of them show stale values.
+    private void NotifyPanelsSceneChanged()
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        foreach (var (id, window) in _openPanels)
+        {
+            _extensions.FindPanel(id)?.OnSceneChanged(window, _runtime);
+        }
+    }
+
+    private void UpdateDynamicSections(int objectIndex, int lightIndex)
+    {
+        if (_inspectorHost is null || _runtime is not { IsAlive: true }) return;
+        _inspectorHost.Update(new InspectorContext
+        {
+            Runtime = _runtime,
+            ObjectIndex = objectIndex,
+            LightIndex = lightIndex,
+            RequestOutlinerRefresh = RefreshOutliner,
+            Log = Log,
+        });
     }
 
     /// Fills the inspector for a light instead of a mesh.
@@ -1409,6 +1565,8 @@ public partial class MainWindow : Window
         {
             _syncingUi = false;
         }
+
+        UpdateDynamicSections(-1, lightIndex);
     }
 
     private static Geometry? IconFor(SceneNodeKind kind)
@@ -2013,7 +2171,9 @@ public partial class MainWindow : Window
     private void OnClosing(object? sender, WindowClosingEventArgs e)
     {
         _renderLoopRunning = false;
-        _environmentWindow?.Close();
+        // Panels hold the runtime handle; they must all be gone before it is disposed.
+        foreach (var window in _openPanels.Values.ToList()) window.Close();
+        _openPanels.Clear();
         _runtime?.Dispose();
         _runtime = null;
     }

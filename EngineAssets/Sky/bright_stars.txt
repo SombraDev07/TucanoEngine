@@ -1,0 +1,149 @@
+# Tucano bright-star catalogue
+#
+# Curated subset of the Yale Bright Star Catalogue: the ~120 brightest stars, down to roughly
+# magnitude 3.0. That is every star that carries a constellation's shape, which is what the eye
+# actually reads in a night sky.
+#
+# To use a fuller catalogue, replace this file. Any text file in this format works — converting
+# BSC5 (9,110 stars) or the HYG database to it is a few lines of script. The loader has no size
+# limit; the renderer bins whatever it is given.
+#
+# Columns:
+#   name          no spaces (underscores instead)
+#   ra_hours      right ascension, J2000, in HOURS (0..24). 1h = 15 degrees.
+#   dec_degrees   declination, J2000, in degrees (-90..+90)
+#   v_mag         apparent visual magnitude. Lower is BRIGHTER; the naked-eye limit is ~6.5.
+#   b_v           colour index. Negative = hot/blue, positive = cool/red.
+#
+# Positions are J2000 and rounded to about a thousandth of an hour / degree, which is far below
+# one pixel at any playable field of view.
+#
+# name                ra_hours    dec_deg    v_mag   b_v
+Sirius                  6.7525    -16.716    -1.46   0.00
+Canopus                 6.3992    -52.696    -0.74   0.15
+Rigil_Kentaurus        14.6600    -60.834    -0.27   0.71
+Arcturus               14.2610     19.182    -0.05   1.23
+Vega                   18.6156     38.784     0.03   0.00
+Capella                 5.2782     45.998     0.08   0.80
+Rigel                   5.2423     -8.202     0.13  -0.03
+Procyon                 7.6550      5.225     0.34   0.42
+Achernar                1.6286    -57.237     0.46  -0.16
+Betelgeuse              5.9195      7.407     0.50   1.85
+Hadar                  14.0637    -60.373     0.61  -0.23
+Altair                 19.8464      8.868     0.77   0.22
+Acrux                  12.4433    -63.099     0.77  -0.24
+Aldebaran               4.5987     16.509     0.85   1.54
+Spica                  13.4199    -11.161     0.97  -0.23
+Antares                16.4901    -26.432     1.09   1.83
+Pollux                  7.7553     28.026     1.14   1.00
+Fomalhaut              22.9608    -29.622     1.16   0.09
+Deneb                  20.6905     45.280     1.25   0.09
+Mimosa                 12.7953    -59.689     1.25  -0.24
+Regulus                10.1395     11.967     1.35  -0.11
+Adhara                  6.9770    -28.972     1.50  -0.21
+Castor                  7.5767     31.888     1.58   0.03
+Shaula                 17.5601    -37.104     1.62  -0.22
+Gacrux                 12.5194    -57.113     1.63   1.59
+Bellatrix               5.4188      6.350     1.64  -0.22
+Elnath                  5.4382     28.608     1.65  -0.13
+Miaplacidus             9.2200    -69.717     1.67   0.07
+Alnilam                 5.6036     -1.202     1.69  -0.18
+Alnair                 22.1372    -46.961     1.74  -0.13
+Alnitak                 5.6793     -1.943     1.77  -0.21
+Alioth                 12.9005     55.960     1.77  -0.02
+Dubhe                  11.0621     61.751     1.79   1.07
+Mirfak                  3.4054     49.861     1.79   0.48
+Wezen                   7.1399    -26.393     1.83   0.67
+Kaus_Australis         18.4029    -34.385     1.85  -0.03
+Sargas                 17.6222    -42.998     1.86   0.40
+Avior                   8.3752    -59.509     1.86   1.20
+Alkaid                 13.7923     49.313     1.86  -0.19
+Menkalinan              5.9922     44.947     1.90   0.08
+Atria                  16.8110    -69.028     1.91   1.44
+Alhena                  6.6285     16.399     1.93   0.00
+Peacock                20.4275    -56.735     1.94  -0.12
+Alsephina               8.7451    -54.708     1.96   0.04
+Polaris                 2.5303     89.264     1.98   0.60
+Mirzam                  6.3783    -17.956     1.98  -0.24
+Alphard                 9.4597     -8.659     1.98   1.44
+Hamal                   2.1195     23.463     2.00   1.15
+Diphda                  0.7265    -17.987     2.04   1.02
+Nunki                  18.9211    -26.297     2.05  -0.13
+Menkent                14.1113    -36.370     2.06   1.01
+Alpheratz               0.1398     29.091     2.06  -0.11
+Mirach                  1.1622     35.621     2.06   1.58
+Tiaki                  22.7111    -46.885     2.07   1.60
+Kochab                 14.8451     74.156     2.08   1.47
+Rasalhague             17.5822     12.560     2.08   0.15
+Algieba                10.3328     19.842     2.08   1.13
+Saiph                   5.7959     -9.670     2.09  -0.17
+Almach                  2.0650     42.330     2.10   1.37
+Algol                   3.1361     40.956     2.12  -0.05
+Denebola               11.8177     14.572     2.14   0.09
+Muhlifain              12.6923    -48.960     2.20  -0.01
+Aspidiske               9.2850    -59.275     2.21   0.18
+Suhail                  9.1332    -43.433     2.21   1.66
+Alphecca               15.5781     26.715     2.22  -0.02
+Mintaka                 5.5334     -0.299     2.25  -0.18
+Sadr                   20.3705     40.257     2.23   0.68
+Eltanin                17.9434     51.489     2.23   1.52
+Mizar                  13.3988     54.925     2.23   0.06
+Schedar                 0.6751     56.537     2.24   1.17
+Naos                    8.0597    -40.003     2.25  -0.27
+Caph                    0.1530     59.150     2.28   0.38
+Dschubba               16.0056    -22.622     2.29  -0.12
+Larawag                16.8361    -34.293     2.29   1.14
+Izar                   14.7498     27.074     2.35   0.97
+Merak                  11.0307     56.382     2.37   0.03
+Ankaa                   0.4381    -42.306     2.38   1.09
+Girtab                 17.7080    -39.030     2.39  -0.20
+Enif                   21.7364      9.875     2.39   1.53
+Sabik                  17.1729    -15.725     2.43   0.06
+Scheat                 23.0629     28.083     2.44   1.65
+Phecda                 11.8972     53.695     2.44   0.04
+Alderamin              21.3096     62.586     2.45   0.22
+Aludra                  7.4015    -29.303     2.45  -0.08
+Markeb                  9.3685    -55.011     2.47  -0.18
+Navi                    0.9451     60.717     2.47  -0.15
+Aljanah                20.7702     33.970     2.48   1.03
+Markab                 23.0793     15.205     2.49  -0.04
+Menkar                  3.0380      4.090     2.53   1.63
+Arneb                   5.5455    -17.822     2.58   0.21
+Gienah                 12.2634    -17.542     2.59  -0.11
+Zubeneschamali         15.2833     -9.383     2.61  -0.11
+Acrab                  16.0906    -19.806     2.62  -0.07
+Unukalhai              15.7378      6.426     2.63   1.17
+Sheratan                1.9105     20.808     2.64   0.13
+Kraz                   12.5735    -23.397     2.65   0.89
+Ruchbah                 1.4303     60.235     2.68   0.16
+Kaus_Media             18.3499    -29.828     2.70   1.38
+Tarazed                19.7710     10.613     2.72   1.52
+Yed_Prior              16.2394     -3.694     2.73   1.58
+Zubenelgenubi          14.8479    -16.042     2.75   0.15
+Cebalrai               17.7243      4.567     2.76   1.16
+Rastaban               17.5073     52.301     2.79   0.95
+Nihal                   5.4707    -20.759     2.84   0.82
+Deneb_Algedi           21.7840    -16.127     2.85   0.18
+Alcyone                 3.7914     24.105     2.87  -0.09
+Acamar                  2.9711    -40.305     2.88   0.13
+Cor_Caroli             12.9338     38.318     2.89  -0.12
+Gomeisa                 7.4526      8.289     2.89  -0.09
+Sadalsuud              21.5257     -5.571     2.90   0.83
+Algorab                12.4976    -16.516     2.94  -0.05
+Sadalmelik             22.0964     -0.320     2.94   0.98
+Zaurak                  3.9672    -13.509     2.97   1.59
+Mebsuta                 6.7325     25.131     2.98   1.40
+Dabih                  20.3502    -14.781     3.05   0.79
+Albireo                19.5121     27.960     3.05   1.13
+Rasalgethi             17.2443     14.390     3.06   1.16
+Alphirk                21.4776     70.561     3.23  -0.22
+Errai                  23.6558     77.632     3.21   1.03
+Skat                   22.9109    -15.821     3.27   0.06
+Megrez                 12.2571     57.033     3.31   0.08
+Segin                   1.9067     63.670     3.35  -0.15
+Meissa                  5.5855      9.934     3.39  -0.16
+Wasat                   7.3353     21.982     3.53   0.37
+Thuban                 14.0733     64.376     3.65  -0.05
+Nashira                21.6683    -16.662     3.68   0.32
+Alshain                19.9219      6.407     3.71   0.86
+Alcor                  13.4204     54.988     3.99   0.16

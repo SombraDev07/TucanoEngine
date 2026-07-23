@@ -87,7 +87,7 @@ void executeTonemapPass(TonemapPassContext& ctx) {
   ctx.cmd.setPipeline(ctx.tonemapPSO);
 
   const uint32_t expIdx = ctx.exposureTex ? bindlessOf(*ctx.exposureTex) : 0u;
-  PostCB tcb{{ctx.exposureFallback, ctx.bloomStrength, 0, 0},
+  PostCB tcb{{ctx.exposureFallback, ctx.bloomStrength, ctx.purkinjeStrength, 0},
              {0, 0, 0, 0},
              {bindlessOf(ctx.hdr), bindlessOf(ctx.bloom), expIdx, 0},
              {}};

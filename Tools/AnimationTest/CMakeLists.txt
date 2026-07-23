@@ -1,0 +1,2 @@
+add_executable(TucanoAnimationTest main.cpp)
+target_link_libraries(TucanoAnimationTest PRIVATE TucanoRuntime)

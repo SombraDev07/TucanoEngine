@@ -90,6 +90,13 @@ public struct TucanoEnvironment
     public int EnableRTShadows, EnableRTReflections, EnableVoxelGI, EnableIBL;
     public int GiTier, ShadowMapSize;
     public float PcssLightSize;
+
+    // Night sky — appended to match the C struct, which grows only at the end.
+    public int EnableMoon, EnableStars;
+    public float MoonIntensity, MoonDiscBrightness, MoonAngularRadiusDeg;
+    public float StarIntensity, StarTwinkle, StarSizeDeg;
+    public float PurkinjeStrength;
+    public float LatitudeDeg, DayOfYear;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -264,6 +271,111 @@ public static class TucanoApi
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern float tucano_gizmo_get_snap(IntPtr rt);
+
+    // ── Input (virtual input, Phase I-0) ──
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_input_is_button_held(IntPtr rt, int buttonCode);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_input_get_mouse_delta(IntPtr rt, out float dx, out float dy);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_input_is_virtual_button_held(IntPtr rt, [MarshalAs(UnmanagedType.LPStr)] string name);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_input_get_virtual_axis(IntPtr rt, [MarshalAs(UnmanagedType.LPStr)] string name);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_input_bind_button(IntPtr rt, [MarshalAs(UnmanagedType.LPStr)] string name, int buttonCode, int modifiers, [MarshalAs(UnmanagedType.I1)] bool repeatable);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_input_reset_bindings(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr tucano_input_button_name(int buttonCode);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_input_button_from_name([MarshalAs(UnmanagedType.LPStr)] string name);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_input_button_count();
+
+    // ── Animation ──
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tucano_scene_import_animated_mesh(IntPtr scene, [MarshalAs(UnmanagedType.LPStr)] string path, TucanoVec3 position, float scale);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tucano_anim_clip_count(IntPtr scene, uint obj);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr tucano_anim_clip_name(IntPtr scene, uint obj, uint clip);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_anim_clip_duration(IntPtr scene, uint obj, uint clip);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tucano_anim_bone_count(IntPtr scene, uint obj);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_anim_play(IntPtr scene, uint obj, uint clip, [MarshalAs(UnmanagedType.I1)] bool loop);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_anim_stop(IntPtr scene, uint obj);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_anim_pause(IntPtr scene, uint obj, [MarshalAs(UnmanagedType.I1)] bool paused);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_anim_is_playing(IntPtr scene, uint obj);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_anim_current_clip(IntPtr scene, uint obj);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_anim_get_time(IntPtr scene, uint obj);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_anim_set_time(IntPtr scene, uint obj, float time);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_anim_get_speed(IntPtr scene, uint obj);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_anim_set_speed(IntPtr scene, uint obj, float speed);
+
+    // ── Celestial bodies ──
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern TucanoVec3 tucano_sky_sun_direction(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern TucanoVec3 tucano_sky_moon_direction(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_sky_moon_phase(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_sky_moon_illumination(IntPtr rt);
+
+    // ── Skybox ──
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_skybox_set_texture(IntPtr rt, [MarshalAs(UnmanagedType.LPStr)] string hdriPath);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr tucano_skybox_get_texture(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_skybox_set_brightness(IntPtr rt, float brightness);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_skybox_get_brightness(IntPtr rt);
 
     // ── Environment ──
 

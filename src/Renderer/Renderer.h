@@ -12,6 +12,7 @@
 #include "Renderer/RayTracing/RayTracingScene.h"
 #include "Renderer/Weather/RainSystem.h"
 #include "Renderer/Weather/CloudSystem.h"
+#include "Renderer/Sky/Celestial.h"
 #include "Renderer/Texture.h"
 #include "RHI/RHI.h"
 #include "AssetPipeline/ResourceFactory.h"
@@ -78,6 +79,33 @@ struct RendererSettings {
   float exposureMax = 4.0f;
   float exposureAdapt = 0.1f;
   float exposureTarget = 0.18f;
+
+  // ── Night sky ────────────────────────────────────
+  bool enableMoon = true;
+  bool enableStars = true;
+  /// Peak moonlight intensity at full moon and zenith. Two orders of magnitude under the sun on
+  /// purpose: real moonlight is ~400,000x weaker, but a night that dark is unplayable, so games
+  /// lift it. This is the dial for how far.
+  float moonIntensity = 0.045f;
+  float moonDiscBrightness = 2.5f;
+  /// Apparent radius in degrees. The real moon is 0.26; going bigger is the oldest cheat in
+  /// landscape art and it reads well.
+  float moonAngularRadiusDeg = 0.5f;
+  float starIntensity = 1.0f;
+  float starTwinkle = 0.35f;
+  /// Angular radius of a star before the sub-pixel clamp kicks in, in degrees.
+  float starSizeDeg = 0.055f;
+  /// Blend toward blue in dim areas of the frame. 0 disables the Purkinje shift.
+  float purkinjeStrength = 0.75f;
+  /// Observer's place and date. These drive the sidereal rotation, so they decide which
+  /// constellations are up and how they move.
+  float latitudeDeg = -23.55f;  // Sao Paulo
+  /// Day of year drives the season AND the lunar phase, since phase is elongation from the sun.
+  /// 156 lands on a full moon in this model, so a fresh scene at midnight actually has a moon in
+  /// the sky rather than a new moon sitting below the horizon with the sun.
+  float dayOfYear = 156.0f;
+  std::string starCatalogPath = "Sky/bright_stars.txt"; // under TUCANO_ENGINE_ASSETS_DIR
+
   GITier giTier = GITier::Low;
   uint32_t shadowMapSize = 2048;
   std::string hdriPath = "IBL/default.hdr"; // under TUCANO_ENGINE_ASSETS_DIR
@@ -91,6 +119,23 @@ public:
   void resize(uint32_t width, uint32_t height);
   // Rebuild all GPU resources after Device::recoverFromDeviceLost (device already healthy).
   void recreateAfterDeviceLost();
+
+  /// Re-cooks the image-based lighting from a different HDRI (Phase I-1 skybox).
+  /// Falls back to the procedural sky when the file is missing, exactly as startup does.
+  /// Returns false if the path could not be used, in which case the previous IBL is kept.
+  bool reloadIBL(const std::string& hdriPath);
+
+  /// (Re)builds the GPU star catalogue from settings().starCatalogPath. Safe to call at any time;
+  /// on failure it clears the textures and the renderer falls back to the procedural star field.
+  void buildStarCatalogTextures();
+
+  /// Where the sun and moon currently are, and the moon's phase. Recomputed every frame from
+  /// timeOfDay/dayOfYear/latitude; useful to the editor for aiming a camera or a gizmo.
+  const CelestialState& celestial() const { return m_celestial; }
+
+  /// Overall brightness applied to the environment lighting.
+  float iblExposure() const { return m_iblExposure; }
+  void setIblExposure(float e) { m_iblExposure = e; }
   // May reassign `cmd` after a graphics checkpoint (async compute handoff).
   void render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& scene);
   RendererSettings& settings() { return m_settings; }
@@ -167,6 +212,13 @@ private:
   std::shared_ptr<rhi::Texture> m_aoTemp;
   std::shared_ptr<rhi::Texture> m_shadowMap;
   std::shared_ptr<rhi::Texture> m_shadowScrollTemp;
+  std::shared_ptr<rhi::Texture> m_starCellTex;
+  std::shared_ptr<rhi::Texture> m_starDataTex;
+  uint32_t m_starCount = 0;
+  uint32_t m_starDataWidth = 256;
+  CelestialState m_celestial{};
+  /// Environment-lighting multiplier from the time of day. See the note where it is computed.
+  float m_skyLightScale = 1.0f;
   std::shared_ptr<rhi::Texture> m_brdfLUT;
   std::shared_ptr<rhi::Texture> m_irradiance;
   std::shared_ptr<rhi::Texture> m_prefiltered;
@@ -196,6 +248,9 @@ private:
   std::shared_ptr<rhi::Buffer> m_postCB;
   uint64_t m_postCBBump = 0;
   std::shared_ptr<rhi::Buffer> m_objectCB;
+  // Skinning palette shared across the frame; objects index into it via ObjectCB::skinInfo.
+  static constexpr uint32_t kMaxSkinningMatrices = 4096;
+  std::shared_ptr<rhi::Buffer> m_skinningBuffer;
   std::shared_ptr<rhi::Buffer> m_lightCB;
   std::shared_ptr<rhi::Buffer> m_phase3CB;
   uint64_t m_phase3CBBump = 0;

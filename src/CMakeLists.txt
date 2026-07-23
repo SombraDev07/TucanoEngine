@@ -17,6 +17,10 @@ add_library(TucanoRuntime STATIC
   RHI/DX12/DX12ReadBack.cpp
   Renderer/Camera.cpp
   Renderer/Mesh.cpp
+  AssetPipeline/GLTFAnimation.cpp
+  Input/InputFwd.cpp
+  Input/InputConfiguration.cpp
+  Input/VirtualInput.cpp
   Renderer/DevTexture.cpp
   Renderer/Material.cpp
   Renderer/Texture.cpp
@@ -53,6 +57,8 @@ add_library(TucanoRuntime STATIC
   Runtime/StbImpl.cpp
   Physics/PhysicsWorld.cpp
   Core/JobSystem.cpp
+  AssetPipeline/TinyExrImpl.cpp
+  Renderer/Sky/Celestial.cpp
   Core/Json.cpp
   ECS/ComponentTypes.cpp
   ECS/Components.cpp
@@ -75,6 +81,7 @@ target_link_libraries(TucanoRuntime
     glm::glm
     stb_headers
     cgltf_headers
+    tinyexr_headers
     meshoptimizer
     imgui_lib
     tracy_stub

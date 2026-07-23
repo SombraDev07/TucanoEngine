@@ -2,8 +2,10 @@
 
 #include "Platform/Input.h"
 #include "Platform/Window.h"
+#include "AssetPipeline/GLTFAnimation.h"
 #include "AssetPipeline/GLTFLoader.h"
 #include "Core/Json.h"
+#include "Input/VirtualInput.h"
 #include "Physics/PhysicsWorld.h"
 #include "Renderer/DevTexture.h"
 #include "Renderer/Renderer.h"
@@ -27,6 +29,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // ── Internal helpers ─────────────────────────────────
@@ -237,6 +240,16 @@ void buildCleanScene(tucano::rhi::Device& device, tucano::Scene& scene) {
 // How each scene object was created. Kept parallel to Scene::objects (every mutation goes through
 // this API) so a saved scene can be rebuilt: a RenderObject only holds GPU buffers, which say
 // nothing about where the geometry came from.
+// Animation state for one object: the rig it was imported with, its clips, and where playback is.
+// Held beside the scene rather than inside RenderObject so the renderer stays unaware of clips.
+struct ObjectAnimation {
+  tucano::anim::Skeleton skeleton;
+  std::vector<std::shared_ptr<tucano::anim::AnimationClip>> clips;
+  tucano::anim::AnimationPlayer player;
+  tucano::anim::Pose pose;
+  int currentClip = -1;
+};
+
 struct ObjectSource {
   enum class Kind { Cube, Sphere, Plane, Gltf, BuiltinGround, BuiltinMarker };
   Kind kind = Kind::Cube;
@@ -256,6 +269,8 @@ struct TucanoRuntime {
   std::unique_ptr<tucano::DebugUI> debugUI;
   tucano::Scene scene;
   std::vector<ObjectSource> sources; // 1:1 with scene.objects
+  // Sparse: only objects that were imported with a rig get an entry.
+  std::unordered_map<uint32_t, ObjectAnimation> animations;
   bool alive = true;
 
   // Play mode. editTransforms holds the authored placement so Stop can undo the simulation.
@@ -290,6 +305,12 @@ struct TucanoRuntime {
   // render() pumps the OS message queue, so a host that renders from a message handler can re-enter
   // it. Recording D3D12 commands re-entrantly corrupts the device, so the nested call is dropped.
   bool inRender = false;
+
+  // Virtual input (Phase I-0). The snapshot pair gives edge detection for physical buttons; the
+  // VirtualInput layer turns those into named buttons and axes.
+  tucano::input::VirtualInput virtualInput;
+  tucano::input::InputSnapshot inputSnapshot{};
+  tucano::input::InputSnapshot prevInputSnapshot{};
   // Gizmo. `gizmoBlocking` carries last frame's hover/use state: the gizmo is drawn after input is
   // sampled, so the current frame's answer isn't available when picking decides whether to run.
   tucano::DebugUI::GizmoOp gizmoOp = tucano::DebugUI::GizmoOp::Translate;
@@ -619,6 +640,25 @@ bool objectWorldHalfExtent(const tucano::RenderObject& obj, glm::vec3& halfExten
   return true;
 }
 
+// Advances every animation player and refreshes the skinning palette it feeds.
+// Runs before the gizmo and physics so the pose the frame renders is the pose the editor reports.
+void updateAnimations(TucanoRuntime* rt) {
+  if (rt->animations.empty()) return;
+
+  for (auto& [index, animation] : rt->animations) {
+    if (index >= rt->scene.objects.size()) continue;
+    auto& obj = rt->scene.objects[index];
+
+    animation.player.update(rt->deltaSeconds);
+
+    // Always start from the bind pose: a clip that animates only some bones must leave the rest
+    // at rest instead of accumulating drift from the previous frame.
+    animation.pose = animation.skeleton.bindPose();
+    animation.player.evaluate(animation.pose);
+    animation.skeleton.computeSkinningMatrices(animation.pose, obj.skinningMatrices);
+  }
+}
+
 // Advances the simulation on a fixed step and copies dynamic body transforms back onto the objects.
 // Fixed step keeps the simulation deterministic and stable regardless of the editor's frame rate.
 // Samples the wall clock once per frame; every other per-frame helper reads rt->deltaSeconds.
@@ -768,6 +808,13 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
     }
 
     tickClock(rt);
+    updateAnimations(rt);
+
+    // Sample physical input once per frame, then resolve the virtual layer from it.
+    rt->prevInputSnapshot = rt->inputSnapshot;
+    tucano::input::fillSnapshotFromPlatform(*rt->input, rt->inputSnapshot);
+    rt->virtualInput.update(rt->inputSnapshot);
+
     updatePlay(rt);
 
     // Gizmo first: it must claim the mouse before picking looks at it. ImGui already has this
@@ -976,6 +1023,222 @@ TUCANO_API uint32_t tucano_scene_spawn_primitive(TucanoScene* scene, TucanoPrimi
   obj.worldMatrix = obj.transform.matrix();
   scene->data.objects.push_back(std::move(obj));
   rt.sources.push_back(std::move(source));
+  return uint32_t(scene->data.objects.size() - 1);
+}
+
+// ── Animation (Phase I-1) ────────────────────────────
+
+namespace {
+
+ObjectAnimation* animationFor(TucanoScene* scene, uint32_t object) {
+  if (!scene || !scene->runtime) return nullptr;
+  auto it = scene->runtime->animations.find(object);
+  return it == scene->runtime->animations.end() ? nullptr : &it->second;
+}
+
+} // namespace
+
+TUCANO_API uint32_t tucano_scene_import_animated_mesh(TucanoScene* scene, const char* path,
+                                                      TucanoVec3 position, float scale) {
+  if (!scene || !scene->runtime || !path) return 0xFFFFFFFFu;
+
+  // Geometry first — this is also the fallback when the file carries no rig.
+  const uint32_t first = tucano_scene_import_mesh(scene, path, position, scale);
+  if (first == 0xFFFFFFFFu) return first;
+
+  std::string err;
+  auto asset = tucano::loadGLTFSkinnedAsset(path, &err);
+  if (!asset.valid()) return first; // static mesh: nothing more to do
+
+  // Attach the rig to every object the import produced; a skinned glTF usually yields one, but a
+  // multi-primitive mesh yields several sharing the same skeleton.
+  auto& rt = *scene->runtime;
+  for (uint32_t i = first; i < uint32_t(scene->data.objects.size()); ++i) {
+    ObjectAnimation animation;
+    animation.skeleton = asset.skeleton;
+    animation.clips = asset.clips;
+    for (auto& clip : animation.clips) {
+      if (clip) clip->resolveBones(animation.skeleton);
+    }
+    animation.pose = animation.skeleton.bindPose();
+    // Bind pose immediately, so the mesh renders correctly before anything is played.
+    animation.skeleton.computeSkinningMatrices(animation.pose,
+                                               scene->data.objects[i].skinningMatrices);
+    rt.animations[i] = std::move(animation);
+  }
+  return first;
+}
+
+TUCANO_API uint32_t tucano_anim_clip_count(TucanoScene* scene, uint32_t object) {
+  auto* a = animationFor(scene, object);
+  return a ? uint32_t(a->clips.size()) : 0;
+}
+
+TUCANO_API const char* tucano_anim_clip_name(TucanoScene* scene, uint32_t object, uint32_t clip) {
+  auto* a = animationFor(scene, object);
+  if (!a || clip >= a->clips.size() || !a->clips[clip]) return "";
+  return a->clips[clip]->name().c_str();
+}
+
+TUCANO_API float tucano_anim_clip_duration(TucanoScene* scene, uint32_t object, uint32_t clip) {
+  auto* a = animationFor(scene, object);
+  if (!a || clip >= a->clips.size() || !a->clips[clip]) return 0.0f;
+  return a->clips[clip]->duration();
+}
+
+TUCANO_API uint32_t tucano_anim_bone_count(TucanoScene* scene, uint32_t object) {
+  auto* a = animationFor(scene, object);
+  return a ? uint32_t(a->skeleton.boneCount()) : 0;
+}
+
+TUCANO_API void tucano_anim_play(TucanoScene* scene, uint32_t object, uint32_t clip, bool loop) {
+  auto* a = animationFor(scene, object);
+  if (!a || clip >= a->clips.size()) return;
+  a->player.play(a->clips[clip].get(), loop);
+  a->currentClip = int(clip);
+}
+
+TUCANO_API void tucano_anim_stop(TucanoScene* scene, uint32_t object) {
+  auto* a = animationFor(scene, object);
+  if (!a || !scene || object >= scene->data.objects.size()) return;
+  a->player.stop();
+  a->currentClip = -1;
+  // Snap back to the bind pose so stopping looks deliberate rather than frozen mid-motion.
+  a->pose = a->skeleton.bindPose();
+  a->skeleton.computeSkinningMatrices(a->pose, scene->data.objects[object].skinningMatrices);
+}
+
+TUCANO_API void tucano_anim_pause(TucanoScene* scene, uint32_t object, bool paused) {
+  auto* a = animationFor(scene, object);
+  if (!a) return;
+  if (paused) a->player.pause(); else a->player.resume();
+}
+
+TUCANO_API bool tucano_anim_is_playing(TucanoScene* scene, uint32_t object) {
+  auto* a = animationFor(scene, object);
+  return a && a->player.isPlaying();
+}
+
+TUCANO_API int32_t tucano_anim_current_clip(TucanoScene* scene, uint32_t object) {
+  auto* a = animationFor(scene, object);
+  return a ? a->currentClip : -1;
+}
+
+TUCANO_API float tucano_anim_get_time(TucanoScene* scene, uint32_t object) {
+  auto* a = animationFor(scene, object);
+  return a ? a->player.time() : 0.0f;
+}
+
+TUCANO_API void tucano_anim_set_time(TucanoScene* scene, uint32_t object, float time) {
+  auto* a = animationFor(scene, object);
+  if (!a || !scene || object >= scene->data.objects.size()) return;
+  a->player.setTime(time);
+  // Re-evaluate now so scrubbing the timeline updates the viewport even while paused.
+  a->pose = a->skeleton.bindPose();
+  a->player.evaluate(a->pose);
+  a->skeleton.computeSkinningMatrices(a->pose, scene->data.objects[object].skinningMatrices);
+}
+
+TUCANO_API float tucano_anim_get_speed(TucanoScene* scene, uint32_t object) {
+  auto* a = animationFor(scene, object);
+  return a ? a->player.speed() : 1.0f;
+}
+
+TUCANO_API void tucano_anim_set_speed(TucanoScene* scene, uint32_t object, float speed) {
+  auto* a = animationFor(scene, object);
+  if (a) a->player.setSpeed(speed);
+}
+
+// ── Skinning (Phase I-1) ─────────────────────────────
+
+TUCANO_API void tucano_scene_set_skinning_matrices(TucanoScene* scene, uint32_t index,
+                                                   const float* matrices, uint32_t count) {
+  if (!scene || index >= scene->data.objects.size()) return;
+  auto& dst = scene->data.objects[index].skinningMatrices;
+  if (!matrices || count == 0) {
+    dst.clear();
+    return;
+  }
+  dst.resize(count);
+  std::memcpy(dst.data(), matrices, size_t(count) * sizeof(glm::mat4));
+}
+
+TUCANO_API uint32_t tucano_scene_get_skinning_bone_count(TucanoScene* scene, uint32_t index) {
+  if (!scene || index >= scene->data.objects.size()) return 0;
+  return uint32_t(scene->data.objects[index].skinningMatrices.size());
+}
+
+TUCANO_API uint32_t tucano_scene_spawn_skinned_test(TucanoScene* scene, TucanoVec3 pos,
+                                                    uint32_t segments) {
+  if (!scene || !scene->runtime || !scene->runtime->device) return 0xFFFFFFFFu;
+  segments = glm::clamp(segments, 2u, 64u);
+
+  auto& rt = *scene->runtime;
+  auto& dev = *rt.device;
+
+  // A vertical box divided into rings. Ring i is bound fully to bone i, so bending bone N rotates
+  // everything from that ring up — the classic bend test for a skinning pipeline.
+  std::vector<tucano::Vertex> verts;
+  std::vector<uint32_t> indices;
+  const float halfWidth = 0.25f;
+  const float segmentHeight = 1.0f;
+
+  for (uint32_t ring = 0; ring <= segments; ++ring) {
+    const float y = float(ring) * segmentHeight;
+    const uint8_t bone = uint8_t(std::min(ring, segments - 1));
+    const uint8_t idx[4] = {bone, 0, 0, 0};
+
+    // Four corners per ring.
+    const glm::vec3 corners[4] = {
+        {-halfWidth, y, -halfWidth}, {halfWidth, y, -halfWidth},
+        {halfWidth, y, halfWidth},   {-halfWidth, y, halfWidth},
+    };
+    for (int c = 0; c < 4; ++c) {
+      tucano::Vertex v{};
+      v.position = corners[c];
+      v.normal = glm::normalize(glm::vec3(corners[c].x, 0.0f, corners[c].z));
+      v.tangent = {0, 1, 0, 1};
+      v.uv = {float(c) * 0.25f, float(ring) / float(segments)};
+      v.color = {1, 1, 1, 1};
+      v.setSkinning(idx, glm::vec4(1.0f, 0.0f, 0.0f, 0.0f));
+      verts.push_back(v);
+    }
+  }
+
+  for (uint32_t ring = 0; ring < segments; ++ring) {
+    const uint32_t a = ring * 4;
+    const uint32_t b = (ring + 1) * 4;
+    for (uint32_t side = 0; side < 4; ++side) {
+      const uint32_t s0 = side;
+      const uint32_t s1 = (side + 1) % 4;
+      indices.insert(indices.end(), {a + s0, b + s0, b + s1, a + s0, b + s1, a + s1});
+    }
+  }
+
+  tucano::SubMesh sub{};
+  sub.indexCount = uint32_t(indices.size());
+  sub.aabbMin = {-halfWidth, 0.0f, -halfWidth};
+  sub.aabbMax = {halfWidth, float(segments) * segmentHeight, halfWidth};
+
+  auto mat = std::make_shared<tucano::Material>();
+  mat->name = "SkinnedTest";
+  mat->baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
+  mat->albedo = tucano::devtex::defaultAlbedo(dev);
+  mat->normal = tucano::devtex::defaultNormal(dev);
+  mat->roughnessFactor = 0.6f;
+  mat->metallicFactor = 0.0f;
+
+  tucano::RenderObject obj;
+  obj.name = "SkinnedTest";
+  obj.mesh = tucano::Mesh::create(dev, verts, indices, {sub});
+  obj.materials = {mat};
+  obj.transform.translation = {pos.x, pos.y, pos.z};
+  obj.worldMatrix = obj.transform.matrix();
+  // Start in bind pose so the object is visible before any animation drives it.
+  obj.skinningMatrices.assign(segments, glm::mat4(1.0f));
+
+  scene->data.objects.push_back(std::move(obj));
+  rt.sources.push_back(ObjectSource{ObjectSource::Kind::Cube, {}});
   return uint32_t(scene->data.objects.size() - 1);
 }
 
@@ -1765,6 +2028,135 @@ TUCANO_API const char* tucano_scene_get_object_folder(TucanoScene* scene, uint32
   return scene->runtime->sources[index].folder.c_str();
 }
 
+// ── Input (Phase I-0) ────────────────────────────────
+
+TUCANO_API bool tucano_input_is_button_down(TucanoRuntime* rt, int buttonCode) {
+  if (!rt) return false;
+  const auto idx = static_cast<size_t>(buttonCode);
+  if (idx >= static_cast<size_t>(tucano::input::ButtonCode::Count)) return false;
+  // "Down" means the edge: held now, not held on the previous frame.
+  return rt->inputSnapshot.down[idx] && !rt->prevInputSnapshot.down[idx];
+}
+
+TUCANO_API bool tucano_input_is_button_held(TucanoRuntime* rt, int buttonCode) {
+  if (!rt) return false;
+  const auto idx = static_cast<size_t>(buttonCode);
+  if (idx >= static_cast<size_t>(tucano::input::ButtonCode::Count)) return false;
+  return rt->inputSnapshot.down[idx];
+}
+
+TUCANO_API void tucano_input_get_mouse_delta(TucanoRuntime* rt, float* dx, float* dy) {
+  if (!rt) return;
+  if (dx) *dx = rt->inputSnapshot.axis[size_t(tucano::input::InputAxis::MouseX)];
+  if (dy) *dy = rt->inputSnapshot.axis[size_t(tucano::input::InputAxis::MouseY)];
+}
+
+TUCANO_API float tucano_input_get_scroll(TucanoRuntime* rt) {
+  return rt ? rt->inputSnapshot.axis[size_t(tucano::input::InputAxis::MouseWheel)] : 0.0f;
+}
+
+TUCANO_API bool tucano_input_is_virtual_button_down(TucanoRuntime* rt, const char* name) {
+  return rt && name && rt->virtualInput.isButtonDown(name);
+}
+
+TUCANO_API bool tucano_input_is_virtual_button_held(TucanoRuntime* rt, const char* name) {
+  return rt && name && rt->virtualInput.isButtonHeld(name);
+}
+
+TUCANO_API bool tucano_input_is_virtual_button_up(TucanoRuntime* rt, const char* name) {
+  return rt && name && rt->virtualInput.isButtonUp(name);
+}
+
+TUCANO_API float tucano_input_get_virtual_axis(TucanoRuntime* rt, const char* name) {
+  return rt && name ? rt->virtualInput.axisValue(name) : 0.0f;
+}
+
+TUCANO_API void tucano_input_bind_button(TucanoRuntime* rt, const char* name, int buttonCode,
+                                         int modifiers, bool repeatable) {
+  if (!rt || !name) return;
+  if (buttonCode < 0 || buttonCode >= int(tucano::input::ButtonCode::Count)) return;
+  rt->virtualInput.configuration().registerButton(
+      name, static_cast<tucano::input::ButtonCode>(buttonCode),
+      static_cast<tucano::input::ButtonModifier>(modifiers), repeatable);
+}
+
+TUCANO_API void tucano_input_unbind_button(TucanoRuntime* rt, const char* name) {
+  if (rt && name) rt->virtualInput.configuration().unregisterButton(name);
+}
+
+TUCANO_API void tucano_input_bind_axis(TucanoRuntime* rt, const char* name, int axis,
+                                       float deadZone, float sensitivity, bool invert,
+                                       bool normalize) {
+  if (!rt || !name) return;
+  if (axis < 0 || axis >= int(tucano::input::InputAxis::Count)) return;
+  tucano::input::VirtualAxisBinding b;
+  b.axis = static_cast<tucano::input::InputAxis>(axis);
+  b.deadZone = std::max(deadZone, 0.0f);
+  b.sensitivity = sensitivity;
+  b.invert = invert;
+  b.normalize = normalize;
+  rt->virtualInput.configuration().registerAxis(name, b);
+}
+
+TUCANO_API void tucano_input_reset_bindings(TucanoRuntime* rt) {
+  if (rt) rt->virtualInput.setConfiguration(tucano::input::InputConfiguration::makeDefault());
+}
+
+TUCANO_API const char* tucano_input_button_name(int buttonCode) {
+  if (buttonCode < 0 || buttonCode >= int(tucano::input::ButtonCode::Count)) return "Unassigned";
+  return tucano::input::buttonCodeName(static_cast<tucano::input::ButtonCode>(buttonCode));
+}
+
+TUCANO_API int tucano_input_button_from_name(const char* name) {
+  return int(tucano::input::buttonCodeFromName(name));
+}
+
+TUCANO_API int tucano_input_button_count(void) {
+  return int(tucano::input::ButtonCode::Count);
+}
+
+// ── Skybox (Phase I-1) ───────────────────────────────
+
+TUCANO_API bool tucano_skybox_set_texture(TucanoRuntime* rt, const char* hdriPath) {
+  if (!rt || !rt->renderer || !hdriPath) return false;
+  return rt->renderer->reloadIBL(hdriPath);
+}
+
+TUCANO_API const char* tucano_skybox_get_texture(TucanoRuntime* rt) {
+  if (!rt || !rt->renderer) return "";
+  return rt->renderer->settings().hdriPath.c_str();
+}
+
+TUCANO_API void tucano_skybox_set_brightness(TucanoRuntime* rt, float brightness) {
+  if (rt && rt->renderer) rt->renderer->setIblExposure(std::max(brightness, 0.0f));
+}
+
+TUCANO_API float tucano_skybox_get_brightness(TucanoRuntime* rt) {
+  return rt && rt->renderer ? rt->renderer->iblExposure() : 0.0f;
+}
+
+// ── Celestial bodies ─────────────────────────────────
+
+TUCANO_API TucanoVec3 tucano_sky_sun_direction(TucanoRuntime* rt) {
+  if (!rt || !rt->renderer) return TucanoVec3{0.0f, -1.0f, 0.0f};
+  const auto& d = rt->renderer->celestial().sunDir;
+  return TucanoVec3{d.x, d.y, d.z};
+}
+
+TUCANO_API TucanoVec3 tucano_sky_moon_direction(TucanoRuntime* rt) {
+  if (!rt || !rt->renderer) return TucanoVec3{0.0f, -1.0f, 0.0f};
+  const auto& d = rt->renderer->celestial().moonDir;
+  return TucanoVec3{d.x, d.y, d.z};
+}
+
+TUCANO_API float tucano_sky_moon_phase(TucanoRuntime* rt) {
+  return rt && rt->renderer ? rt->renderer->celestial().moonPhase : 0.0f;
+}
+
+TUCANO_API float tucano_sky_moon_illumination(TucanoRuntime* rt) {
+  return rt && rt->renderer ? rt->renderer->celestial().moonIllumination : 0.0f;
+}
+
 // ── Environment ──────────────────────────────────────
 
 TUCANO_API void tucano_env_get(TucanoRuntime* rt, TucanoEnvironment* out) {
@@ -1815,6 +2207,18 @@ TUCANO_API void tucano_env_get(TucanoRuntime* rt, TucanoEnvironment* out) {
   out->giTier = int32_t(s.giTier);
   out->shadowMapSize = int32_t(s.shadowMapSize);
   out->pcssLightSize = s.pcssLightSize;
+
+  out->enableMoon = s.enableMoon ? 1 : 0;
+  out->enableStars = s.enableStars ? 1 : 0;
+  out->moonIntensity = s.moonIntensity;
+  out->moonDiscBrightness = s.moonDiscBrightness;
+  out->moonAngularRadiusDeg = s.moonAngularRadiusDeg;
+  out->starIntensity = s.starIntensity;
+  out->starTwinkle = s.starTwinkle;
+  out->starSizeDeg = s.starSizeDeg;
+  out->purkinjeStrength = s.purkinjeStrength;
+  out->latitudeDeg = s.latitudeDeg;
+  out->dayOfYear = s.dayOfYear;
 }
 
 TUCANO_API void tucano_env_set(TucanoRuntime* rt, const TucanoEnvironment* env) {
@@ -1863,6 +2267,20 @@ TUCANO_API void tucano_env_set(TucanoRuntime* rt, const TucanoEnvironment* env) 
   s.enableIBL = env->enableIBL != 0;
   s.giTier = tucano::GITier(glm::clamp(env->giTier, 0, 3));
   s.pcssLightSize = std::max(env->pcssLightSize, 0.0f);
+
+  s.enableMoon = env->enableMoon != 0;
+  s.enableStars = env->enableStars != 0;
+  s.moonIntensity = std::max(env->moonIntensity, 0.0f);
+  s.moonDiscBrightness = std::max(env->moonDiscBrightness, 0.0f);
+  // Clamped: a moon smaller than a pixel flickers, and one larger than a few degrees stops
+  // reading as the moon.
+  s.moonAngularRadiusDeg = std::clamp(env->moonAngularRadiusDeg, 0.05f, 5.0f);
+  s.starIntensity = std::max(env->starIntensity, 0.0f);
+  s.starTwinkle = std::clamp(env->starTwinkle, 0.0f, 1.0f);
+  s.starSizeDeg = std::clamp(env->starSizeDeg, 0.005f, 0.5f);
+  s.purkinjeStrength = std::clamp(env->purkinjeStrength, 0.0f, 1.0f);
+  s.latitudeDeg = std::clamp(env->latitudeDeg, -90.0f, 90.0f);
+  s.dayOfYear = std::clamp(env->dayOfYear, 0.0f, 366.0f);
   // shadowMapSize is a resource dimension — changing it mid-flight would need a realloc, so it is
   // deliberately read-only here.
 }

@@ -24,6 +24,15 @@ struct RenderObject {
   Transform transform;
   glm::mat4 worldMatrix{1.0f};
   std::string name;
+  // Editor visibility. Hidden objects are skipped by every pass — including shadows, ray tracing
+  // and GI — so hiding one removes it from the image completely, not just from the g-buffer.
+  bool visible = true;
+
+  // Skinning palette: one matrix per bone (world × inverseBindPose), produced by whatever drives
+  // the animation. Non-empty means the renderer uploads it and the vertex shader deforms this
+  // object. Keeping it here rather than owning an animation player lets the renderer stay unaware
+  // of clips, blending and playback.
+  std::vector<glm::mat4> skinningMatrices;
 };
 
 enum class LightType : uint32_t { Directional = 0, Point = 1, Spot = 2 };

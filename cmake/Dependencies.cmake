@@ -33,6 +33,13 @@ FetchContent_MakeAvailable(cgltf)
 add_library(cgltf_headers INTERFACE)
 target_include_directories(cgltf_headers INTERFACE ${cgltf_SOURCE_DIR})
 
+# tinyexr (BSD-3-Clause) — vendored. OpenEXR is what HDRI sites hand out alongside .hdr, and stb
+# cannot decode it. Its ZIP backend is pointed at stb's zlib so this pulls in no new dependency:
+# both stb implementations already live in src/Runtime/StbImpl.cpp.
+add_library(tinyexr_headers INTERFACE)
+target_include_directories(tinyexr_headers INTERFACE ${CMAKE_SOURCE_DIR}/third_party/tinyexr)
+target_compile_definitions(tinyexr_headers INTERFACE TINYEXR_USE_MINIZ=0 TINYEXR_USE_STB_ZLIB=1)
+
 FetchContent_Declare(meshoptimizer
   GIT_REPOSITORY https://github.com/zeux/meshoptimizer.git
   GIT_TAG v0.22

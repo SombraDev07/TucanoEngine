@@ -1,0 +1,265 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TucanoEditor.Views.EnvironmentWindow"
+        Title="Environment"
+        Width="440" Height="800"
+        MinWidth="400" MinHeight="500"
+        Background="#0B0B0D"
+        Foreground="#E8E8EC"
+        FontFamily="Segoe UI">
+
+    <DockPanel>
+        <Border DockPanel.Dock="Top" Classes="header" Height="38">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="ENVIRONMENT" Classes="h" Margin="14,0" />
+                <TextBlock DockPanel.Dock="Right" Name="TimeOfDayLabel" Text=""
+                           Classes="dim" VerticalAlignment="Center" Margin="0,0,14,0" />
+            </DockPanel>
+        </Border>
+
+        <!-- Presets pinned at the bottom so they're reachable without scrolling -->
+        <Border DockPanel.Dock="Bottom" Height="42" Background="#17171B"
+                BorderBrush="#2A2A31" BorderThickness="0,1,0,0">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                        HorizontalAlignment="Center" Spacing="6">
+                <Button Classes="tool" Content="Clear day" Click="OnPresetClearDay" />
+                <Button Classes="tool" Content="Overcast" Click="OnPresetOvercast" />
+                <Button Classes="tool" Content="Storm" Click="OnPresetStorm" />
+                <Button Classes="tool" Content="Night" Click="OnPresetNight" />
+            </StackPanel>
+        </Border>
+
+        <ScrollViewer>
+            <StackPanel Margin="10" Spacing="8">
+
+                <!-- ── Sun & sky ─────────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="SUN &amp; SKY" Classes="section" />
+
+                        <CheckBox Name="EnvAtmosphere" Content="Atmosphere" Margin="0,4,0,0"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvBruneton" Content="Bruneton scattering (precomputed LUTs)"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvSunFromTime" Content="Time of day drives the sun"
+                                  IsCheckedChanged="OnEnvChanged" />
+
+                        <TextBlock Text="Time of day" Classes="label" />
+                        <Slider Name="EnvTimeOfDay" Minimum="0" Maximum="1" Value="0.42"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Turbidity (haze)" Classes="label" />
+                        <Slider Name="EnvTurbidity" Minimum="1" Maximum="10" Value="2.8"
+                                ValueChanged="OnEnvSliderChanged" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── Night sky ─────────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="NIGHT SKY" Classes="section" />
+                        <TextBlock Name="MoonReadout" Classes="dim" TextWrapping="Wrap"
+                                   Text="—" Margin="0,2,0,4" />
+
+                        <CheckBox Name="EnvMoon" Content="Moon" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvStars" Content="Stars" IsCheckedChanged="OnEnvChanged" />
+
+                        <TextBlock Text="Moonlight on the scene" Classes="label" />
+                        <Slider Name="EnvMoonIntensity" Minimum="0" Maximum="0.3" Value="0.045"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Moon disc brightness" Classes="label" />
+                        <Slider Name="EnvMoonDisc" Minimum="0" Maximum="8" Value="2.5"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Moon size (degrees — real is 0.26)" Classes="label" />
+                        <Slider Name="EnvMoonSize" Minimum="0.05" Maximum="5" Value="0.5"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Star brightness" Classes="label" />
+                        <Slider Name="EnvStarIntensity" Minimum="0" Maximum="4" Value="1"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Twinkle" Classes="label" />
+                        <Slider Name="EnvStarTwinkle" Minimum="0" Maximum="1" Value="0.35"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Night vision (Purkinje shift)" Classes="label" />
+                        <Slider Name="EnvPurkinje" Minimum="0" Maximum="1" Value="0.75"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Desaturates dim areas toward blue, the way rod vision does" />
+
+                        <TextBlock Text="Latitude (decides which constellations are up)" Classes="label" />
+                        <Slider Name="EnvLatitude" Minimum="-90" Maximum="90" Value="-23.55"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Day of year (season and lunar phase)" Classes="label" />
+                        <Slider Name="EnvDayOfYear" Minimum="0" Maximum="365" Value="156"
+                                ValueChanged="OnEnvSliderChanged" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── Skybox (HDRI) ─────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="SKYBOX" Classes="section" />
+
+                        <TextBlock Text="HDRI / cubemap" Classes="label" />
+                        <Grid ColumnDefinitions="*,Auto,Auto">
+                            <TextBox Grid.Column="0" Name="EnvSkyboxPath" Watermark="(none — procedural sky)"
+                                     IsReadOnly="True" />
+                            <Button Grid.Column="1" Classes="tool" Content="..." Click="OnBrowseSkybox"
+                                    Margin="4,0,0,0"
+                                    ToolTip.Tip="Pick an .hdr / .dds / .png environment map" />
+                            <Button Grid.Column="2" Classes="tool" Content="✕" Click="OnClearSkybox"
+                                    Margin="4,0,0,0"
+                                    ToolTip.Tip="Back to the procedural sky" />
+                        </Grid>
+
+                        <TextBlock Text="Brightness" Classes="label" />
+                        <Slider Name="EnvSkyboxBrightness" Minimum="0" Maximum="4" Value="1"
+                                ValueChanged="OnEnvSliderChanged" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── Fog ───────────────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="FOG" Classes="section" />
+
+                        <TextBlock Text="Density" Classes="label" />
+                        <Slider Name="EnvFogDensity" Minimum="0" Maximum="0.1" Value="0.012"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Height (m)" Classes="label" />
+                        <Slider Name="EnvFogHeight" Minimum="0" Maximum="400" Value="40"
+                                ValueChanged="OnEnvSliderChanged" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── Clouds ────────────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="CLOUDS" Classes="section" />
+
+                        <CheckBox Name="EnvClouds" Content="Volumetric clouds" Margin="0,4,0,0"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvCloudShadows" Content="Cloud shadows"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvCloudGodRays" Content="God rays"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvCloudsDriveRain" Content="Clouds drive rain"
+                                  IsCheckedChanged="OnEnvChanged" />
+
+                        <TextBlock Text="Coverage" Classes="label" />
+                        <Slider Name="EnvCloudCoverage" Minimum="0" Maximum="1" Value="0.48"
+                                ValueChanged="OnEnvSliderChanged" />
+                        <TextBlock Text="Above ~0.7 the clouds currently vanish (known cloud-system bug)."
+                                   Classes="dim" TextWrapping="Wrap" />
+
+                        <TextBlock Text="Density" Classes="label" />
+                        <Slider Name="EnvCloudDensity" Minimum="0" Maximum="4" Value="1.15"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Storminess" Classes="label" />
+                        <Slider Name="EnvCloudStorminess" Minimum="0" Maximum="1" Value="0.35"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Altitude (m)" Classes="label" />
+                        <Slider Name="EnvCloudAltitude" Minimum="200" Maximum="6000" Value="1500"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Thickness (m)" Classes="label" />
+                        <Slider Name="EnvCloudThickness" Minimum="200" Maximum="6000" Value="2400"
+                                ValueChanged="OnEnvSliderChanged" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── Rain ──────────────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="RAIN" Classes="section" />
+
+                        <CheckBox Name="RainEnabled" Content="Rain" Margin="0,4,0,0"
+                                  IsCheckedChanged="OnRainChanged" />
+                        <CheckBox Name="RainSceneRain" Content="Volumetric scene rain"
+                                  IsCheckedChanged="OnRainChanged" />
+                        <CheckBox Name="RainSplashes" Content="World splashes"
+                                  IsCheckedChanged="OnRainChanged" />
+
+                        <TextBlock Text="Amount" Classes="label" />
+                        <Slider Name="RainAmount" Minimum="0" Maximum="1" Value="0.65"
+                                ValueChanged="OnRainSliderChanged" />
+
+                        <TextBlock Text="Streak intensity" Classes="label" />
+                        <Slider Name="RainStreaks" Minimum="0" Maximum="3" Value="0.85"
+                                ValueChanged="OnRainSliderChanged" />
+
+                        <TextBlock Text="Puddles" Classes="label" />
+                        <Slider Name="RainPuddles" Minimum="0" Maximum="3" Value="1.2"
+                                ValueChanged="OnRainSliderChanged" />
+
+                        <TextBlock Text="Mist" Classes="label" />
+                        <Slider Name="RainMist" Minimum="0" Maximum="2" Value="0.4"
+                                ValueChanged="OnRainSliderChanged" />
+
+                        <TextBlock Text="Lens drops" Classes="label" />
+                        <Slider Name="RainDrops" Minimum="0" Maximum="2" Value="0.45"
+                                ValueChanged="OnRainSliderChanged" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── Post ──────────────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="POST PROCESSING" Classes="section" />
+
+                        <CheckBox Name="EnvBloom" Content="Bloom" Margin="0,4,0,0"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvAO" Content="Ambient occlusion" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvTonemap" Content="Tonemap" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvAutoExposure" Content="Auto exposure" IsCheckedChanged="OnEnvChanged" />
+
+                        <TextBlock Text="Bloom strength" Classes="label" />
+                        <Slider Name="EnvBloomStrength" Minimum="0" Maximum="2" Value="0.28"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Exposure target" Classes="label" />
+                        <Slider Name="EnvExposureTarget" Minimum="0.01" Maximum="1" Value="0.18"
+                                ValueChanged="OnEnvSliderChanged" />
+                    </StackPanel>
+                </Border>
+
+                <!-- ── Shadows / GI ──────────────────── -->
+                <Border Classes="card">
+                    <StackPanel Spacing="2">
+                        <TextBlock Text="SHADOWS &amp; GI" Classes="section" />
+
+                        <CheckBox Name="EnvShadows" Content="Shadows" Margin="0,4,0,0"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvPCSS" Content="Soft shadows (PCSS)" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvContactShadows" Content="Contact shadows" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvIBL" Content="Image-based lighting" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvSSR" Content="Screen-space reflections" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvRTShadows" Content="Ray-traced shadows (DXR)" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvRTReflections" Content="Ray-traced reflections (DXR)" IsCheckedChanged="OnEnvChanged" />
+
+                        <TextBlock Text="Global illumination" Classes="label" />
+                        <ComboBox Name="EnvGiTier" SelectedIndex="0" HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnGiTierChanged">
+                            <ComboBoxItem Content="Off" />
+                            <ComboBoxItem Content="Low" />
+                            <ComboBoxItem Content="Medium" />
+                            <ComboBoxItem Content="High" />
+                        </ComboBox>
+
+                        <CheckBox Name="EnvVoxelGI" Content="Voxel GI" Margin="0,6,0,0"
+                                  IsCheckedChanged="OnEnvChanged" />
+                        <TextBlock Text="GI and Voxel GI are expensive — expect a large frame-time hit."
+                                   Classes="dim" TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

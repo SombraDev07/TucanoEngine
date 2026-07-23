@@ -147,7 +147,7 @@ void ReflectionProbes::placeProbes(const Scene& scene, const glm::vec3& cameraPo
   glm::vec3 bmin(1e9f), bmax(-1e9f);
   bool any = false;
   for (const auto& obj : scene.objects) {
-    if (!obj.mesh) {
+    if (!obj.mesh || !obj.visible) {
       continue;
     }
     for (const auto& sub : obj.mesh->submeshes()) {

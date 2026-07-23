@@ -1,0 +1,2 @@
+add_executable(TucanoInputTest main.cpp)
+target_link_libraries(TucanoInputTest PRIVATE TucanoRuntime)

@@ -44,6 +44,12 @@ struct GBufferPassContext {
   bool enableGpuMeshletCull = false; // CS wrote OutArgs; draw all slots (instanceCount 0/1)
   rhi::Buffer* indirectArgs = nullptr; // DRAW_INDEXED args (UAV|Indirect when GPU cull)
   uint32_t* indirectArgSlot = nullptr; // base slot; advances by meshletCount when GPU cull
+
+  // Skinning palette for the frame, plus where each object's matrices start in it
+  // (UINT32_MAX = not skinned). Null buffer disables skinning entirely.
+  // Appended at the end so the existing positional initialisation in Renderer.cpp keeps working.
+  rhi::Buffer* skinningBuffer = nullptr;
+  const std::vector<uint32_t>* objectSkinBase = nullptr;
 };
 
 // Fills GBuffer MRTs from scene meshes (bindless materials + fuzz/detail).

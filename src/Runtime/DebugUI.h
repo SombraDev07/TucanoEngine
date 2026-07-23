@@ -24,6 +24,19 @@ public:
   bool wantCaptureMouse() const;
   bool wantCaptureKeyboard() const;
 
+  // ── Transform gizmo (ImGuizmo) ──
+  enum class GizmoOp { Translate, Rotate, Scale };
+
+  // Draws the manipulator for `model` (world matrix, mutated in place). `snap` <= 0 disables
+  // snapping. Returns true while the user is dragging a handle, so callers can suppress their own
+  // picking/drag for that frame.
+  bool drawTransformGizmo(const glm::mat4& view, const glm::mat4& proj, glm::mat4& model,
+                          GizmoOp op, bool worldSpace, float snap,
+                          uint32_t viewportWidth, uint32_t viewportHeight);
+
+  // True while the cursor is over a gizmo handle (even without dragging).
+  bool gizmoHovered() const;
+
 private:
   bool m_ready = false;
   void* m_srvHeap = nullptr; // ID3D12DescriptorHeap*

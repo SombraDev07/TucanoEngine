@@ -14,6 +14,21 @@ struct Vertex {
   glm::vec4 tangent;
   glm::vec2 uv;
   glm::vec4 color{1, 1, 1, 1};
+
+  // Skinning. Four bone indices packed one per byte (matches DXGI_FORMAT_R8G8B8A8_UINT) plus their
+  // weights. Carried on every vertex rather than in a second stream: one input layout and one PSO
+  // keeps the whole renderer on a single path, at the cost of 20 bytes on static meshes.
+  // A weight sum of 0 means "not skinned" and the vertex shader skips the transform entirely.
+  uint32_t boneIndices = 0;
+  glm::vec4 boneWeights{0.0f};
+
+  /// Packs up to four bone influences. Weights are normalised so they sum to 1.
+  void setSkinning(const uint8_t idx[4], glm::vec4 weights) {
+    boneIndices = uint32_t(idx[0]) | (uint32_t(idx[1]) << 8) | (uint32_t(idx[2]) << 16) |
+                  (uint32_t(idx[3]) << 24);
+    const float sum = weights.x + weights.y + weights.z + weights.w;
+    boneWeights = sum > 1e-6f ? weights / sum : glm::vec4(0.0f);
+  }
 };
 
 struct SubMesh {

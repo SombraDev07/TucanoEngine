@@ -1,0 +1,7 @@
+{
+  "name": "Material_1",
+  "baseColor": [1, 1, 1],
+  "emissive": [0, 0, 0],
+  "metallic": 0,
+  "roughness": 0.72
+}

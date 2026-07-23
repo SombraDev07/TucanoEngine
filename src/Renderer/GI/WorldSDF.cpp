@@ -179,6 +179,9 @@ void WorldSDF::seedCascade(uint32_t cascade, const Scene& scene) {
   // 1) Triangle seeds (primary surface).
   uint32_t triBudget = 12288;
   for (const auto& obj : scene.objects) {
+    if (!obj.visible) {
+      continue;
+    }
     if (!obj.mesh || triBudget == 0) {
       break;
     }
@@ -234,6 +237,9 @@ void WorldSDF::seedCascade(uint32_t cascade, const Scene& scene) {
   // 2) Meshlet spheres → interior mask (walls).
   uint32_t meshletBudget = 2048;
   for (const auto& obj : scene.objects) {
+    if (!obj.visible) {
+      continue;
+    }
     if (!obj.mesh || meshletBudget == 0) {
       break;
     }

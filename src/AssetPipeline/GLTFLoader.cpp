@@ -101,6 +101,8 @@ std::shared_ptr<Mesh> loadMesh(rhi::Device& device, const cgltf_data* data, cons
     const cgltf_accessor* nrmAcc = nullptr;
     const cgltf_accessor* uvAcc = nullptr;
     const cgltf_accessor* tanAcc = nullptr;
+    const cgltf_accessor* jointAcc = nullptr;   // JOINTS_0
+    const cgltf_accessor* weightAcc = nullptr;  // WEIGHTS_0
 
     for (cgltf_size a = 0; a < prim.attributes_count; ++a) {
       const auto& attr = prim.attributes[a];
@@ -112,6 +114,10 @@ std::shared_ptr<Mesh> loadMesh(rhi::Device& device, const cgltf_data* data, cons
         uvAcc = attr.data;
       } else if (attr.type == cgltf_attribute_type_tangent) {
         tanAcc = attr.data;
+      } else if (attr.type == cgltf_attribute_type_joints && attr.index == 0) {
+        jointAcc = attr.data;
+      } else if (attr.type == cgltf_attribute_type_weights && attr.index == 0) {
+        weightAcc = attr.data;
       }
     }
     if (!posAcc) {
@@ -154,6 +160,18 @@ std::shared_ptr<Mesh> loadMesh(rhi::Device& device, const cgltf_data* data, cons
         v.tangent = {1, 0, 0, 1};
       }
       v.color = {1, 1, 1, 1};
+
+      // Skinning influences. Only the first set (JOINTS_0/WEIGHTS_0) is read: four bones per
+      // vertex covers virtually every rig, and more would need a wider vertex format.
+      if (jointAcc && weightAcc) {
+        cgltf_uint j[4]{};
+        float w[4]{};
+        cgltf_accessor_read_uint(jointAcc, i, j, 4);
+        cgltf_accessor_read_float(weightAcc, i, w, 4);
+        const uint8_t idx[4] = {uint8_t(j[0] & 0xFF), uint8_t(j[1] & 0xFF),
+                                uint8_t(j[2] & 0xFF), uint8_t(j[3] & 0xFF)};
+        v.setSkinning(idx, glm::vec4(w[0], w[1], w[2], w[3]));
+      }
     }
 
     if (prim.indices) {

@@ -70,14 +70,8 @@
                 <MenuItem Header="Delete Selected" InputGesture="Delete" Click="OnDeleteSelected" />
                 <MenuItem Header="Clear Scene" Click="OnClearScene" />
             </MenuItem>
-            <MenuItem Header="_Tools">
-                <MenuItem Header="Environment..." Click="OnOpenEnvironment"
-                          ToolTip.Tip="Sun, sky, fog, clouds, rain, post, shadows and GI" />
-                <Separator />
-                <MenuItem Header="Add Point Light" Click="OnAddPointLight" />
-                <MenuItem Header="Add Spot Light" Click="OnAddSpotLight" />
-                <MenuItem Header="Add Directional Light" Click="OnAddDirectionalLight" />
-            </MenuItem>
+            <!-- Populated from the panel registry at startup; see BuildToolsMenu. -->
+            <MenuItem Name="ToolsMenu" Header="_Tools" />
             <MenuItem Header="_Help">
                 <MenuItem Header="About Tucano Editor" Click="OnAbout" />
             </MenuItem>
@@ -502,6 +496,10 @@
                                             Click="OnDeleteLight" />
                                 </StackPanel>
                             </Expander>
+
+                            <!-- Registered sections land here: anything added through
+                                 EditorExtensions.AddSection shows up without touching this file. -->
+                            <StackPanel Name="DynamicSections" Spacing="8" />
 
                             <!-- Add component -->
                             <Button Name="AddComponentButton" Classes="accent" HorizontalAlignment="Stretch"

@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <functional>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
@@ -27,6 +28,22 @@
 
 namespace tucano {
 namespace {
+
+/// First .hdr/.exr in `dir`, alphabetically, or "" if there is none. Deterministic on purpose: two
+/// runs on the same folder must pick the same file.
+std::string findAnyHdriIn(const std::string& dir) {
+  std::error_code ec;
+  std::vector<std::string> found;
+  for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (!entry.is_regular_file(ec)) continue;
+    auto ext = entry.path().extension().string();
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (ext == ".hdr" || ext == ".exr") found.push_back(entry.path().string());
+  }
+  std::sort(found.begin(), found.end());
+  return found.empty() ? std::string{} : found.front();
+}
 
 struct FrameCBData {
   glm::mat4 viewProj;
@@ -52,7 +69,10 @@ struct ObjectCBData {
   glm::vec4 materialExt;
   glm::uvec4 textureIndices2;
   glm::vec4 fuzzColor;
+  // x = first matrix in the skinning palette, y = bone count (0 = not skinned).
+  glm::uvec4 skinInfo{0, 0, 0, 0};
 };
+static_assert(sizeof(ObjectCBData) <= 256, "ObjectCBData must fit one 256-byte constant slot");
 
 struct DrawMaterialGPU {
   glm::vec4 baseColorFactor;
@@ -176,6 +196,17 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   cb.size = 256ull * 4096ull;
   cb.debugName = "ObjectCB";
   m_objectCB = m_device.createBuffer(cb, nullptr);
+
+  {
+    // Skinning palette, shared by every skinned object in the frame. 4096 matrices is 32 rigs of
+    // 128 bones; overflow is dropped per object rather than corrupting other draws.
+    rhi::BufferDesc sk{};
+    sk.size = sizeof(glm::mat4) * kMaxSkinningMatrices;
+    sk.usage = rhi::BufferUsage::Structured | rhi::BufferUsage::Upload;
+    sk.stride = sizeof(glm::mat4);
+    sk.debugName = "SkinningPalette";
+    m_skinningBuffer = m_device.createBuffer(sk, nullptr);
+  }
   cb.size = 256 * 16; // octa view-projs + light arrays
   cb.debugName = "LightCB";
   m_lightCB = m_device.createBuffer(cb, nullptr);
@@ -260,6 +291,16 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
     if (!fileExists(hdri) && fileExists(m_settings.hdriPath)) {
       hdri = m_settings.hdriPath;
     }
+    // Nothing at the conventional name: take whatever HDRI is sitting in the folder rather than
+    // silently falling back to the procedural sky. Dropping a file in EngineAssets/IBL should be
+    // enough to see it, without also having to rename it to default.hdr.
+    if (!fileExists(hdri)) {
+      if (auto found = findAnyHdriIn(joinPath(TUCANO_ENGINE_ASSETS_DIR, "IBL")); !found.empty()) {
+        std::cout << "[IBL] '" << m_settings.hdriPath << "' missing — using " << found << "\n";
+        hdri = found;
+        m_settings.hdriPath = found;
+      }
+    }
     IBLTextures ibl = createIBLFromHDRIFile(m_device, hdri, 512);
     m_brdfLUT = ibl.brdfLUT->shared();
     m_irradiance = ibl.irradiance->shared();
@@ -268,6 +309,8 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   }
   m_iblExposure = 1.35f;
   std::cout << "[Renderer] IBL ready (maxMip=" << m_iblMaxMip << ")\n";
+
+  buildStarCatalogTextures();
 
   std::cout << "[Renderer] Precomputing Bruneton atmosphere LUTs...\n";
   m_bruneton.init(m_device);
@@ -279,10 +322,112 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   m_exposureCB = m_device.createBuffer(expCb, nullptr);
 }
 
+void Renderer::buildStarCatalogTextures() {
+  m_starCellTex.reset();
+  m_starDataTex.reset();
+  m_starCount = 0;
+
+  std::string path = joinPath(TUCANO_ENGINE_ASSETS_DIR, m_settings.starCatalogPath);
+  if (!fileExists(path) && fileExists(m_settings.starCatalogPath)) {
+    path = m_settings.starCatalogPath;
+  }
+
+  const std::vector<CatalogStar> catalog = loadStarCatalog(path);
+  if (catalog.empty()) {
+    std::cout << "[Stars] no catalogue at '" << path << "' — using the procedural star field\n";
+    return;
+  }
+
+  const StarGrid grid = buildStarGrid(catalog);
+
+  // Cell ranges: one texel per grid cell, holding where that cell's stars start and how many
+  // there are. Kept as a texture rather than a structured buffer so it rides the bindless heap
+  // the lighting pass already binds.
+  std::vector<float> cellData(static_cast<size_t>(StarGrid::kCellsU) * StarGrid::kCellsV * 4, 0.0f);
+  for (size_t i = 0; i < grid.cellRanges.size(); ++i) {
+    cellData[i * 4 + 0] = static_cast<float>(grid.cellRanges[i].x);
+    cellData[i * 4 + 1] = static_cast<float>(grid.cellRanges[i].y);
+  }
+
+  rhi::TextureDesc cellDesc{};
+  cellDesc.width = StarGrid::kCellsU;
+  cellDesc.height = StarGrid::kCellsV;
+  cellDesc.format = rhi::Format::R32G32B32A32_FLOAT;
+  cellDesc.usage = rhi::TextureUsage::ShaderResource;
+  cellDesc.debugName = "StarCells";
+  m_starCellTex = Texture::create(m_device, cellDesc, cellData.data(),
+                                  StarGrid::kCellsU * 4u * sizeof(float))
+                      ->shared();
+
+  // Two texels per star: (direction, radiance) then (colour, twinkle seed).
+  m_starDataWidth = 256;
+  const uint32_t texelCount = static_cast<uint32_t>(grid.stars.size()) * 2u;
+  const uint32_t rows = std::max(1u, (texelCount + m_starDataWidth - 1u) / m_starDataWidth);
+  std::vector<float> starData(static_cast<size_t>(m_starDataWidth) * rows * 4, 0.0f);
+  for (size_t i = 0; i < grid.stars.size(); ++i) {
+    const StarGPU& s = grid.stars[i];
+    const size_t t0 = i * 2 * 4;
+    starData[t0 + 0] = s.direction.x;
+    starData[t0 + 1] = s.direction.y;
+    starData[t0 + 2] = s.direction.z;
+    starData[t0 + 3] = s.radiance;
+    const size_t t1 = t0 + 4;
+    starData[t1 + 0] = s.color.r;
+    starData[t1 + 1] = s.color.g;
+    starData[t1 + 2] = s.color.b;
+    starData[t1 + 3] = s.twinkleSeed;
+  }
+
+  rhi::TextureDesc dataDesc{};
+  dataDesc.width = m_starDataWidth;
+  dataDesc.height = rows;
+  dataDesc.format = rhi::Format::R32G32B32A32_FLOAT;
+  dataDesc.usage = rhi::TextureUsage::ShaderResource;
+  dataDesc.debugName = "StarData";
+  m_starDataTex = Texture::create(m_device, dataDesc, starData.data(),
+                                  m_starDataWidth * 4u * sizeof(float))
+                      ->shared();
+
+  m_starCount = static_cast<uint32_t>(grid.stars.size());
+  std::cout << "[Stars] catalogue loaded: " << m_starCount << " stars from " << path << "\n";
+}
+
 Renderer::~Renderer() {
   try {
     m_device.waitIdle();
   } catch (...) {
+  }
+}
+
+bool Renderer::reloadIBL(const std::string& hdriPath) {
+  // Resolve the same way startup does: engine-relative first, then as an absolute/relative path.
+  std::string hdri = joinPath(TUCANO_ENGINE_ASSETS_DIR, hdriPath);
+  if (!fileExists(hdri) && fileExists(hdriPath)) {
+    hdri = hdriPath;
+  }
+  if (!fileExists(hdri)) {
+    std::cout << "[IBL] '" << hdriPath << "' not found — keeping the current environment\n";
+    return false;
+  }
+
+  try {
+    // The old irradiance/prefiltered textures may still be referenced by in-flight frames.
+    m_device.waitIdle();
+
+    IBLTextures ibl = createIBLFromHDRIFile(m_device, hdri, 512);
+    m_brdfLUT = ibl.brdfLUT->shared();
+    m_irradiance = ibl.irradiance->shared();
+    m_prefiltered = ibl.prefiltered->shared();
+    m_iblMaxMip = ibl.maxMip;
+    m_settings.hdriPath = hdriPath;
+    std::cout << "[IBL] reloaded from " << hdri << " (maxMip=" << m_iblMaxMip << ")\n";
+    return true;
+  } catch (const std::exception& e) {
+    std::cout << "[IBL] failed to load '" << hdri << "': " << e.what() << "\n";
+    return false;
+  } catch (...) {
+    std::cout << "[IBL] failed to load '" << hdri << "'\n";
+    return false;
   }
 }
 
@@ -995,12 +1140,19 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       break;
     }
   }
+  // Sun and moon come from one model, so the moon's terminator always points at the real sun and
+  // the two never drift apart. See Renderer/Sky/Celestial.h for what it does and does not model.
+  {
+    SkyEpoch epoch{};
+    epoch.timeOfDay = m_settings.timeOfDay;
+    epoch.dayOfYear = m_settings.dayOfYear;
+    epoch.latitudeDeg = m_settings.latitudeDeg;
+    m_celestial = computeCelestial(epoch);
+  }
+
   if (m_settings.enableAtmosphere && m_settings.atmosphereDrivesSun) {
-    const float t = m_settings.timeOfDay;
-    const float elev = std::sin((t - 0.25f) * 6.2831853f); // -1..1
-    const float azim = (t - 0.25f) * 6.2831853f;
-    // Directional light: from sun toward scene (negative Y at noon).
-    sunDir = glm::normalize(glm::vec3(std::cos(azim) * 0.65f, -std::max(elev, -0.15f) - 0.05f, std::sin(azim) * 0.65f));
+    sunDir = m_celestial.sunDir;
+    const float elev = -sunDir.y; // -1..1, positive when the sun is up
     const float day = std::clamp((elev + 0.05f) / 0.85f, 0.0f, 1.0f);
     const float dusk = std::clamp(1.0f - std::abs(elev) * 2.5f, 0.0f, 1.0f) * day;
     sunColor = glm::mix(glm::vec3(0.55f, 0.45f, 0.7f), glm::vec3(1.0f, 0.96f, 0.88f), day);
@@ -1037,6 +1189,19 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     const float elev = -sunDir.y;
     const float day = std::clamp((elev + 0.05f) / 0.85f, 0.0f, 1.0f);
     frame.ambientColor = glm::vec4(glm::mix(glm::vec3(0.01f, 0.015f, 0.04f), glm::vec3(0.08f, 0.11f, 0.18f), day), 1.0f);
+  }
+
+  // Environment lighting has to follow the clock. The IBL is cooked once, from an HDRI or the
+  // procedural sky, and knows nothing about time of day — left alone it floods a midnight scene
+  // with noon light and drowns the moon entirely. Scaling by the sun's elevation is the cheap
+  // stand-in for what a AAA engine does properly: re-capture the live sky into a cubemap every
+  // frame so the lighting and the visible sky can never disagree.
+  {
+    const float elev = -sunDir.y;
+    const float day = std::clamp((elev + 0.06f) / 0.30f, 0.0f, 1.0f);
+    // The night floor is not zero: even with no moon, airglow and starlight leave the world
+    // faintly visible, and a scene at exactly zero is just a black screen.
+    m_skyLightScale = glm::mix(0.012f, 1.0f, day * day);
   }
   float splits[4]{};
   const float cascadeEnds[4] = {5.f, 20.f, 60.f, 200.f};
@@ -1150,6 +1315,27 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   rhi::Viewport vp{0, 0, float(m_width), float(m_height), 0, 1};
   rhi::Scissor sc{0, 0, int(m_width), int(m_height)};
   cmd->setDescriptorHeap();
+
+  // Skinning palettes for the whole frame, packed back to back. objectSkinBase[i] is where
+  // object i's matrices start; UINT32_MAX means "not skinned".
+  std::vector<uint32_t> objectSkinBase(scene.objects.size(), UINT32_MAX);
+  {
+    uint32_t used = 0;
+    auto* palette = static_cast<glm::mat4*>(m_skinningBuffer->mapped());
+    if (palette) {
+      for (size_t i = 0; i < scene.objects.size(); ++i) {
+        const auto& mats = scene.objects[i].skinningMatrices;
+        if (mats.empty()) continue;
+        if (used + mats.size() > kMaxSkinningMatrices) {
+          // Out of palette room: leave this object un-skinned rather than overwrite another rig.
+          continue;
+        }
+        std::memcpy(palette + used, mats.data(), mats.size() * sizeof(glm::mat4));
+        objectSkinBase[i] = used;
+        used += static_cast<uint32_t>(mats.size());
+      }
+    }
+  }
 
   uint32_t objectSlot = 0;
   auto pushObjectCB = [&](const ObjectCBData& ocb) -> uint64_t {
@@ -1268,6 +1454,11 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->setPipeline(*m_shadowPSO);
       cmd->setGraphicsRootSrvTable(3, 0);
       cmd->setGraphicsRootSamplerTable(4, sampTable);
+      {
+        // space1 t0: skinning palette, same buffer the g-buffer pass reads.
+        D3D12_CPU_DESCRIPTOR_HANDLE skinSrv[] = {asDxBuf(*m_skinningBuffer).srvCpu};
+        cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(skinSrv, 1));
+      }
       for (int cascade = 0; cascade < 4; ++cascade) {
         if (m_settings.enableToroidalShadows && !m_shadowAtlas.isDirty(cascade)) {
           continue;
@@ -1312,12 +1503,22 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
           }
           cmd->setScissor({int(rects[r].x), int(rects[r].y), int(rects[r].x + rects[r].w),
                            int(rects[r].y + rects[r].h)});
-          for (auto& obj : scene.objects) {
-            if (!obj.mesh) {
+          for (size_t oi = 0; oi < scene.objects.size(); ++oi) {
+            auto& obj = scene.objects[oi];
+            if (!obj.mesh || !obj.visible) {
               continue;
             }
             RootXform xform{frame.lightViewProj[cascade], obj.worldMatrix};
             cmd->setGraphicsRootConstants(0, &xform, 32);
+
+            // Skinned casters need their palette slice, or the shadow shows the bind pose.
+            ObjectCBData shadowOcb{};
+            if (!obj.skinningMatrices.empty() && objectSkinBase[oi] != UINT32_MAX) {
+              shadowOcb.skinInfo =
+                  glm::uvec4(objectSkinBase[oi], uint32_t(obj.skinningMatrices.size()), 0, 0);
+            }
+            cmd->setGraphicsRootCBV(2, *m_objectCB, pushObjectCB(shadowOcb));
+
             cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
             cmd->setVertexBuffer(obj.mesh->vertexBuffer(), sizeof(Vertex));
             cmd->setIndexBuffer(obj.mesh->indexBuffer(), true);
@@ -1356,7 +1557,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->setViewport({off.x, off.y, float(ts), float(ts), 0, 1});
       cmd->setScissor({int(off.x), int(off.y), int(off.x) + int(ts), int(off.y) + int(ts)});
       for (auto& obj : scene.objects) {
-        if (!obj.mesh) {
+        if (!obj.mesh || !obj.visible) {
           continue;
         }
         RootOctaXform xform{};
@@ -1382,7 +1583,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->setScissor({int(off.x), int(off.y), int(off.x) + int(ts), int(off.y) + int(ts)});
       const glm::mat4 vpL = m_octaShadows.spotViewProj(s);
       for (auto& obj : scene.objects) {
-        if (!obj.mesh) {
+        if (!obj.mesh || !obj.visible) {
           continue;
         }
         RootXform xform{vpL, obj.worldMatrix};
@@ -1421,7 +1622,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->setScissor({int(ox), int(oy), int(ox + m_vsm.pageSize()), int(oy + m_vsm.pageSize())});
       const glm::mat4 pageVP = m_vsm.pageLightViewProj(page.vx, page.vy);
       for (auto& obj : scene.objects) {
-        if (!obj.mesh) {
+        if (!obj.mesh || !obj.visible) {
           continue;
         }
         RootXform xform{pageVP, obj.worldMatrix};
@@ -1465,7 +1666,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     cmd->setPipeline(*m_visBufferPSO);
     for (uint32_t oi = 0; oi < scene.objects.size(); ++oi) {
       auto& obj = scene.objects[oi];
-      if (!obj.mesh) {
+      if (!obj.mesh || !obj.visible) {
         continue;
       }
       const bool meshletObject = m_settings.enableMeshlets && obj.mesh->meshletGpuBuffer() &&
@@ -1585,7 +1786,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       bool cleared = false;
       for (uint32_t oi = 0; oi < scene.objects.size(); ++oi) {
         auto& obj = scene.objects[oi];
-        if (!obj.mesh || !obj.mesh->meshletGpuBuffer() || obj.mesh->meshletCount() == 0) {
+        if (!obj.visible || !obj.mesh || !obj.mesh->meshletGpuBuffer() || obj.mesh->meshletCount() == 0) {
           continue;
         }
         struct CullCBData {
@@ -1724,7 +1925,9 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
           m_settings.enableMeshlets,
           false,
           nullptr,
-          nullptr};
+          nullptr,
+          m_skinningBuffer.get(),
+          &objectSkinBase};
       executeGBufferPass(gb);
     }
   }
@@ -1866,7 +2069,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                              frame.flags,
                              frame.screenSize,
                              m_iblMaxMip,
-                             m_iblExposure,
+                             m_iblExposure * m_skyLightScale,
                              glm::vec4(m_settings.pcssLightSize, m_settings.esmExponent,
                                        m_settings.enableOctahedralPointShadows ? 1.f : 0.f,
                                        m_settings.enablePCSS ? 1.f : 0.f),
@@ -1887,6 +2090,39 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     for (int i = 0; i < 4; ++i) {
       lctx.lightViewProj[i] = frame.lightViewProj[i];
     }
+
+    // ── Night sky ──
+    // Stars and the moon glow fade out as the sun climbs. Civil twilight ends around -6 degrees
+    // of solar elevation, which is where the eye starts to pick out stars; -0.105 is sin(-6deg).
+    const float sunElev = -m_celestial.sunDir.y;
+    const float starFade = glm::clamp((0.02f - sunElev) / 0.14f, 0.0f, 1.0f);
+    const float verticalFov = glm::radians(60.0f);
+    const float pixelAngle = verticalFov / float(std::max(1u, m_height));
+
+    lctx.moonDirPhase = glm::vec4(m_celestial.moonDir, m_celestial.moonPhase);
+    // Moonlight is reflected sunlight, so it is very nearly white. The blue everyone associates
+    // with night comes from our own rod vision, and it is applied in the tonemapper instead.
+    const glm::vec3 moonlight{0.92f, 0.95f, 1.0f};
+    // Above the horizon only, and scaled by how much of the disc is actually lit — a crescent
+    // gives a fraction of the light a full moon does.
+    const float moonElev = glm::clamp(-m_celestial.moonDir.y * 6.0f, 0.0f, 1.0f);
+    const float moonLightAmount = m_settings.enableMoon
+                                      ? m_settings.moonIntensity * m_celestial.moonIllumination *
+                                            moonElev * starFade
+                                      : 0.0f;
+    lctx.moonColorIntensity = glm::vec4(moonlight, moonLightAmount);
+    lctx.moonDiscParams = glm::vec4(glm::radians(m_settings.moonAngularRadiusDeg),
+                                    m_celestial.moonIllumination, m_settings.moonDiscBrightness,
+                                    m_settings.enableMoon ? 1.0f : 0.0f);
+    lctx.starParams = glm::vec4(m_settings.enableStars ? m_settings.starIntensity : 0.0f, 0.006f,
+                                glm::radians(m_settings.starSizeDeg), m_settings.starTwinkle);
+    lctx.celestialParams =
+        glm::vec4(pixelAngle, m_timeSeconds, starFade, float(m_starDataWidth));
+    lctx.starCellTex = m_starCellTex.get();
+    lctx.starDataTex = m_starDataTex.get();
+    lctx.catalogStarCount = m_starCount;
+    lctx.worldToEquatorial = m_celestial.worldToEquatorial;
+
     executeLightingPass(lctx);
   }
   }; // rgLighting
@@ -1952,7 +2188,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   p3cb.params = glm::vec4(0.55f, 0.0025f, 32.0f, static_cast<float>(m_settings.giTier));
   p3cb.volumeOriginExtent = glm::vec4(frame.cameraPos.x - 12.f, 0.0f, frame.cameraPos.z - 12.f, 24.0f);
   // z=probeY (normalized in volume), w=temporal alpha (base; shader scales by motion)
-  p3cb.iblParams = glm::vec4(m_iblMaxMip, m_iblExposure, 0.35f, 0.12f);
+  p3cb.iblParams = glm::vec4(m_iblMaxMip, m_iblExposure * m_skyLightScale, 0.35f, 0.12f);
   p3cb.prevViewProj = m_hasPrevCamera ? m_prevViewProj : frame.viewProj;
   {
     glm::vec4 cascades[4];
@@ -2262,8 +2498,13 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                              *m_samplerLinear,
                              m_width,
                              m_height,
-                             m_settings.exposureMin,
-                             m_settings.exposureMax,
+                             m_settings.exposureMin * m_skyLightScale,
+                             // Cap how far the eye is allowed to adapt back. Auto-exposure pulls
+                             // any scene toward mid-grey, so without this a midnight frame comes
+                             // out as bright as noon and the whole night sky is pointless. Real
+                             // adaptation works the same way: it recovers a lot of a dark scene,
+                             // but never all of it.
+                             m_settings.exposureMax * glm::mix(0.05f, 1.0f, m_skyLightScale),
                              m_settings.exposureAdapt,
                              m_settings.exposureTarget};
     executeExposurePass(ectx);
@@ -2320,6 +2561,10 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                             *m_samplerLinear,
                             m_settings.enableBloom ? m_settings.bloomStrength : 0.0f,
                             1.0f,
+                            // Only ramp in the night-vision response once the sun is actually down;
+                            // during the day it would wash out shadowed corners.
+                            m_settings.purkinjeStrength *
+                                glm::clamp((0.02f + m_celestial.sunDir.y) / 0.12f, 0.0f, 1.0f),
                             vp,
                             sc};
     executeTonemapPass(tctx);
@@ -2370,7 +2615,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->setScissor({int(ox), 0, int(ox + fs), int(fs)});
       const glm::mat4 vpFace = m_reflectionProbes.faceViewProj(probeIdx, face);
       for (auto& obj : scene.objects) {
-        if (!obj.mesh) {
+        if (!obj.mesh || !obj.visible) {
           continue;
         }
         for (const auto& sub : obj.mesh->submeshes()) {

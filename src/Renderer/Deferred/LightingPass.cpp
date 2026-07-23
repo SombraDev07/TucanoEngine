@@ -35,6 +35,15 @@ struct LightingCB {
   glm::vec4 atmParams;
   glm::vec4 brunetonParams;
   glm::uvec4 brunetonTexIds;
+  glm::vec4 moonDirPhase;
+  glm::vec4 moonColorIntensity;
+  glm::vec4 moonDiscParams;
+  glm::vec4 starParams;
+  glm::vec4 celestialParams;
+  glm::uvec4 celestialTexIds;
+  glm::vec4 worldToEq0;
+  glm::vec4 worldToEq1;
+  glm::vec4 worldToEq2;
 };
 
 } // namespace
@@ -78,6 +87,24 @@ void executeLightingPass(LightingPassContext& ctx) {
   if (ctx.brunetonIrradiance) {
     lcb.brunetonTexIds.z = bindlessOf(*ctx.brunetonIrradiance);
   }
+
+  lcb.moonDirPhase = ctx.moonDirPhase;
+  lcb.moonColorIntensity = ctx.moonColorIntensity;
+  lcb.moonDiscParams = ctx.moonDiscParams;
+  lcb.starParams = ctx.starParams;
+  lcb.celestialParams = ctx.celestialParams;
+  const uint32_t starCells = ctx.starCellTex ? bindlessOf(*ctx.starCellTex) : 0u;
+  const uint32_t starData = ctx.starDataTex ? bindlessOf(*ctx.starDataTex) : 0u;
+  lcb.celestialTexIds = {starCells, starData, ctx.catalogStarCount, 0u};
+  // Rows of the world -> equatorial rotation. glm is column-major, so a row is a component slice.
+  for (int r = 0; r < 3; ++r) {
+    const glm::vec4 row{ctx.worldToEquatorial[0][r], ctx.worldToEquatorial[1][r],
+                        ctx.worldToEquatorial[2][r], 0.0f};
+    if (r == 0) lcb.worldToEq0 = row;
+    else if (r == 1) lcb.worldToEq1 = row;
+    else lcb.worldToEq2 = row;
+  }
+
   updateCB(ctx.frameCB, &lcb, sizeof(lcb));
 
   ctx.cmd.transition(ctx.hdr, rhi::ResourceState::RenderTarget);

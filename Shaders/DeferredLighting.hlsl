@@ -1,6 +1,7 @@
 #include "Common.hlsl"
 #include "Atmosphere.hlsl"
 #include "BrunetonAtmosphere.hlsl"
+#include "Celestial.hlsl"
 
 struct VSOut {
   float4 position : SV_Position;
@@ -27,6 +28,15 @@ cbuffer FrameCB : register(b1) {
   float4 atmParams;     // x=turbidity, y=fogDensity, z=fogHeight, w=enableAtmosphere
   float4 brunetonParams; // x=bottomKm, y=topKm, z=mieG, w=exposure (+ enable if textures bound)
   uint4 brunetonTexIds; // transmittance, scattering, irradiance, enableBruneton
+  float4 moonDirPhase;       // xyz = moon->scene direction, w = phase (0=new, .5=full)
+  float4 moonColorIntensity; // rgb = moonlight colour, w = light intensity
+  float4 moonDiscParams;     // x = angular radius (rad), y = illuminated fraction, z = disc brightness, w = enable
+  float4 starParams;         // x = intensity, y = procedural density, z = base sigma (rad), w = twinkle
+  float4 celestialParams;    // x = pixel angle (rad), y = time (s), z = star fade, w = catalogue data width
+  uint4 celestialTexIds;     // starCells, starData, catalogueStarCount, _
+  float4 worldToEq0;         // rows of world -> equatorial. Together they ARE the sidereal rotation.
+  float4 worldToEq1;
+  float4 worldToEq2;
 };
 
 cbuffer LightCB : register(b2) {
@@ -301,6 +311,43 @@ float3 evaluateClearcoat(float3 lo, float clearcoat, float clearcoatRoughness, f
   return lo;
 }
 
+/// Stars and moon for one sky ray. Returns black once the sun washes them out, so the same call
+/// is safe at any hour — the fade is computed on the CPU from the sun's elevation.
+float3 evaluateNightSky(float3 dir) {
+  float3 night = 0.0;
+  float fade = celestialParams.z;
+
+  if (fade > 0.001 && starParams.x > 0.0) {
+    uint cellId = safeBindless(celestialTexIds.x);
+    uint dataId = safeBindless(celestialTexIds.y);
+    // The catalogue carries the stars that make constellations readable; a real sky also has a
+    // few thousand fainter ones behind them that no curated list covers. Layering the procedural
+    // field underneath fills that in, so the named stars sit in a plausible background instead of
+    // floating alone in black.
+    float3 stars = 0.0;
+    float fill = 1.0;
+    if (cellId != 0 && dataId != 0 && celestialTexIds.z > 0u) {
+      float3x3 worldToEq = float3x3(worldToEq0.xyz, worldToEq1.xyz, worldToEq2.xyz);
+      Texture2D cellTex = bindlessHeap[NonUniformResourceIndex(cellId)];
+      Texture2D dataTex = bindlessHeap[NonUniformResourceIndex(dataId)];
+      stars = catalogStars(dir, worldToEq, cellTex, dataTex, uint(celestialParams.w), starParams.z,
+                           celestialParams.x, celestialParams.y, starParams.w);
+      fill = 0.4; // keep the fill clearly below the real stars
+    }
+    stars += proceduralStars(dir, starParams.y, celestialParams.y, starParams.w) * fill;
+    // Below the horizon there is ground, not sky.
+    night += stars * starParams.x * fade * smoothstep(-0.02, 0.06, dir.y);
+  }
+
+  if (moonDiscParams.w > 0.5) {
+    night += moonDisc(dir, moonDirPhase.xyz, sunDirectionIntensity.xyz, moonDiscParams.x,
+                      moonColorIntensity.rgb, moonDiscParams.z);
+    night += moonGlow(dir, moonDirPhase.xyz, moonColorIntensity.rgb,
+                      moonDiscParams.z * moonDiscParams.y * fade);
+  }
+  return night;
+}
+
 float4 PSMain(VSOut input) : SV_Target {
   Texture2D depthTex = bindlessHeap[NonUniformResourceIndex(safeBindless(texIds1.x))];
   float depth = depthTex.SampleLevel(samp, input.uv, 0).r;
@@ -323,6 +370,7 @@ float4 PSMain(VSOut input) : SV_Target {
     } else if (flags.y > 0.5) {
       env = samplePrefiltered(dir, 0.0) * iblParams.y;
     }
+    env += evaluateNightSky(dir);
     return float4(env, 1.0);
   }
 
@@ -389,6 +437,16 @@ float4 PSMain(VSOut input) : SV_Target {
     lo += evaluateFuzz(fuzzCol, fuzz, n, v, l, radiance) * shadow;
   }
 
+  // Moonlight. A second directional, unshadowed: the cascade atlas belongs to the sun, and at
+  // these intensities (two or three orders of magnitude under daylight) leaking through geometry
+  // reads as ambient rather than as a bug. AO carries the contact darkening instead.
+  if (moonColorIntensity.w > 0.0001) {
+    float3 ml = normalize(-moonDirPhase.xyz);
+    float3 mRadiance = moonColorIntensity.rgb * moonColorIntensity.w * ao;
+    lo += evaluateDirectBRDF(albedo, f0, metallic, roughness, n, v, ml, mRadiance);
+    lo = evaluateClearcoat(lo, clearcoat, clearcoatRoughness, n, v, ml, mRadiance, 1.0);
+  }
+
   uint lc = min(lightCount, 16u);
   [loop] for (uint i = 0; i < lc; ++i) {
     float3 lpos = lightPosType[i].xyz;
@@ -451,7 +509,10 @@ float4 PSMain(VSOut input) : SV_Target {
         dfgC = brdfLUT.SampleLevel(samp, float2(nDotV, clearcoatRoughness), 0).rg;
       }
       float Fc = fresnelSchlickRoughness(nDotV, 0.04, clearcoatRoughness).x;
-      float3 coat = samplePrefiltered(r, clearcoatRoughness) * (0.04 * dfgC.x + dfgC.y);
+      // iblParams.y has to apply here too. Every other environment term is scaled by it, and a
+      // clearcoat lobe that ignores it keeps reflecting a full-strength environment after the
+      // rest of the ambient has been dimmed — which is what lit a midnight scene like noon.
+      float3 coat = samplePrefiltered(r, clearcoatRoughness) * (0.04 * dfgC.x + dfgC.y) * iblParams.y;
       ambient = ambient * (1.0 - clearcoat * Fc) + coat * clearcoat * sao;
     }
     if (fuzz > 1e-4) {

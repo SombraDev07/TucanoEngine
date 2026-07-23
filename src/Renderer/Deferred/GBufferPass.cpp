@@ -19,6 +19,8 @@ struct ObjectCBData {
   glm::vec4 materialExt;
   glm::uvec4 textureIndices2;
   glm::vec4 fuzzColor;
+  // Must mirror ObjectCBData in Renderer.cpp and ObjectCB in GBuffer.hlsl.
+  glm::uvec4 skinInfo{0, 0, 0, 0}; // first matrix, bone count (0 = not skinned)
 };
 
 struct RootXform {
@@ -35,7 +37,8 @@ struct DrawIndexedArgs {
 };
 
 void bindAndDrawMeshlet(GBufferPassContext& ctx, RenderObject& obj, uint32_t materialIndex, rhi::Buffer& ib,
-                        uint32_t indexCount, uint32_t indexOffset, rhi::Buffer* indirectArgs, uint64_t indirectOff) {
+                        uint32_t indexCount, uint32_t indexOffset, rhi::Buffer* indirectArgs, uint64_t indirectOff,
+                        size_t objectIndex = SIZE_MAX) {
   auto mat = (materialIndex < obj.materials.size()) ? obj.materials[materialIndex] : nullptr;
   auto* albedo = mat && mat->albedo ? &mat->albedo->resource() : &ctx.defaultAlbedo;
   auto* normal = mat && mat->normal ? &mat->normal->resource() : &ctx.defaultNormal;
@@ -96,6 +99,15 @@ void bindAndDrawMeshlet(GBufferPassContext& ctx, RenderObject& obj, uint32_t mat
   ocb.textureIndices2 =
       glm::uvec4(clampBindless(ocb.textureIndices2.x), clampBindless(ocb.textureIndices2.y), 0, 0);
 
+  // Skinning: point the shader at this object's slice of the frame palette. Left at zero when the
+  // object has no skin, which is what makes the vertex shader take the rigid path.
+  if (ctx.skinningBuffer && ctx.objectSkinBase && objectIndex < ctx.objectSkinBase->size()) {
+    const uint32_t base = (*ctx.objectSkinBase)[objectIndex];
+    if (base != UINT32_MAX && !obj.skinningMatrices.empty()) {
+      ocb.skinInfo = glm::uvec4(base, static_cast<uint32_t>(obj.skinningMatrices.size()), 0, 0);
+    }
+  }
+
   const uint64_t cbOff = ctx.pushObjectCB(&ocb, sizeof(ocb));
   RootXform xform{ctx.viewProj, obj.worldMatrix};
   ctx.cmd.setGraphicsRootConstants(0, &xform, 32);
@@ -143,8 +155,17 @@ void executeGBufferPass(GBufferPassContext& ctx) {
   ctx.cmd.setGraphicsRootSrvTable(3, 0);
   ctx.cmd.setGraphicsRootSamplerTable(4, ctx.sampTable);
 
-  for (auto& obj : ctx.scene.objects) {
-    if (!obj.mesh) {
+  // space1 t0: the frame's skinning palette. Bound once — every skinned draw indexes into it.
+  if (ctx.skinningBuffer) {
+    auto& dx = static_cast<rhi::DX12Device&>(ctx.device);
+    D3D12_CPU_DESCRIPTOR_HANDLE skinSrv[] = {
+        static_cast<rhi::DX12Buffer&>(*ctx.skinningBuffer).srvCpu};
+    ctx.cmd.setGraphicsRootSrvTable(5, dx.writeSrvTable(skinSrv, 1));
+  }
+
+  for (size_t objectIndex = 0; objectIndex < ctx.scene.objects.size(); ++objectIndex) {
+    auto& obj = ctx.scene.objects[objectIndex];
+    if (!obj.mesh || !obj.visible) {
       continue;
     }
     if (ctx.meshletsTotal) {
@@ -152,7 +173,7 @@ void executeGBufferPass(GBufferPassContext& ctx) {
     }
 
     auto drawSub = [&](uint32_t materialIndex, uint32_t indexCount, uint32_t indexOffset, rhi::Buffer& ib) {
-      bindAndDrawMeshlet(ctx, obj, materialIndex, ib, indexCount, indexOffset, nullptr, 0);
+      bindAndDrawMeshlet(ctx, obj, materialIndex, ib, indexCount, indexOffset, nullptr, 0, objectIndex);
     };
 
     const bool meshletPath = ctx.enableMeshlets && obj.mesh->meshletIndexBuffer() && obj.mesh->meshletCount() > 0;

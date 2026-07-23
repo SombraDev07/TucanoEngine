@@ -1,4 +1,5 @@
 #include "Common.hlsl"
+#include "Celestial.hlsl"
 
 struct VSOut {
   float4 position : SV_Position;
@@ -36,6 +37,9 @@ float4 PSTonemap(VSOut input) : SV_Target {
     exposure = max(expTex.Load(int3(0, 0, 0)).r, 1e-4);
   }
   hdr *= exposure;
+  // Night-vision response before the tonemap curve: the shift happens in the eye, which sees
+  // scene luminance, not the display-referred values that come out of ACES.
+  hdr = purkinjeShift(hdr, params.z);
   float3 color = acesTonemap(hdr);
   color = pow(saturate(color), 1.0 / 2.2);
   return float4(color, 1.0);

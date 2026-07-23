@@ -49,9 +49,24 @@ struct LightingPassContext {
   rhi::Texture* brunetonTransmittance = nullptr;
   rhi::Texture* brunetonScattering = nullptr;
   rhi::Texture* brunetonIrradiance = nullptr;
+
   rhi::Viewport viewport{};
   rhi::Scissor scissor{};
   uint32_t* drawCalls = nullptr;
+
+  // ── Celestial bodies (see Renderer/Sky/Celestial.h) ──
+  // Deliberately last: the renderer builds this struct with positional aggregate initialisation,
+  // so anything added ahead of drawCalls would silently shift every argument after it. These are
+  // assigned by name instead.
+  glm::vec4 moonDirPhase{0.0f, -1.0f, 0.0f, 0.5f};       ///< xyz = moon->scene, w = phase
+  glm::vec4 moonColorIntensity{0.0f};                    ///< rgb = moonlight colour, w = intensity
+  glm::vec4 moonDiscParams{0.0045f, 1.0f, 1.0f, 0.0f};   ///< angRadius, illum, discBrightness, enable
+  glm::vec4 starParams{0.0f, 0.006f, 0.0009f, 0.35f};    ///< intensity, procDensity, sigma, twinkle
+  glm::vec4 celestialParams{0.001f, 0.0f, 0.0f, 256.0f}; ///< pixelAngle, time, starFade, dataWidth
+  rhi::Texture* starCellTex = nullptr;
+  rhi::Texture* starDataTex = nullptr;
+  uint32_t catalogStarCount = 0;
+  glm::mat3 worldToEquatorial{1.0f};
 };
 
 void executeLightingPass(LightingPassContext& ctx);

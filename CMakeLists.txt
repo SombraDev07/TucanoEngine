@@ -144,6 +144,8 @@ add_subdirectory(Samples/SkyLab)
 add_subdirectory(Samples/TestEditor)
 add_subdirectory(Tools/Benchmark)
 add_subdirectory(Tools/ECSTest)
+add_subdirectory(Tools/InputTest)
+add_subdirectory(Tools/AnimationTest)
 
 add_dependencies(TucanoRuntime TucanoShaders)
 add_dependencies(HelloTriangle TucanoShaders)

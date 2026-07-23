@@ -42,7 +42,7 @@ void VoxelGI::update(rhi::Device& device, const Scene& scene, float amortizeFrac
   }
 
   for (const auto& obj : scene.objects) {
-    if (!obj.mesh) {
+    if (!obj.mesh || !obj.visible) {
       continue;
     }
     const glm::vec3 p = glm::vec3(obj.worldMatrix[3]);
@@ -83,6 +83,7 @@ void SkyVisibility::update(const Scene& scene, const glm::vec3& cameraPos, float
     float occ = 0.0f;
     int hits = 0;
     for (const auto& obj : scene.objects) {
+      if (!obj.visible) continue;
       const glm::vec3 p = glm::vec3(obj.worldMatrix[3]);
       const float d = glm::length(glm::vec2(p.x - probePos.x, p.z - probePos.z));
       if (d < tw * 2.0f) {

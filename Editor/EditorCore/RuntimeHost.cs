@@ -190,6 +190,24 @@ public sealed class RuntimeHost : IDisposable
         set { if (_handle != IntPtr.Zero) TucanoApi.tucano_runtime_set_overlay_visible(_handle, value); }
     }
 
+    // -- Celestial bodies --
+    // Derived from TimeOfDay / DayOfYear / LatitudeDeg in the environment. Directions point FROM
+    // the body toward the scene, so negate one to look at it.
+
+    public TucanoVec3 SunDirection =>
+        _handle == IntPtr.Zero ? default : TucanoApi.tucano_sky_sun_direction(_handle);
+
+    public TucanoVec3 MoonDirection =>
+        _handle == IntPtr.Zero ? default : TucanoApi.tucano_sky_moon_direction(_handle);
+
+    /// 0 = new, 0.5 = full.
+    public float MoonPhase =>
+        _handle == IntPtr.Zero ? 0f : TucanoApi.tucano_sky_moon_phase(_handle);
+
+    /// Fraction of the lunar disc that is lit.
+    public float MoonIllumination =>
+        _handle == IntPtr.Zero ? 0f : TucanoApi.tucano_sky_moon_illumination(_handle);
+
     public bool Screenshot(string pngPath) =>
         _handle != IntPtr.Zero && TucanoApi.tucano_runtime_screenshot(_handle, pngPath);
 
@@ -281,6 +299,116 @@ public sealed class RuntimeHost : IDisposable
         if (_scene == IntPtr.Zero) return new TucanoVec3(1, 1, 1);
         TucanoApi.tucano_scene_get_object_color(_scene, index, out var rgb);
         return rgb;
+    }
+
+    // ── Input ──
+
+    public bool IsButtonHeld(int buttonCode) =>
+        _handle != IntPtr.Zero && TucanoApi.tucano_input_is_button_held(_handle, buttonCode);
+
+    public (float dx, float dy) GetMouseDelta()
+    {
+        if (_handle == IntPtr.Zero) return (0f, 0f);
+        TucanoApi.tucano_input_get_mouse_delta(_handle, out var dx, out var dy);
+        return (dx, dy);
+    }
+
+    public bool IsVirtualButtonHeld(string name) =>
+        _handle != IntPtr.Zero && TucanoApi.tucano_input_is_virtual_button_held(_handle, name);
+
+    public float GetVirtualAxis(string name) =>
+        _handle != IntPtr.Zero ? TucanoApi.tucano_input_get_virtual_axis(_handle, name) : 0f;
+
+    public void BindButton(string name, int buttonCode, int modifiers = 0, bool repeatable = false)
+    {
+        if (_handle != IntPtr.Zero)
+            TucanoApi.tucano_input_bind_button(_handle, name, buttonCode, modifiers, repeatable);
+    }
+
+    public void ResetInputBindings()
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_input_reset_bindings(_handle);
+    }
+
+    public string GetButtonName(int buttonCode) =>
+        Marshal.PtrToStringAnsi(TucanoApi.tucano_input_button_name(buttonCode)) ?? "Unassigned";
+
+    public int GetButtonFromName(string name) => TucanoApi.tucano_input_button_from_name(name);
+
+    public int ButtonCodeCount => TucanoApi.tucano_input_button_count();
+
+    // ── Animation ──
+
+    /// Imports a mesh together with its rig and clips when the file has them.
+    public uint ImportAnimatedMesh(string path, float x, float y, float z, float scale = 1f)
+    {
+        if (_scene == IntPtr.Zero) return InvalidObject;
+        return TucanoApi.tucano_scene_import_animated_mesh(_scene, path, new TucanoVec3(x, y, z), scale);
+    }
+
+    public uint GetClipCount(uint obj) =>
+        _scene != IntPtr.Zero ? TucanoApi.tucano_anim_clip_count(_scene, obj) : 0;
+
+    public string GetClipName(uint obj, uint clip) =>
+        Marshal.PtrToStringAnsi(TucanoApi.tucano_anim_clip_name(_scene, obj, clip)) ?? "";
+
+    public float GetClipDuration(uint obj, uint clip) =>
+        _scene != IntPtr.Zero ? TucanoApi.tucano_anim_clip_duration(_scene, obj, clip) : 0f;
+
+    public uint GetBoneCount(uint obj) =>
+        _scene != IntPtr.Zero ? TucanoApi.tucano_anim_bone_count(_scene, obj) : 0;
+
+    public void PlayClip(uint obj, uint clip, bool loop = true)
+    {
+        if (_scene != IntPtr.Zero) TucanoApi.tucano_anim_play(_scene, obj, clip, loop);
+    }
+
+    public void StopClip(uint obj)
+    {
+        if (_scene != IntPtr.Zero) TucanoApi.tucano_anim_stop(_scene, obj);
+    }
+
+    public void PauseClip(uint obj, bool paused)
+    {
+        if (_scene != IntPtr.Zero) TucanoApi.tucano_anim_pause(_scene, obj, paused);
+    }
+
+    public bool IsClipPlaying(uint obj) =>
+        _scene != IntPtr.Zero && TucanoApi.tucano_anim_is_playing(_scene, obj);
+
+    public int GetCurrentClip(uint obj) =>
+        _scene != IntPtr.Zero ? TucanoApi.tucano_anim_current_clip(_scene, obj) : -1;
+
+    public float GetClipTime(uint obj) =>
+        _scene != IntPtr.Zero ? TucanoApi.tucano_anim_get_time(_scene, obj) : 0f;
+
+    public void SetClipTime(uint obj, float time)
+    {
+        if (_scene != IntPtr.Zero) TucanoApi.tucano_anim_set_time(_scene, obj, time);
+    }
+
+    public float GetClipSpeed(uint obj) =>
+        _scene != IntPtr.Zero ? TucanoApi.tucano_anim_get_speed(_scene, obj) : 1f;
+
+    public void SetClipSpeed(uint obj, float speed)
+    {
+        if (_scene != IntPtr.Zero) TucanoApi.tucano_anim_set_speed(_scene, obj, speed);
+    }
+
+    // ── Skybox ──
+
+    /// Re-cooks image-based lighting from an .hdr. False means the file could not be used and the
+    /// previous environment is still in place.
+    public bool SetSkyboxTexture(string hdriPath) =>
+        _handle != IntPtr.Zero && TucanoApi.tucano_skybox_set_texture(_handle, hdriPath);
+
+    public string GetSkyboxTexture() =>
+        _handle == IntPtr.Zero ? "" : Marshal.PtrToStringAnsi(TucanoApi.tucano_skybox_get_texture(_handle)) ?? "";
+
+    public float SkyboxBrightness
+    {
+        get => _handle != IntPtr.Zero ? TucanoApi.tucano_skybox_get_brightness(_handle) : 0f;
+        set { if (_handle != IntPtr.Zero) TucanoApi.tucano_skybox_set_brightness(_handle, value); }
     }
 
     // ── Environment ──

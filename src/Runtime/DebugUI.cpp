@@ -6,6 +6,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_dx12.h>
+#include <ImGuizmo.h>
 
 #include <d3d12.h>
 #include <wrl.h>
@@ -79,6 +80,9 @@ void DebugUI::beginFrame() {
   ImGui_ImplDX12_NewFrame();
   ImGui_ImplGlfw_NewFrame();
   ImGui::NewFrame();
+  // Must follow ImGui::NewFrame() — ImGuizmo resets its per-frame state here even when no gizmo
+  // ends up being drawn.
+  ImGuizmo::BeginFrame();
 }
 
 void DebugUI::endFrame(rhi::CommandList& cmd, rhi::Texture& renderTarget) {
@@ -98,6 +102,34 @@ void DebugUI::endFrame(rhi::CommandList& cmd, rhi::Texture& renderTarget) {
   ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), dxCmd.get());
   cmd.setDescriptorHeap();
 }
+
+bool DebugUI::drawTransformGizmo(const glm::mat4& view, const glm::mat4& proj, glm::mat4& model,
+                                 GizmoOp op, bool worldSpace, float snap,
+                                 uint32_t viewportWidth, uint32_t viewportHeight) {
+  if (!m_ready || viewportWidth == 0 || viewportHeight == 0) return false;
+
+  ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
+  switch (op) {
+    case GizmoOp::Rotate: operation = ImGuizmo::ROTATE; break;
+    case GizmoOp::Scale: operation = ImGuizmo::SCALE; break;
+    case GizmoOp::Translate: break;
+  }
+  // Scaling is only meaningful in the object's own space; ImGuizmo ignores WORLD for SCALE anyway.
+  const ImGuizmo::MODE mode =
+      (worldSpace && op != GizmoOp::Scale) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
+
+  ImGuizmo::SetOrthographic(false);
+  // The gizmo draws to the background list so it is not clipped by (or dependent on) any window.
+  ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
+  ImGuizmo::SetRect(0.0f, 0.0f, float(viewportWidth), float(viewportHeight));
+
+  const float snapValues[3] = {snap, snap, snap};
+  ImGuizmo::Manipulate(&view[0][0], &proj[0][0], operation, mode, &model[0][0], nullptr,
+                       snap > 0.0f ? snapValues : nullptr);
+  return ImGuizmo::IsUsing();
+}
+
+bool DebugUI::gizmoHovered() const { return m_ready && ImGuizmo::IsOver(); }
 
 bool DebugUI::wantCaptureMouse() const { return m_ready && ImGui::GetIO().WantCaptureMouse; }
 bool DebugUI::wantCaptureKeyboard() const { return m_ready && ImGui::GetIO().WantCaptureKeyboard; }

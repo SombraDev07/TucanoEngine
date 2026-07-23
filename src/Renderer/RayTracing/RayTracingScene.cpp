@@ -98,7 +98,7 @@ void RayTracingScene::rebuildTlas(rhi::Device& device, rhi::CommandList& cmd, Sc
 
   for (size_t i = 0; i < scene.objects.size(); ++i) {
     auto& obj = scene.objects[i];
-    if (!obj.mesh) {
+    if (!obj.mesh || !obj.visible) {
       continue;
     }
     auto it = m_blas.find(obj.mesh.get());
@@ -166,7 +166,7 @@ void RayTracingScene::update(rhi::Device& device, rhi::CommandList& cmd, Scene& 
 
   bool needBlas = !m_blasBuilt;
   for (auto& obj : scene.objects) {
-    if (!obj.mesh) {
+    if (!obj.mesh || !obj.visible) {
       continue;
     }
     if (m_blas.find(obj.mesh.get()) == m_blas.end()) {
