@@ -1249,6 +1249,29 @@ public partial class MainWindow : Window
     /// Kept for the F-key shortcut; the menu entry now comes from the panel registry.
     private void OnOpenEnvironment(object? sender, RoutedEventArgs e) => OpenPanel("environment");
 
+    // ── Landscape Mode ──────────────────────────────────
+
+    private bool _landscapeMode;
+    public bool LandscapeMode
+    {
+        get => _landscapeMode;
+        set
+        {
+            _landscapeMode = value;
+            if (_runtime is not null)
+            {
+                _runtime.TerrainSculptActive = value;
+                if (value) _runtime.CameraNavigation = true; // keep fly-cam active
+            }
+        }
+    }
+
+    private void OnToggleLandscape(object? sender, RoutedEventArgs e)
+    {
+        LandscapeMode = LandscapeToggle.IsChecked == true;
+        OpenPanel("terrain"); // auto-open terrain panel
+    }
+
     // ── Gizmo ─────────────────────────────────────────
 
     private void OnGizmoOpChanged(object? sender, RoutedEventArgs e)
@@ -1477,6 +1500,7 @@ public partial class MainWindow : Window
         // Built-ins. Anything added here appears in the inspector and the Tools menu automatically.
         _extensions.AddSection(new AnimationSection());
         _extensions.AddPanel(new EnvironmentPanel());
+        _extensions.AddPanel(new TerrainPanel());
 
         BuildToolsMenu();
     }

@@ -657,6 +657,49 @@ public sealed class RuntimeHost : IDisposable
             new TucanoVec3(fx, fy, fz), new TucanoVec3(ux, uy, uz));
     }
 
+    // ── Terrain ──────────────────────────────────────
+
+    public IntPtr NativePtr => Handle;
+
+    public bool TerrainCreateProcedural(uint res, float size, uint octaves = 6,
+        float persistence = 0.5f, float amplitude = 128f, uint seed = 42)
+        => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_create_procedural(_handle,
+            res, size, octaves, persistence, amplitude, 0f, seed);
+
+    public void TerrainDestroy() { if (_handle != IntPtr.Zero) TucanoApi.tucano_terrain_destroy(_handle); }
+
+    public bool TerrainSculpt(float wx, float wz, float radius, float strength, int tool)
+        => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_sculpt(_handle, wx, wz, radius, strength, tool);
+
+    public bool TerrainUndo() => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_undo(_handle);
+    public bool TerrainRedo() => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_redo(_handle);
+
+    public bool TerrainErode(uint iter = 50000, float rate = 0.3f)
+        => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_erode(_handle, iter, rate);
+
+    public bool TerrainThermalErode(float angle = 35f, uint iter = 100)
+        => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_thermal_erode(_handle, angle, iter);
+
+    public bool TerrainExport(string path)
+        => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_export(_handle, path);
+
+    public bool TerrainGetInfo(out TucanoTerrainInfo info)
+    {
+        info = default;
+        return _handle != IntPtr.Zero && TucanoApi.tucano_terrain_get_info(_handle, out info);
+    }
+
+    public bool TerrainSculptActive
+    {
+        get => _handle != IntPtr.Zero && TucanoApi.tucano_terrain_get_sculpt_active(_handle);
+        set { if (_handle != IntPtr.Zero) TucanoApi.tucano_terrain_set_sculpt_active(_handle, value); }
+    }
+
+    public void TerrainSetSculptParams(float radius, float strength, int tool)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_terrain_set_sculpt_params(_handle, radius, strength, tool);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

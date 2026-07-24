@@ -25,6 +25,8 @@ enum class Format : uint32_t {
   R32G32B32_FLOAT,
   R10G10B10A2_UNORM,
   R32_UINT,
+  BC7_UNORM,
+  BC7_UNORM_SRGB,
   D32_FLOAT,
   D24_UNORM_S8_UINT,
 };

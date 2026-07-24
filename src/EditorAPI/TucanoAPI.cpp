@@ -12,6 +12,7 @@
 #include "Renderer/Mesh.h"
 #include "Runtime/Screenshot.h"
 #include "Runtime/DebugUI.h"
+#include <imgui.h>
 #include "Audio/Audio.h"
 #include "Audio/AudioClip.h"
 #include "Audio/AudioListener.h"
@@ -19,6 +20,11 @@
 #include "World/FrustumCull.h"
 #include "World/GpuCellCuller.h"
 #include "World/WorldGrid.h"
+#include "Terrain/Heightmap.h"
+#include "Terrain/TerrainGenerator.h"
+#include "Terrain/TerrainComponent.h"
+#include "Terrain/HeightmapBrush.h"
+#include "Terrain/ErosionSimulation.h"
 
 #include <GLFW/glfw3.h>
 
@@ -326,9 +332,22 @@ struct TucanoRuntime {
   float gizmoSnap = 0.0f;
   bool gizmoBlocking = false;
 
+  // Terrain sculpt mode (TM-5)
+  bool terrainSculptActive = false;
+  float terrainBrushRadius = 20.0f;
+  float terrainBrushStrength = 15.0f;
+  int terrainBrushTool = 0;
+  int terrainObjectIndex = -1;
+
   // Audio (Phase I-2)
   std::vector<tucano::AudioClip*> audioClips;
   std::vector<std::unique_ptr<tucano::AudioSource>> audioSources;
+
+  // Terrain (TM-5)
+  std::shared_ptr<tucano::terrain::Heightmap> terrainHm;
+  std::unique_ptr<tucano::terrain::TerrainComponent> terrainComp;
+  std::unique_ptr<tucano::terrain::BrushSystem> terrainBrushes;
+  std::unique_ptr<tucano::terrain::ErosionSimulation> terrainErosion;
 };
 
 // `data` aliases the runtime's scene rather than copying it: the renderer draws runtime->scene, so
@@ -783,6 +802,13 @@ void updateEditorCamera(TucanoRuntime* rt) {
   }
 
   cam.fly(dt, move * speed, look ? dx * 0.0025f : 0.0f, look ? -dy * 0.0025f : 0.0f);
+
+  if (rt->terrainHm) {
+    float th = rt->terrainHm->sampleHeight(cam.position().x, cam.position().z);
+    if (cam.position().y < th + 2.0f) {
+      cam.setPosition({cam.position().x, th + 2.0f, cam.position().z});
+    }
+  }
 }
 
 } // namespace
@@ -828,11 +854,113 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
 
     updatePlay(rt);
 
-    // Gizmo first: it must claim the mouse before picking looks at it. ImGui already has this
-    // frame's cursor from ImGui_ImplGlfw_NewFrame(), so IsOver()/IsUsing() are current here —
-    // running it after picking would leave picking one frame stale, and a click on the rotate ring
-    // (most of which lies off the object) would deselect and make the gizmo vanish.
-    updateGizmo(rt);
+    // Terrain sculpt mode
+    if (rt->terrainSculptActive && rt->terrainHm && rt->terrainBrushes && rt->terrainComp) {
+      double mx, my;
+      glfwGetCursorPos(rt->window->handle(), &mx, &my);
+      float ndcX = float(mx) / float(rt->window->width()) * 2.0f - 1.0f;
+      float ndcY = 1.0f - float(my) / float(rt->window->height()) * 2.0f;
+
+      glm::mat4 invVP = glm::inverse(rt->scene.camera.viewProj());
+      glm::vec4 nearP = invVP * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+      glm::vec4 farP  = invVP * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+      nearP /= nearP.w; farP /= farP.w;
+      glm::vec3 origin(nearP);
+      glm::vec3 dir = glm::normalize(glm::vec3(farP) - origin);
+      float maxDist = glm::length(glm::vec3(farP) - origin);
+
+      bool hitTerrain = false;
+      float hitX = 0, hitZ = 0;
+      float step = 1.0f;
+      float t = 0.0f;
+      for (; t < maxDist; t += step) {
+        glm::vec3 p = origin + dir * t;
+        float h = rt->terrainHm->sampleHeight(p.x, p.z);
+        if (p.y < h) {
+          float lo = t - step, hi = t;
+          for (int i = 0; i < 8; ++i) {
+            float mid = (lo + hi) * 0.5f;
+            glm::vec3 mp = origin + dir * mid;
+            if (mp.y < rt->terrainHm->sampleHeight(mp.x, mp.z)) hi = mid;
+            else lo = mid;
+          }
+          glm::vec3 hitP = origin + dir * (lo + hi) * 0.5f;
+          hitX = hitP.x; hitZ = hitP.z;
+          hitTerrain = true;
+          break;
+        }
+      }
+
+      if (hitTerrain) {
+        auto tool = static_cast<tucano::terrain::BrushTool>(rt->terrainBrushTool);
+        bool lmb = rt->input->mouseDown(GLFW_MOUSE_BUTTON_LEFT);
+        if (lmb) {
+          rt->terrainBrushes->applyStroke(*rt->terrainHm, hitX, hitZ,
+              rt->terrainBrushRadius, rt->terrainBrushStrength, tool);
+          rt->terrainHm->uploadToGPU(*rt->device);
+          rt->terrainComp->regenerateMesh(*rt->device);
+          if (rt->terrainObjectIndex >= 0 && size_t(rt->terrainObjectIndex) < rt->scene.objects.size()) {
+            rt->scene.objects[rt->terrainObjectIndex].mesh = rt->terrainComp->mesh();
+          }
+        }
+
+        float centerH = rt->terrainHm->sampleHeight(hitX, hitZ);
+        glm::vec4 clipPt = rt->scene.camera.viewProj() * glm::vec4(hitX, centerH + 0.15f, hitZ, 1.0f);
+        if (glm::abs(clipPt.w) > 1e-6f) {
+          float csx = (clipPt.x / clipPt.w * 0.5f + 0.5f) * float(rt->window->width());
+          float csy = (1.0f - (clipPt.y / clipPt.w * 0.5f + 0.5f)) * float(rt->window->height());
+          ImDrawList* dl = ImGui::GetForegroundDrawList();
+          dl->AddCircleFilled(ImVec2(csx, csy), 5.0f, IM_COL32(255, 255, 180, 255));
+
+          const int segs = 32;
+          ImVec2 pts[segs]; int valid = 0;
+          for (int i = 0; i < segs; ++i) {
+            float a = float(i) / segs * 6.2831853f;
+            float wx = hitX + std::cos(a) * rt->terrainBrushRadius;
+            float wz = hitZ + std::sin(a) * rt->terrainBrushRadius;
+            float h = rt->terrainHm->sampleHeight(wx, wz);
+            glm::vec4 cp = rt->scene.camera.viewProj() * glm::vec4(wx, h + 0.15f, wz, 1.0f);
+            if (glm::abs(cp.w) > 1e-6f) {
+              float sx = (cp.x / cp.w * 0.5f + 0.5f) * float(rt->window->width());
+              float sy = (1.0f - (cp.y / cp.w * 0.5f + 0.5f)) * float(rt->window->height());
+              pts[valid++] = ImVec2(sx, sy);
+            }
+          }
+          if (valid >= 3) {
+            dl->AddConvexPolyFilled(pts, valid, IM_COL32(255, 255, 255, 35));
+            dl->AddPolyline(pts, valid, IM_COL32(255, 255, 200, 180), ImDrawFlags_Closed, 2.0f);
+          }
+        }
+      }
+    } else {
+      updateGizmo(rt);
+    }
+
+    // Draw terrain preview grid when landscape mode is active but no terrain loaded yet
+    if (rt->terrainSculptActive && !rt->terrainHm) {
+      ImDrawList* dl = ImGui::GetForegroundDrawList();
+      float gridSize = 1024.0f;
+      float step = 64.0f;
+      glm::mat4 vp = rt->scene.camera.viewProj();
+      auto project = [&](float wx, float wy, float wz, float& sx, float& sy) {
+        glm::vec4 cp = vp * glm::vec4(wx, wy, wz, 1.0f);
+        if (glm::abs(cp.w) < 1e-6f) return false;
+        sx = (cp.x / cp.w * 0.5f + 0.5f) * float(rt->window->width());
+        sy = (1.0f - (cp.y / cp.w * 0.5f + 0.5f)) * float(rt->window->height());
+        return sx >= -200 && sx < float(rt->window->width()) + 200 &&
+               sy >= -200 && sy < float(rt->window->height()) + 200;
+      };
+
+      for (float x = 0; x <= gridSize; x += step) {
+        float s0x, s0z, s1x, s1z;
+        if (project(x, 0, 0, s0x, s0z) && project(x, 0, gridSize, s1x, s1z)) {
+          dl->AddLine(ImVec2(s0x, s0z), ImVec2(s1x, s1z), IM_COL32(100, 100, 100, 60), 1.0f);
+        }
+        if (project(0, 0, x, s0x, s0z) && project(gridSize, 0, x, s1x, s1z)) {
+          dl->AddLine(ImVec2(s0x, s0z), ImVec2(s1x, s1z), IM_COL32(100, 100, 100, 60), 1.0f);
+        }
+      }
+    }
 
     if (rt->cameraNavigation) {
       updateEditorCamera(rt);
@@ -2718,4 +2846,115 @@ TUCANO_API void tucano_audio_listener_set_position(TucanoRuntime* rt, TucanoVec3
 TUCANO_API void tucano_audio_listener_set_orientation(TucanoRuntime* rt, TucanoVec3 forward, TucanoVec3 up) {
   (void)rt;
   tucano::AudioListener::instance().setOrientation({forward.x, forward.y, forward.z}, {up.x, up.y, up.z});
+}
+
+// ── Terrain ──────────────────────────────────────────
+
+TUCANO_API bool tucano_terrain_create_procedural(TucanoRuntime* rt, uint32_t resolution, float worldSize,
+                                                  uint32_t octaves, float persistence, float amplitude,
+                                                  float baseHeight, uint32_t seed) {
+  if (!rt || !rt->device) return false;
+  tucano::terrain::TerrainGenParams params;
+  params.resolution = resolution;
+  params.worldSize = worldSize;
+  params.octaves = octaves;
+  params.persistence = persistence;
+  params.baseAmplitude = amplitude;
+  params.baseHeight = baseHeight;
+  params.seed = seed;
+  rt->terrainHm = tucano::terrain::TerrainGenerator::generate(*rt->device, params);
+  if (!rt->terrainHm) return false;
+  auto mat = std::make_shared<tucano::Material>();
+  mat->baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
+  mat->albedo = tucano::devtex::defaultFloor(*rt->device);
+  mat->normal = tucano::devtex::defaultNormal(*rt->device);
+  mat->roughnessFactor = 0.85f;
+  mat->metallicFactor = 0.0f;
+  rt->terrainComp = std::make_unique<tucano::terrain::TerrainComponent>(*rt->device, rt->terrainHm, mat);
+  if (rt->physics) rt->terrainComp->createPhysicsBody(*rt->physics);
+  rt->scene.objects.push_back(rt->terrainComp->createRenderObject());
+  rt->terrainObjectIndex = int(rt->scene.objects.size()) - 1;
+  rt->terrainBrushes = std::make_unique<tucano::terrain::BrushSystem>();
+  rt->terrainBrushes->setMaxUndoDepth(256);
+  rt->terrainErosion = std::make_unique<tucano::terrain::ErosionSimulation>();
+  return true;
+}
+
+TUCANO_API void tucano_terrain_destroy(TucanoRuntime* rt) {
+  if (!rt) return;
+  if (rt->terrainComp && rt->physics) rt->terrainComp->removePhysicsBody(*rt->physics);
+  rt->terrainComp.reset();
+  rt->terrainHm.reset();
+  rt->terrainBrushes.reset();
+  rt->terrainErosion.reset();
+}
+
+TUCANO_API bool tucano_terrain_undo(TucanoRuntime* rt) {
+  if (!rt || !rt->terrainHm || !rt->terrainBrushes || !rt->terrainComp) return false;
+  rt->terrainBrushes->undo(*rt->terrainHm);
+  rt->terrainHm->uploadToGPU(*rt->device);
+  rt->terrainComp->regenerateMesh(*rt->device);
+  if (rt->terrainObjectIndex >= 0 && size_t(rt->terrainObjectIndex) < rt->scene.objects.size()) rt->scene.objects[rt->terrainObjectIndex].mesh = rt->terrainComp->mesh();
+  return true;
+}
+
+TUCANO_API bool tucano_terrain_redo(TucanoRuntime* rt) {
+  if (!rt || !rt->terrainHm || !rt->terrainBrushes || !rt->terrainComp) return false;
+  rt->terrainBrushes->redo(*rt->terrainHm);
+  rt->terrainHm->uploadToGPU(*rt->device);
+  rt->terrainComp->regenerateMesh(*rt->device);
+  if (rt->terrainObjectIndex >= 0 && size_t(rt->terrainObjectIndex) < rt->scene.objects.size()) rt->scene.objects[rt->terrainObjectIndex].mesh = rt->terrainComp->mesh();
+  return true;
+}
+
+TUCANO_API bool tucano_terrain_export(TucanoRuntime* rt, const char* path) {
+  if (!rt || !rt->terrainHm || !path) return false;
+  return tucano::terrain::Heightmap::saveToFile(*rt->terrainHm, path);
+}
+
+TUCANO_API bool tucano_terrain_erode(TucanoRuntime* rt, uint32_t iterations, float erosionRate) {
+  if (!rt || !rt->terrainHm || !rt->terrainErosion || !rt->terrainComp) return false;
+  tucano::terrain::ErosionParams ep;
+  ep.iterations = iterations;
+  ep.erosionRate = erosionRate;
+  rt->terrainErosion->erode(*rt->terrainHm, ep);
+  rt->terrainHm->uploadToGPU(*rt->device);
+  rt->terrainComp->regenerateMesh(*rt->device);
+  if (rt->terrainObjectIndex >= 0 && size_t(rt->terrainObjectIndex) < rt->scene.objects.size()) rt->scene.objects[rt->terrainObjectIndex].mesh = rt->terrainComp->mesh();
+  return true;
+}
+
+TUCANO_API bool tucano_terrain_thermal_erode(TucanoRuntime* rt, float talusAngle, uint32_t iterations) {
+  if (!rt || !rt->terrainHm || !rt->terrainErosion || !rt->terrainComp) return false;
+  rt->terrainErosion->applyThermalErosion(*rt->terrainHm, talusAngle, iterations);
+  rt->terrainHm->uploadToGPU(*rt->device);
+  rt->terrainComp->regenerateMesh(*rt->device);
+  if (rt->terrainObjectIndex >= 0 && size_t(rt->terrainObjectIndex) < rt->scene.objects.size()) rt->scene.objects[rt->terrainObjectIndex].mesh = rt->terrainComp->mesh();
+  return true;
+}
+
+TUCANO_API bool tucano_terrain_get_info(TucanoRuntime* rt, TucanoTerrainInfo* outInfo) {
+  if (!rt || !rt->terrainHm || !outInfo) return false;
+  outInfo->resolution = rt->terrainHm->resolution();
+  outInfo->worldSize = rt->terrainHm->worldSize();
+  outInfo->minHeight = rt->terrainHm->minHeight();
+  outInfo->maxHeight = rt->terrainHm->maxHeight();
+  outInfo->undoCount = rt->terrainBrushes ? uint32_t(rt->terrainBrushes->undoCount()) : 0;
+  outInfo->redoCount = rt->terrainBrushes ? uint32_t(rt->terrainBrushes->redoCount()) : 0;
+  return true;
+}
+
+TUCANO_API void tucano_terrain_set_sculpt_active(TucanoRuntime* rt, bool active) {
+  if (rt) rt->terrainSculptActive = active;
+}
+
+TUCANO_API bool tucano_terrain_get_sculpt_active(TucanoRuntime* rt) {
+  return rt && rt->terrainSculptActive;
+}
+
+TUCANO_API void tucano_terrain_set_sculpt_params(TucanoRuntime* rt, float radius, float strength, int tool) {
+  if (!rt) return;
+  rt->terrainBrushRadius = radius;
+  rt->terrainBrushStrength = strength;
+  rt->terrainBrushTool = tool;
 }

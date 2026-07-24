@@ -536,6 +536,36 @@ TUCANO_API void tucano_audio_source_set_looping(TucanoRuntime* rt, int32_t sourc
 TUCANO_API void tucano_audio_listener_set_position(TucanoRuntime* rt, TucanoVec3 pos);
 TUCANO_API void tucano_audio_listener_set_orientation(TucanoRuntime* rt, TucanoVec3 forward, TucanoVec3 up);
 
+// ── Terrain ──────────────────────────────────────────
+
+TUCANO_API bool tucano_terrain_create_procedural(TucanoRuntime* rt, uint32_t resolution, float worldSize,
+                                                  uint32_t octaves, float persistence, float amplitude,
+                                                  float baseHeight, uint32_t seed);
+TUCANO_API void tucano_terrain_destroy(TucanoRuntime* rt);
+TUCANO_API bool tucano_terrain_sculpt(TucanoRuntime* rt, float worldX, float worldZ, float radius,
+                                       float strength, int tool);
+TUCANO_API bool tucano_terrain_undo(TucanoRuntime* rt);
+TUCANO_API bool tucano_terrain_redo(TucanoRuntime* rt);
+TUCANO_API bool tucano_terrain_import(TucanoRuntime* rt, const char* path);
+TUCANO_API bool tucano_terrain_export(TucanoRuntime* rt, const char* path);
+TUCANO_API bool tucano_terrain_erode(TucanoRuntime* rt, uint32_t iterations, float erosionRate);
+TUCANO_API bool tucano_terrain_thermal_erode(TucanoRuntime* rt, float talusAngle, uint32_t iterations);
+
+typedef struct {
+	uint32_t resolution;
+	float worldSize;
+	float minHeight;
+	float maxHeight;
+	uint32_t undoCount;
+	uint32_t redoCount;
+} TucanoTerrainInfo;
+
+TUCANO_API bool tucano_terrain_get_info(TucanoRuntime* rt, TucanoTerrainInfo* outInfo);
+
+TUCANO_API void tucano_terrain_set_sculpt_active(TucanoRuntime* rt, bool active);
+TUCANO_API bool tucano_terrain_get_sculpt_active(TucanoRuntime* rt);
+TUCANO_API void tucano_terrain_set_sculpt_params(TucanoRuntime* rt, float radius, float strength, int tool);
+
 #ifdef __cplusplus
 }
 #endif

@@ -604,4 +604,68 @@ public static class TucanoApi
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern void tucano_audio_listener_set_orientation(IntPtr rt, TucanoVec3 forward, TucanoVec3 up);
+
+    // ── Terrain ──────────────────────────────────────
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_create_procedural(IntPtr rt, uint resolution, float worldSize,
+        uint octaves, float persistence, float amplitude, float baseHeight, uint seed);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_terrain_destroy(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_sculpt(IntPtr rt, float wx, float wz, float radius,
+        float strength, int tool);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_undo(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_redo(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_import(IntPtr rt, [MarshalAs(UnmanagedType.LPStr)] string path);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_export(IntPtr rt, [MarshalAs(UnmanagedType.LPStr)] string path);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_erode(IntPtr rt, uint iterations, float erosionRate);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_thermal_erode(IntPtr rt, float talusAngle, uint iterations);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_get_info(IntPtr rt, out TucanoTerrainInfo info);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_terrain_set_sculpt_active(IntPtr rt, [MarshalAs(UnmanagedType.I1)] bool active);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_terrain_get_sculpt_active(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_terrain_set_sculpt_params(IntPtr rt, float radius, float strength, int tool);
+}
+
+[StructLayout(LayoutKind.Sequential)]
+public struct TucanoTerrainInfo
+{
+    public uint Resolution;
+    public float WorldSize;
+    public float MinHeight;
+    public float MaxHeight;
+    public uint UndoCount;
+    public uint RedoCount;
 }

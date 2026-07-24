@@ -69,6 +69,13 @@ add_library(TucanoRuntime STATIC
   World/MovementPredictor.cpp
   World/FrustumCull.cpp
   World/GpuCellCuller.cpp
+  World/InstanceCloud.cpp
+  World/InstanceCloudCuller.cpp
+  World/StreamingRecorder.cpp
+  World/CellHotReload.cpp
+  World/CellFile.cpp
+  World/WorldGenerator.cpp
+  World/SceneCellProvider.cpp
   ECS/ComponentTypes.cpp
   ECS/Components.cpp
   ECS/EntityManager.cpp
@@ -77,6 +84,19 @@ add_library(TucanoRuntime STATIC
   ECS/TemplateManager.cpp
   ECS/World.cpp
   ECS/PhysicsSync.cpp
+  Terrain/Heightmap.cpp
+  Terrain/TerrainGenerator.cpp
+  Terrain/TerrainComponent.cpp
+  Terrain/TerrainCellProvider.cpp
+  Terrain/Clipmap.cpp
+  Terrain/TerrainRenderer.cpp
+  Terrain/MaterialAtlas.cpp
+  Terrain/TileCache.cpp
+  Terrain/HeightmapBrush.cpp
+  Terrain/HeightmapQuery.cpp
+  Terrain/TerrainRayTracer.cpp
+  Terrain/MaterialLayers.cpp
+  Terrain/ErosionSimulation.cpp
 )
 
 target_include_directories(TucanoRuntime

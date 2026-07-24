@@ -177,6 +177,18 @@
                             <TextBlock Text="Environment" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+
+                    <Border Classes="sep" />
+                    <ToggleButton Name="LandscapeToggle"
+                                  Classes="tool"
+                                  IsChecked="{Binding LandscapeMode}"
+                                  Click="OnToggleLandscape"
+                                  ToolTip.Tip="Landscape sculpt mode">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="🏔" VerticalAlignment="Center" FontSize="14" />
+                            <TextBlock Text="Landscape" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </ToggleButton>
                 </StackPanel>
             </ScrollViewer>
         </Border>

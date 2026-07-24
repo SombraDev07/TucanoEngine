@@ -16,6 +16,8 @@ DXGI_FORMAT toDxgi(Format format) {
   case Format::R32G32B32_FLOAT: return DXGI_FORMAT_R32G32B32_FLOAT;
   case Format::R10G10B10A2_UNORM: return DXGI_FORMAT_R10G10B10A2_UNORM;
   case Format::R32_UINT: return DXGI_FORMAT_R32_UINT;
+  case Format::BC7_UNORM: return DXGI_FORMAT_BC7_UNORM;
+  case Format::BC7_UNORM_SRGB: return DXGI_FORMAT_BC7_UNORM_SRGB;
   case Format::D32_FLOAT: return DXGI_FORMAT_D32_FLOAT;
   case Format::D24_UNORM_S8_UINT: return DXGI_FORMAT_D24_UNORM_S8_UINT;
   default: return DXGI_FORMAT_UNKNOWN;
