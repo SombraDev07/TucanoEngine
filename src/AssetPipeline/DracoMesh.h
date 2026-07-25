@@ -27,10 +27,10 @@ public:
 	// Returns compressed vertex + index data pairs.
 	static bool encode(
 		const float* positions, uint32_t vertexCount,
-		const float* normals = nullptr,
-		const float* uvs = nullptr,
-		const uint32_t* indices = nullptr, uint32_t indexCount = 0,
-		int quantizationBits = 10,
+		const float* normals,
+		const float* uvs,
+		const uint32_t* indices, uint32_t indexCount,
+		int quantizationBits,
 		std::vector<uint8_t>& outDracoData);
 
 	// Decode Draco-compressed mesh data into usable float/int buffers.

@@ -54,6 +54,8 @@ add_library(TucanoRuntime STATIC
   AssetPipeline/AssetPack.cpp
   AssetPipeline/TucanoAsset.cpp
   AssetPipeline/AssetRegistry.cpp
+  AssetPipeline/DracoMesh.cpp
+  AssetPipeline/FBXLoader.cpp
   Runtime/Screenshot.cpp
   Runtime/DebugUI.cpp
   Runtime/StbImpl.cpp
@@ -111,6 +113,9 @@ add_library(TucanoRuntime STATIC
 target_include_directories(TucanoRuntime
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${draco_SOURCE_DIR}/src
+    ${draco_BINARY_DIR}
+    ${zstd_SOURCE_DIR}/lib
 )
 
 target_link_libraries(TucanoRuntime
@@ -125,6 +130,8 @@ target_link_libraries(TucanoRuntime
     imgui_lib
     imgui_node_editor
     imgui_node_editor
+    openfbx
+    draco
     tracy_stub
     Jolt
     d3d12

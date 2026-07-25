@@ -154,10 +154,41 @@ target_link_libraries(imgui_node_editor INTERFACE imgui_lib)
 target_compile_definitions(imgui_node_editor INTERFACE IMGUI_DEFINE_MATH_OPERATORS)
 
 # ── Draco (Google mesh compression) ───────────────────
-# NOTE: needs separate build step (draco_features.h generated at ninja time)
-# Enable when CI/build system supports two-phase FetchContent
-# FetchContent for draco + openfbx deferred to FASE 2
+
+FetchContent_Declare(draco
+  GIT_REPOSITORY https://github.com/google/draco.git
+  GIT_TAG 1.5.7
+  GIT_SHALLOW TRUE)
+set(DRACO_TESTS OFF CACHE BOOL "" FORCE)
+set(DRACO_JS_GLUE OFF CACHE BOOL "" FORCE)
+set(DRACO_POINT_CLOUD_COMPRESSION OFF CACHE BOOL "" FORCE)
+set(DRACO_MESH_COMPRESSION_SUPPORTED ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(draco)
+
+# ── OpenFBX (FBX importer) ────────────────────────────
+
+FetchContent_Declare(openfbx
+  GIT_REPOSITORY https://github.com/nem0/OpenFBX.git
+  GIT_TAG master
+  GIT_SHALLOW TRUE)
+FetchContent_GetProperties(openfbx)
+if(NOT openfbx_POPULATED)
+  FetchContent_Populate(openfbx)
+endif()
+add_library(openfbx STATIC ${openfbx_SOURCE_DIR}/src/ofbx.cpp ${openfbx_SOURCE_DIR}/src/libdeflate.c)
+target_include_directories(openfbx PUBLIC ${openfbx_SOURCE_DIR}/src)
+target_compile_definitions(openfbx PRIVATE OFBX_MESH_LOADING=1 OFBX_SKELETON_LOADING=1)
 
 # ── ZSTD (fast real-time compression) ─────────────────
-# NOTE: needs working C compiler in path for the build step.
-# Enable when CI toolchain is fully configured.
+
+FetchContent_Declare(zstd
+  GIT_REPOSITORY https://github.com/facebook/zstd.git
+  GIT_TAG v1.5.6
+  GIT_SHALLOW TRUE)
+set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(ZSTD_BUILD_STATIC ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(zstd)
+if(TARGET libzstd_static)
+  target_include_directories(libzstd_static INTERFACE ${zstd_SOURCE_DIR}/lib)
+endif()

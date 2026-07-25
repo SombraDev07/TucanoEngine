@@ -104,7 +104,6 @@ void TucanoAssetWriter::setMetadata(const std::string& json) {
 void TucanoAssetWriter::addChunk(ChunkType type, const void* data, uint32_t size, bool /*compressZstd*/) {
 	ChunkEntry c;
 	c.type = type;
-	c.size = size;
 
 	std::vector<uint8_t> chunkData;
 	chunkData.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
