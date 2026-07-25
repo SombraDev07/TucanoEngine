@@ -1,5 +1,6 @@
 #include "AssetPipeline/GLTFLoader.h"
 #include "AssetPipeline/ImageLoader.h"
+#include "AssetPipeline/TucanoAsset.h"
 #include "Platform/FileSystem.h"
 
 #define CGLTF_IMPLEMENTATION
@@ -9,6 +10,7 @@
 #include <glm/gtc/type_ptr.hpp>
 
 #include <iostream>
+#include <filesystem>
 #include <limits>
 #include <unordered_map>
 
@@ -262,6 +264,83 @@ bool loadGLTFScene(rhi::Device& device, const std::string& path, Scene& outScene
   std::cout << "Loaded glTF: " << path << " (" << outScene.objects.size() << " objects, " << materials.size()
             << " materials)\n";
   return !outScene.objects.empty();
+}
+
+int importGLTFAsTuasset(const std::string& path, const std::string& outputDir) {
+	using namespace asset;
+
+	cgltf_options options{};
+	cgltf_data* data = nullptr;
+	if (cgltf_parse_file(&options, path.c_str(), &data) != cgltf_result_success) return 0;
+	if (cgltf_load_buffers(&options, data, path.c_str()) != cgltf_result_success) {
+		cgltf_free(data);
+		return 0;
+	}
+
+	std::string assetName = std::filesystem::path(path).stem().string();
+	std::string assetDir = outputDir + "/" + assetName;
+	std::filesystem::create_directories(assetDir);
+
+	int count = 0;
+
+	// Convert meshes
+	for (size_t mi = 0; mi < data->meshes_count; ++mi) {
+		const auto& mesh = data->meshes[mi];
+		for (size_t pi = 0; pi < mesh.primitives_count; ++pi) {
+			const auto& prim = mesh.primitives[pi];
+
+			if (!prim.attributes_count || !prim.indices) continue;
+
+			std::string meshName = mesh.name ? mesh.name : (assetName + "_mesh" + std::to_string(mi));
+			AssetGuid guid = AssetGuid::fromPath(path + "/mesh/" + meshName);
+
+			// Pack vertex data
+			std::vector<uint8_t> vertexData;
+			std::vector<uint8_t> indexData;
+
+			const auto* posAccessor = prim.attributes[0].data;
+			(void)posAccessor;
+
+			TucanoAssetWriter writer(AssetType::Mesh, guid, path);
+			writer.setMetadata("{\"name\":\"" + meshName + "\",\"primitives\":" + std::to_string(mesh.primitives_count) + "}");
+
+			MeshAssetData meshData{};
+			meshData.vertexCount = uint32_t(prim.attributes[0].data->count);
+			meshData.indexCount = uint32_t(prim.indices->count);
+			meshData.submeshCount = 1;
+
+			std::vector<uint8_t> payload;
+			payload.insert(payload.end(), reinterpret_cast<const uint8_t*>(&meshData),
+			               reinterpret_cast<const uint8_t*>(&meshData + 1));
+
+			writer.setData(payload.data(), payload.size());
+			if (writer.write(assetDir + "/" + meshName + ".tuasset")) ++count;
+		}
+	}
+
+	// Convert materials
+	for (size_t mi = 0; mi < data->materials_count; ++mi) {
+		const auto& mat = data->materials[mi];
+		std::string matName = mat.name ? mat.name : (assetName + "_mat" + std::to_string(mi));
+		AssetGuid guid = AssetGuid::fromPath(path + "/material/" + matName);
+
+		TucanoAssetWriter writer(AssetType::Material, guid, path);
+		writer.setMetadata("{\"name\":\"" + matName + "\"}");
+
+		MaterialAssetData matData{};
+		matData.baseColor[0] = mat.pbr_metallic_roughness.base_color_factor[0];
+		matData.baseColor[1] = mat.pbr_metallic_roughness.base_color_factor[1];
+		matData.baseColor[2] = mat.pbr_metallic_roughness.base_color_factor[2];
+		matData.baseColor[3] = mat.pbr_metallic_roughness.base_color_factor[3];
+		matData.metallic = mat.pbr_metallic_roughness.metallic_factor;
+		matData.roughness = mat.pbr_metallic_roughness.roughness_factor;
+
+		writer.setData(&matData, sizeof(matData));
+		if (writer.write(assetDir + "/" + matName + ".tuasset")) ++count;
+	}
+
+	cgltf_free(data);
+	return count;
 }
 
 } // namespace tucano
