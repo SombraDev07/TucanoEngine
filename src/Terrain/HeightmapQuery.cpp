@@ -21,6 +21,17 @@ HeightmapQuery::HeightmapQuery(rhi::Device& device) {
 	qbDesc.debugName = "HeightQueryBuf";
 	m_queryBuffer = device.createBuffer(qbDesc);
 
+	// The query buffer above is a DEFAULT-heap UAV, so it is not CPU-mappable — the original code
+	// wrote the query coordinates through mapped() and it silently no-op'd, leaving the shader to read
+	// zeros and sample the (0,0) corner. This upload buffer stages the coordinates; dispatch copies it
+	// into the UAV before the shader runs. Same input→copy→UAV pattern GpuCellCuller uses.
+	rhi::BufferDesc upDesc{};
+	upDesc.size = kMaxQueries * sizeof(GpuHeightQuery);
+	upDesc.usage = rhi::BufferUsage::Structured | rhi::BufferUsage::Upload;
+	upDesc.stride = sizeof(GpuHeightQuery);
+	upDesc.debugName = "HeightQueryUpload";
+	m_queryUpload = device.createBuffer(upDesc);
+
 	for (uint32_t i = 0; i < kRingFrames; ++i) {
 		rhi::BufferDesc rbDesc{};
 		rbDesc.size = kMaxQueries * sizeof(GpuHeightQuery);
@@ -35,8 +46,9 @@ HeightmapQuery::HeightmapQuery(rhi::Device& device) {
 	cbDesc.debugName = "HeightQueryCB";
 	m_queryCB = device.createBuffer(cbDesc);
 
+	m_rootSig = device.createComputeRootSignature();
 	rhi::ComputePipelineDesc csDesc{};
-	csDesc.rootSignature = device.createComputeRootSignature();
+	csDesc.rootSignature = m_rootSig;
 	csDesc.cs = rhi::ShaderBytecode::loadFromFile("shaders/HeightQuery_CSMain.cso");
 	m_queryPSO = device.createComputePipeline(csDesc);
 
@@ -65,32 +77,49 @@ void HeightmapQuery::dispatch(rhi::Device& device, rhi::CommandList& cmd, const 
 	auto& dxDevice = static_cast<rhi::DX12Device&>(device);
 	auto& queryBuf = static_cast<rhi::DX12Buffer&>(*m_queryBuffer);
 
-	GpuHeightQuery* mapped = static_cast<GpuHeightQuery*>(m_queryBuffer->mapped());
-	if (!mapped) {
-		cmd.transition(*m_queryBuffer, rhi::ResourceState::UnorderedAccess);
-	} else {
+	// Stage the query coordinates in the CPU-visible upload buffer, then copy them into the UAV the
+	// shader reads. Writing straight to the UAV is impossible — it lives on the default heap.
+	GpuHeightQuery* mapped = static_cast<GpuHeightQuery*>(m_queryUpload->mapped());
+	if (mapped) {
 		for (uint32_t i = 0; i < m_pendingCount && i < kMaxQueries; ++i) {
 			mapped[i].worldX = m_requests[i].worldX;
 			mapped[i].worldZ = m_requests[i].worldZ;
 			mapped[i].height = 0.0f;
 			mapped[i].pad = 0.0f;
 		}
+		cmd.copyBuffer(*m_queryBuffer, 0, *m_queryUpload, 0, m_pendingCount * sizeof(GpuHeightQuery));
 	}
+	cmd.transition(*m_queryBuffer, rhi::ResourceState::UnorderedAccess);
 
 	struct QueryCB {
 		float invWSX, invWSY;
+		float offX, offY;
 		uint32_t hmIndex;
 		uint32_t count;
 	} cb;
-	cb.invWSX = 1.0f / hm.worldSize();
-	cb.invWSY = 1.0f / hm.worldSize();
+	// The heightmap stores texel i at world i/(res-1)*worldSize (its CPU sampleHeight convention). The
+	// GPU sampler reads texel centres at (i+0.5)/res. Mapping world → (res-1)/(res*worldSize) plus a
+	// 0.5/res offset lands the sample on the same point, so the GPU query agrees with the mesh/physics.
+	const float res = float(hm.resolution());
+	const float scale = (res - 1.0f) / (res * hm.worldSize());
+	cb.invWSX = scale;
+	cb.invWSY = scale;
+	cb.offX = 0.5f / res;
+	cb.offY = 0.5f / res;
 	cb.hmIndex = hm.bindlessIndex();
 	cb.count = m_pendingCount;
 	std::memcpy(m_queryCB->mapped(), &cb, sizeof(cb));
 
+	// The shared compute root signature: param 0 is root constants (b0), so the CBV binds at param 1
+	// (register b1). Setting the root signature is mandatory — SetPipelineState does not do it, and
+	// without it the root bindings resolve against whatever was last set and the GPU faults.
+	cmd.setRootSignature(*m_rootSig);
 	cmd.setPipeline(*m_queryPSO);
-	cmd.setComputeRootCBV(0, *m_queryCB);
+	cmd.setComputeRootCBV(1, *m_queryCB);
 	cmd.setComputeRootSrvTable(2, 0);
+	// Bind the sampler table (param 4). Without it s0 in the shader is unbound and SampleLevel reads
+	// through an undefined sampler — the source of the systematic height error before this.
+	cmd.setComputeRootSamplerTable(4, 0);
 	cmd.transition(queryBuf, rhi::ResourceState::UnorderedAccess);
 	D3D12_CPU_DESCRIPTOR_HANDLE uavs[] = {queryBuf.uavCpu};
 	cmd.setComputeRootUavTable(3, dxDevice.writeUavTable(uavs, 1));

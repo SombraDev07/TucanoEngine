@@ -1,4 +1,5 @@
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using EditorCore;
 
 namespace TucanoEditor.Models;
@@ -20,6 +21,12 @@ public sealed class AssetItem
 
     /// Set for material assets so the browser can apply them without re-reading the file.
     public MaterialAsset? Material { get; set; }
+
+    /// Live preview for materials (and optionally textures). When set, the browser tile shows this
+    /// instead of the generic vector icon.
+    public Bitmap? Thumbnail { get; set; }
+
+    public bool HasThumbnail => Thumbnail is not null;
 
     public string IconKey => Kind switch
     {

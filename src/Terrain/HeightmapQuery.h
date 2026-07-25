@@ -33,8 +33,10 @@ public:
 
 private:
 	std::shared_ptr<rhi::Buffer> m_queryBuffer;
+	std::shared_ptr<rhi::Buffer> m_queryUpload; ///< CPU-writable staging for the query coords
 	std::shared_ptr<rhi::Buffer> m_readbackBuffers[kRingFrames];
 	std::shared_ptr<rhi::Buffer> m_queryCB;
+	std::shared_ptr<rhi::RootSignature> m_rootSig;
 	std::shared_ptr<rhi::PipelineState> m_queryPSO;
 
 	std::vector<HeightQueryRequest> m_requests;

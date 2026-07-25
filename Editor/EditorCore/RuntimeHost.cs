@@ -700,6 +700,49 @@ public sealed class RuntimeHost : IDisposable
         if (_handle != IntPtr.Zero) TucanoApi.tucano_terrain_set_sculpt_params(_handle, radius, strength, tool);
     }
 
+    public void MaterialGraphOpen()
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_material_graph_open(_handle);
+    }
+
+    public void MaterialGraphClose()
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_material_graph_close(_handle);
+    }
+
+    // ── World Streaming ───────────────────────────────
+
+    public bool WorldStreamStart(int extent = 6, float loadRadius = 200f, uint density = 8)
+        => _handle != IntPtr.Zero && TucanoApi.tucano_world_stream_start(_handle, extent, loadRadius, density);
+
+    public void WorldStreamStop() { if (_handle != IntPtr.Zero) TucanoApi.tucano_world_stream_stop(_handle); }
+
+    public bool WorldStreamActive => _handle != IntPtr.Zero && TucanoApi.tucano_world_stream_active(_handle);
+
+    public TucanoApi.TucanoStreamStats WorldStreamGetStats()
+    {
+        TucanoApi.tucano_world_stream_get_stats(_handle, out var s);
+        return s;
+    }
+
+    public TucanoApi.TucanoStreamCell[] WorldStreamResidentCells(uint max = 256)
+    {
+        var cells = new TucanoApi.TucanoStreamCell[max];
+        uint n = TucanoApi.tucano_world_stream_resident_cells(_handle, cells, max);
+        if (n < max)
+        {
+            var trimmed = new TucanoApi.TucanoStreamCell[n];
+            Array.Copy(cells, trimmed, n);
+            return trimmed;
+        }
+        return cells;
+    }
+
+    public void WorldStreamReloadCell(int x, int y, int z, uint level)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_world_stream_reload_cell(_handle, x, y, z, level);
+    }
+
     public void Dispose()
     {
         if (_disposed) return;

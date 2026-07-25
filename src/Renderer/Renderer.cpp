@@ -12,6 +12,8 @@
 #include "Renderer/PostFX/ExposurePass.h"
 #include "Renderer/Shadows/ToroidalShadows.h"
 #include "Renderer/Weather/RainSystem.h"
+#include "Terrain/ClipmapTerrain.h"
+#include "Terrain/TerrainVirtualTexture.h"
 #include "RHI/DX12/DX12Common.h"
 #include "RHI/DX12/DX12CommandList.h"
 #include "RHI/DX12/DX12Device.h"
@@ -196,6 +198,9 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   cb.size = 256ull * 4096ull;
   cb.debugName = "ObjectCB";
   m_objectCB = m_device.createBuffer(cb, nullptr);
+  cb.size = 256ull * 8ull; // small ring for the clipmap VT params
+  cb.debugName = "ClipmapVtCB";
+  m_clipmapVtCB = m_device.createBuffer(cb, nullptr);
 
   {
     // Skinning palette, shared by every skinned object in the frame. 4096 matrices is 32 rigs of
@@ -565,6 +570,62 @@ void Renderer::createPipelines() {
     d.dsvFormat = rhi::Format::D32_FLOAT;
     d.cullMode = rhi::CullMode::None;
     m_gbufferPSO = m_device.createGraphicsPipeline(d);
+  }
+  {
+    // WM-6: instanced g-buffer draw. Same RT layout and root signature as the direct g-buffer PSO,
+    // but the VS reads per-instance transforms from a structured buffer via SV_InstanceID, so a whole
+    // instance cloud is one drawIndexedIndirect.
+    rhi::GraphicsPipelineDesc d{};
+    d.rootSignature = m_root;
+    d.vs = load("InstanceGBuffer_VSMain.cso");
+    d.ps = load("InstanceGBuffer_PSMain.cso");
+    d.rtvFormats = {rhi::Format::R8G8B8A8_UNORM_SRGB, rhi::Format::R8G8B8A8_UNORM, rhi::Format::R8G8B8A8_UNORM,
+                    rhi::Format::R8G8B8A8_UNORM, rhi::Format::R32_FLOAT};
+    d.dsvFormat = rhi::Format::D32_FLOAT;
+    d.cullMode = rhi::CullMode::Back;
+    m_instanceGbufferPSO = m_device.createGraphicsPipeline(d);
+  }
+  {
+    // WM-8: continuous-LOD clipmap terrain. No input layout — the grid is generated from SV_VertexID —
+    // so useInputLayout is off. Same g-buffer RT layout as the direct g-buffer PSO.
+    rhi::GraphicsPipelineDesc d{};
+    d.rootSignature = m_root;
+    d.vs = load("ClipmapTerrain_VSMain.cso");
+    d.ps = load("ClipmapTerrain_PSMain.cso");
+    d.rtvFormats = {rhi::Format::R8G8B8A8_UNORM_SRGB, rhi::Format::R8G8B8A8_UNORM, rhi::Format::R8G8B8A8_UNORM,
+                    rhi::Format::R8G8B8A8_UNORM, rhi::Format::R32_FLOAT};
+    d.dsvFormat = rhi::Format::D32_FLOAT;
+    d.cullMode = rhi::CullMode::None;
+    d.useInputLayout = false;
+    m_clipmapTerrainPSO = m_device.createGraphicsPipeline(d);
+  }
+  {
+    // WM-8 Phase 2b: VT feedback pass. Same VS as the terrain; PS reports the page each pixel wants.
+    rhi::GraphicsPipelineDesc d{};
+    d.rootSignature = m_root;
+    d.vs = load("ClipmapTerrain_VSMain.cso");
+    d.ps = load("ClipmapTerrain_PSFeedback.cso");
+    d.rtvFormats = {rhi::Format::R32_UINT};
+    d.dsvFormat = rhi::Format::D32_FLOAT;
+    d.cullMode = rhi::CullMode::None;
+    d.useInputLayout = false;
+    m_clipmapFeedbackPSO = m_device.createGraphicsPipeline(d);
+
+    rhi::TextureDesc ft{};
+    ft.width = terrain::kVtFeedbackW;
+    ft.height = terrain::kVtFeedbackH;
+    ft.format = rhi::Format::R32_UINT;
+    ft.usage = rhi::TextureUsage::RenderTarget;
+    ft.debugName = "VtFeedbackRT";
+    m_vtFeedbackRT = m_device.createTexture(ft);
+
+    rhi::TextureDesc fd{};
+    fd.width = terrain::kVtFeedbackW;
+    fd.height = terrain::kVtFeedbackH;
+    fd.format = rhi::Format::D32_FLOAT;
+    fd.usage = rhi::TextureUsage::DepthStencil;
+    fd.debugName = "VtFeedbackDepth";
+    m_vtFeedbackDepth = m_device.createTexture(fd);
   }
   {
     rhi::GraphicsPipelineDesc d{};
@@ -1929,6 +1990,155 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
           m_skinningBuffer.get(),
           &objectSkinBase};
       executeGBufferPass(gb);
+    }
+
+    // WM-6: instance clouds. The caller ran the compute cull before render(), so each cloud's
+    // argsBuffer holds the visible instance count and visibleBuffer the compacted indices; one
+    // drawIndexedIndirect draws the whole cloud into the g-buffer just laid down above.
+    if (!scene.instanceClouds.empty() && m_instanceGbufferPSO) {
+      rhi::Texture* rts[] = {m_albedo.get(), m_normal.get(), m_orm.get(), m_emissive.get(),
+                             m_depthColor.get()};
+      cmd->setRenderTargets(rts, m_depth.get());
+      cmd->setViewport(vp);
+      cmd->setScissor(sc);
+      cmd->setRootSignature(*m_root);
+      cmd->setPipeline(*m_instanceGbufferPSO);
+      cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+      for (const auto& cloud : scene.instanceClouds) {
+        if (!cloud.instanceBuffer || !cloud.visibleBuffer || !cloud.argsBuffer || !cloud.mesh) {
+          continue;
+        }
+        // The cull left visibleBuffer as a UAV; the draw reads it as an SRV.
+        cmd->transition(*cloud.visibleBuffer, rhi::ResourceState::ShaderResource);
+        cmd->transition(*cloud.argsBuffer, rhi::ResourceState::IndirectArgument);
+        ObjectCBData ocb{};
+        ocb.baseColorFactor = cloud.baseColor;
+        ocb.materialParams = {cloud.metallic, cloud.roughness, 1.0f, 0.0f};
+        ocb.emissiveFactor = glm::vec4(cloud.emissive, 0.04f);
+        const uint64_t off = pushObjectCB(ocb);
+        RootXform xform{frame.viewProj, glm::mat4(1.0f)};
+        cmd->setGraphicsRootConstants(0, &xform, 32);
+        cmd->setGraphicsRootCBV(2, *m_objectCB, off);
+        // Table over t0.. space1: slot 0 is the (unused) skin palette, 1 = Instances, 2 = Visible.
+        D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {asDxBuf(*cloud.instanceBuffer).srvCpu,
+                                              asDxBuf(*cloud.instanceBuffer).srvCpu,
+                                              asDxBuf(*cloud.visibleBuffer).srvCpu};
+        cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(srvs, 3));
+        cmd->setVertexBuffer(cloud.mesh->vertexBuffer(), sizeof(Vertex));
+        cmd->setIndexBuffer(cloud.mesh->indexBuffer(), true);
+        cmd->drawIndexedIndirect(*cloud.argsBuffer, 0);
+        ++m_drawCalls;
+      }
+    }
+
+    // WM-8: continuous-LOD clipmap terrain. The caller updated its per-level placement for this
+    // camera; here each visible ring is one indexed draw sampling the heightmap in the VS. No vertex
+    // buffer — the grid comes from SV_VertexID.
+    if (scene.clipmapTerrain && m_clipmapTerrainPSO) {
+      auto* cm = scene.clipmapTerrain;
+      rhi::Texture* rts[] = {m_albedo.get(), m_normal.get(), m_orm.get(), m_emissive.get(),
+                             m_depthColor.get()};
+      cmd->setRenderTargets(rts, m_depth.get());
+      cmd->setViewport(vp);
+      cmd->setScissor(sc);
+      cmd->setRootSignature(*m_root);
+      cmd->setPipeline(*m_clipmapTerrainPSO);
+      cmd->setDescriptorHeap();
+      cmd->setGraphicsRootSrvTable(3, 0);
+      cmd->setGraphicsRootSamplerTable(4, sampTable);
+      cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+      struct ClipVtCB {
+        uint32_t vtEnabled, atlasIndex, pageTableIndex, pageTableRes;
+        float worldMinX, worldMinZ, worldSize, pageWorldSize;
+        float pageSizeF, borderF, coreF, atlasSizeF;
+        uint32_t maxMip, pad0, pad1, pad2;
+      } vt{};
+      terrain::TerrainVirtualTexture* vtp = cm->virtualTexture();
+      if (vtp) {
+        vt.vtEnabled = 1;
+        vt.atlasIndex = vtp->atlasBindlessIndex();
+        vt.pageTableIndex = vtp->pageTableBindlessIndex();
+        vt.pageTableRes = vtp->pageTableRes();
+        vt.worldMinX = vtp->worldMin().x;
+        vt.worldMinZ = vtp->worldMin().y;
+        vt.worldSize = vtp->worldSize();
+        vt.pageWorldSize = vtp->pageWorldSize();
+        vt.pageSizeF = float(terrain::kVtPageSize);
+        vt.borderF = float(terrain::kVtBorder);
+        vt.coreF = float(terrain::kVtCore);
+        vt.atlasSizeF = float(terrain::kVtAtlasSize);
+        vt.maxMip = vtp->maxMip();
+      }
+      const uint64_t vtCbOff = pushUploadCB(*m_clipmapVtCB, m_clipmapVtBump, &vt, sizeof(vt));
+      cmd->setGraphicsRootCBV(2, *m_clipmapVtCB, vtCbOff);
+      struct ClipCB {
+        glm::mat4 viewProj;
+        glm::vec4 level;
+        glm::vec4 morph;
+        glm::vec4 world;
+      } cb{};
+      cb.viewProj = frame.viewProj;
+      float hmIdxF = 0.0f;
+      const uint32_t hi = cm->heightmapIndex();
+      std::memcpy(&hmIdxF, &hi, sizeof(float));
+      const glm::vec3 cam = glm::vec3(frame.cameraPos);
+      for (const auto& lv : cm->levels()) {
+        if (!lv.visible) continue;
+        cb.level = {lv.spacing, lv.origin.x, lv.origin.y, lv.extentHalf};
+        cb.morph = {cm->morphStart(), cm->invWorldSize(), cm->heightScale(), hmIdxF};
+        cb.world = {cm->worldMin().x, cm->worldMin().y, cam.x, cam.z};
+        cmd->setGraphicsRootConstants(0, &cb, 32);
+        rhi::Buffer& ib = lv.ring ? cm->ringIndexBuffer() : cm->fullIndexBuffer();
+        const uint32_t count = lv.ring ? cm->ringIndexCount() : cm->fullIndexCount();
+        cmd->setIndexBuffer(ib, true);
+        cmd->drawIndexed(count, 0, 0);
+        ++m_drawCalls;
+      }
+
+      // ── VT feedback pass (Phase 2b) ──
+      // Render the terrain once more into a small R32_UINT target: each pixel writes the exact page
+      // (and mip, from its screen-space derivative) it wants. Copy it to the VT's readback buffer;
+      // the CPU streams precisely those pages next frame, occlusion- and angle-aware.
+      if (vtp && m_clipmapFeedbackPSO && vtp->feedbackReadback()) {
+        cmd->transition(*m_vtFeedbackRT, rhi::ResourceState::RenderTarget);
+        cmd->transition(*m_vtFeedbackDepth, rhi::ResourceState::DepthWrite);
+        rhi::Texture* frt[] = {m_vtFeedbackRT.get()};
+        cmd->setRenderTargets(frt, m_vtFeedbackDepth.get());
+        const float clear0[4] = {0, 0, 0, 0}; // 0 = "no request"; the PS sets bit 31 on real ones
+        cmd->clearRenderTarget(*m_vtFeedbackRT, clear0);
+        cmd->clearDepth(*m_vtFeedbackDepth, 1.0f);
+        rhi::Viewport fvp{0.0f, 0.0f, float(terrain::kVtFeedbackW), float(terrain::kVtFeedbackH), 0.0f, 1.0f};
+        rhi::Scissor fsc{0, 0, int32_t(terrain::kVtFeedbackW), int32_t(terrain::kVtFeedbackH)};
+        cmd->setViewport(fvp);
+        cmd->setScissor(fsc);
+        cmd->setRootSignature(*m_root);
+        cmd->setPipeline(*m_clipmapFeedbackPSO);
+        cmd->setDescriptorHeap();
+        cmd->setGraphicsRootSrvTable(3, 0);
+        cmd->setGraphicsRootSamplerTable(4, sampTable);
+        cmd->setGraphicsRootCBV(2, *m_clipmapVtCB, vtCbOff);
+        cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+        for (const auto& lv : cm->levels()) {
+          if (!lv.visible) continue;
+          cb.level = {lv.spacing, lv.origin.x, lv.origin.y, lv.extentHalf};
+          cb.morph = {cm->morphStart(), cm->invWorldSize(), cm->heightScale(), hmIdxF};
+          cb.world = {cm->worldMin().x, cm->worldMin().y, cam.x, cam.z};
+          cmd->setGraphicsRootConstants(0, &cb, 32);
+          rhi::Buffer& ib = lv.ring ? cm->ringIndexBuffer() : cm->fullIndexBuffer();
+          const uint32_t count = lv.ring ? cm->ringIndexCount() : cm->fullIndexCount();
+          cmd->setIndexBuffer(ib, true);
+          cmd->drawIndexed(count, 0, 0);
+        }
+        cmd->copyTextureToBuffer(*m_vtFeedbackRT, *vtp->feedbackReadback(), terrain::kVtFeedbackW,
+                                 terrain::kVtFeedbackH, rhi::Format::R32_UINT);
+        // Restore the g-buffer targets so any later work in this pass writes where it expects.
+        rhi::Texture* rts2[] = {m_albedo.get(), m_normal.get(), m_orm.get(), m_emissive.get(),
+                                m_depthColor.get()};
+        cmd->transition(*m_albedo, rhi::ResourceState::RenderTarget);
+        cmd->setRenderTargets(rts2, m_depth.get());
+        cmd->setViewport(vp);
+        cmd->setScissor(sc);
+      }
     }
   }
 

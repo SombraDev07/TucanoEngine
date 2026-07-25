@@ -11,6 +11,10 @@
 
 namespace tucano {
 
+namespace terrain {
+class ClipmapTerrain;
+}
+
 struct Transform {
   glm::vec3 translation{0};
   glm::quat rotation{1, 0, 0, 0};
@@ -35,6 +39,22 @@ struct RenderObject {
   std::vector<glm::mat4> skinningMatrices;
 };
 
+/// A GPU-driven instance cloud to draw this frame (WM-6). The caller runs the compute cull before
+/// Renderer::render — writing `visibleBuffer` (compacted indices) and `argsBuffer` (the
+/// DrawIndexedInstanced block) — and the renderer issues one drawIndexedIndirect for the whole set.
+/// The renderer only reads these as opaque RHI handles, so the World module owns the culler and the
+/// renderer stays free of a dependency on it.
+struct InstanceCloudRender {
+  rhi::Buffer* instanceBuffer = nullptr; ///< StructuredBuffer<InstanceGpu>, per-instance transforms
+  rhi::Buffer* visibleBuffer = nullptr;  ///< RWStructuredBuffer<uint>, compacted visible indices
+  rhi::Buffer* argsBuffer = nullptr;     ///< DrawIndexedInstanced args, element 0 (indirect)
+  Mesh* mesh = nullptr;                  ///< the shared single-submesh mesh every instance draws
+  glm::vec4 baseColor{0.5f, 0.5f, 0.5f, 1.0f};
+  glm::vec3 emissive{0.0f};
+  float metallic = 0.0f;
+  float roughness = 0.8f;
+};
+
 enum class LightType : uint32_t { Directional = 0, Point = 1, Spot = 2 };
 
 struct Light {
@@ -53,6 +73,11 @@ class Scene {
 public:
   std::vector<RenderObject> objects;
   std::vector<Light> lights;
+  /// GPU-driven instance clouds to draw this frame (WM-6). Empty for scenes that use none.
+  std::vector<InstanceCloudRender> instanceClouds;
+  /// Optional continuous-LOD clipmap terrain, drawn into the deferred g-buffer. Null = none. Not
+  /// owned by the scene; the caller keeps it alive and calls its update() before render().
+  terrain::ClipmapTerrain* clipmapTerrain = nullptr;
   Camera camera;
 
   void addDirectional(const glm::vec3& dir, const glm::vec3& color, float intensity);

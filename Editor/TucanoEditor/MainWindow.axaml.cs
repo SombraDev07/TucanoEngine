@@ -31,7 +31,15 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<SceneNode> _folderRoots = new();
     private readonly List<AssetItem> _allAssets = new();
     private MaterialLibrary? _materials;
+    /// Object index → assigned .tmat path (editor-side; runtime only stores flat PBR values).
+    private readonly Dictionary<int, string> _objectMaterialAssets = new();
     private string _outlinerFilter = "";
+
+    // Asset browser drag → material slot
+    private AssetItem? _pendingAssetDrag;
+    private Point _pendingAssetDragStart;
+    private bool _assetDragStarted;
+    private const double AssetDragThreshold = 6;
     private int _selectedLight = -1;
     private readonly UndoStack _undo = new();
     /// The Environment window when it happens to be open. It is an ordinary registered panel now;
@@ -487,12 +495,28 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case Key.Z when ctrl:
-                OnUndo(sender, new RoutedEventArgs());
-                e.Handled = true;
+                if (MaterialEditor.IsEditing)
+                {
+                    MaterialEditor.Undo();
+                    e.Handled = true;
+                }
+                else
+                {
+                    OnUndo(sender, new RoutedEventArgs());
+                    e.Handled = true;
+                }
                 break;
             case Key.Y when ctrl:
-                OnRedo(sender, new RoutedEventArgs());
-                e.Handled = true;
+                if (MaterialEditor.IsEditing)
+                {
+                    MaterialEditor.Redo();
+                    e.Handled = true;
+                }
+                else
+                {
+                    OnRedo(sender, new RoutedEventArgs());
+                    e.Handled = true;
+                }
                 break;
             case Key.S when ctrl:
                 OnSaveScene(sender, new RoutedEventArgs());
@@ -507,7 +531,12 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 break;
             case Key.Escape:
-                if (_runtime is { PlayState: not TucanoPlayState.Stopped })
+                if (MaterialEditor.IsEditing)
+                {
+                    MaterialEditor.CloseEditor();
+                    e.Handled = true;
+                }
+                else if (_runtime is { PlayState: not TucanoPlayState.Stopped })
                 {
                     OnStop(sender, new RoutedEventArgs());
                     e.Handled = true;
@@ -754,7 +783,7 @@ public partial class MainWindow : Window
                 var kind = ClassifyAsset(f);
                 if (kind is null) continue;
                 if (_allAssets.Any(a => a.Path == f)) continue;
-                _allAssets.Add(new AssetItem
+                var item = new AssetItem
                 {
                     Name = Path.GetFileName(f),
                     Path = f,
@@ -762,12 +791,51 @@ public partial class MainWindow : Window
                     Material = kind == AssetKind.Material
                         ? _materials?.Materials.FirstOrDefault(m => m.Path == f)
                         : null,
-                });
+                };
+                if (item.Kind == AssetKind.Material)
+                    item.Thumbnail = MaterialPreviewUtil.GetOrCreateThumbnail(item.Material, 72);
+                else if (item.Kind == AssetKind.Texture)
+                    item.Thumbnail = TryLoadAssetTextureThumb(f, 72);
+                _allAssets.Add(item);
             }
         }
 
         RebuildFolderTree(roots);
         ShowAssets(null);
+    }
+
+    private static Avalonia.Media.Imaging.Bitmap? TryLoadAssetTextureThumb(string path, int size)
+    {
+        try
+        {
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext is ".hdr" or ".dds") return null;
+            using var stream = File.OpenRead(path);
+            var bmp = new Avalonia.Media.Imaging.Bitmap(stream);
+            var scaled = bmp.CreateScaledBitmap(new Avalonia.PixelSize(size, size));
+            if (!ReferenceEquals(scaled, bmp)) bmp.Dispose();
+            return scaled;
+        }
+        catch { return null; }
+    }
+
+    private void RefreshMaterialThumbnail(string? path)
+    {
+        if (path is null) return;
+        MaterialPreviewUtil.Invalidate(path);
+        var item = _allAssets.FirstOrDefault(a => a.Path == path);
+        if (item?.Material is null) return;
+        // Keep MaterialAsset fields in sync if library has a newer copy
+        var lib = _materials?.Materials.FirstOrDefault(m => m.Path == path);
+        if (lib is not null) item.Material = lib;
+        item.Thumbnail = MaterialPreviewUtil.GetOrCreateThumbnail(item.Material, 72);
+        // Force the tile grid to refresh bindings
+        var idx = _assets.IndexOf(item);
+        if (idx >= 0)
+        {
+            _assets.RemoveAt(idx);
+            _assets.Insert(idx, item);
+        }
     }
 
     private static AssetKind? ClassifyAsset(string path)
@@ -867,8 +935,8 @@ public partial class MainWindow : Window
     private void OnAssetDoubleTapped(object? sender, TappedEventArgs e) => UseSelectedAsset();
     private void OnImportSelectedAsset(object? sender, RoutedEventArgs e) => UseSelectedAsset();
 
-    /// Double-click does the obvious thing per asset type: place a mesh, apply a material, open a
-    /// scene.
+    /// Double-click: Mesh=import, Material=open docked editor, Scene=load.
+    /// RMB → "Apply to Selection" to assign material without opening editor.
     private void UseSelectedAsset()
     {
         if (AssetList.SelectedItem is not AssetItem asset) return;
@@ -878,15 +946,88 @@ public partial class MainWindow : Window
                 ImportMeshAt(asset.Path);
                 break;
             case AssetKind.Material:
-                ApplyMaterial(asset);
+                OpenMaterialEditor(asset);
                 break;
             case AssetKind.Scene:
                 LoadSceneFrom(asset.Path);
                 break;
-            default:
-                Log($"{asset.Name}: textures are applied through materials, not directly");
-                break;
         }
+    }
+
+    private void OnEditMaterial(object? sender, RoutedEventArgs e)
+    {
+        if (AssetList.SelectedItem is AssetItem { Kind: AssetKind.Material } m)
+            OpenMaterialEditor(m);
+        else
+            Log("Select a material in the browser first");
+    }
+
+    private void OpenMaterialEditor(AssetItem asset)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        if (asset.Material is null)
+        {
+            Log($"Material '{asset.Name}' has no loaded data");
+            return;
+        }
+
+        try { _runtime.MaterialGraphClose(); } catch { /* optional API */ }
+
+        Viewport.SetNativeVisible(false);
+        SetMaterialMode(true);
+
+        var textures = _allAssets
+            .Where(a => a.Kind == AssetKind.Texture)
+            .Select(a => a.Path)
+            .Where(p => !string.IsNullOrEmpty(p));
+
+        MaterialEditor.Open(asset.Material, textures,
+            onApplied: mat =>
+            {
+                if (_materials is not null)
+                {
+                    var existing = _materials.Materials.FirstOrDefault(m => m.Path == mat.Path);
+                    if (existing is not null && !ReferenceEquals(existing, mat))
+                    {
+                        existing.R = mat.R; existing.G = mat.G; existing.B = mat.B;
+                        existing.Metallic = mat.Metallic; existing.Roughness = mat.Roughness;
+                        existing.EmissiveR = mat.EmissiveR; existing.EmissiveG = mat.EmissiveG;
+                        existing.EmissiveB = mat.EmissiveB;
+                        existing.GraphJson = mat.GraphJson;
+                    }
+                }
+
+                var sel = SelectedObjectIndex;
+                if (sel >= 0)
+                {
+                    _runtime.SetObjectMaterial((uint)sel, mat.ToRuntime());
+                    LoadInspector(sel);
+                }
+                Log($"Material '{mat.Name}' applied");
+                RefreshMaterialThumbnail(mat.Path);
+            },
+            onClosed: () =>
+            {
+                SetMaterialMode(false);
+                Viewport.SetNativeVisible(true);
+                Log("Viewport");
+            },
+            assetsRoot: Path.Combine(ProjectRoot, "Assets"));
+
+        Log($"Editing material '{asset.Name}'");
+    }
+
+    /// Material mode hides the scene chrome (outliner / inspector / content browser) so the
+    /// graph editor owns the whole workspace — Unreal-style focus.
+    private void SetMaterialMode(bool on)
+    {
+        SceneDock.IsVisible = !on;
+        OutlinerPanel.IsVisible = !on;
+        InspectorPanel.IsVisible = !on;
+        BottomDock.IsVisible = !on;
+        LeftSplitter.IsVisible = !on;
+        RightSplitter.IsVisible = !on;
+        BottomSplitter.IsVisible = !on;
     }
 
     private void OnApplyMaterialToSelection(object? sender, RoutedEventArgs e)
@@ -906,8 +1047,171 @@ public partial class MainWindow : Window
         }
 
         _runtime.SetObjectMaterial((uint)sel, asset.Material.ToRuntime());
+        if (!string.IsNullOrEmpty(asset.Path))
+            _objectMaterialAssets[sel] = asset.Path;
         LoadInspector(sel);
         Log($"Applied material '{asset.Material.Name}' to #{sel}");
+    }
+
+    private void UpdateMaterialSlot(int objectIndex, TucanoMaterial mat)
+    {
+        MatSlotColor.Background = new SolidColorBrush(Color.FromRgb(
+            (byte)Math.Clamp(mat.BaseColor.X * 255f, 0, 255),
+            (byte)Math.Clamp(mat.BaseColor.Y * 255f, 0, 255),
+            (byte)Math.Clamp(mat.BaseColor.Z * 255f, 0, 255)));
+
+        if (_objectMaterialAssets.TryGetValue(objectIndex, out var path))
+        {
+            var item = _allAssets.FirstOrDefault(a => a.Path == path)
+                       ?? _allAssets.FirstOrDefault(a => a.Kind == AssetKind.Material && a.Material?.Path == path);
+            MatSlotName.Text = item?.Name ?? Path.GetFileName(path);
+            MatSlotHint.Text = "Assigned material asset";
+            if (item?.Thumbnail is not null)
+            {
+                MatSlotThumb.Source = item.Thumbnail;
+                MatSlotThumb.IsVisible = true;
+            }
+            else
+            {
+                var thumb = MaterialPreviewUtil.GetOrCreateThumbnail(item?.Material, 72);
+                MatSlotThumb.Source = thumb;
+                MatSlotThumb.IsVisible = thumb is not null;
+            }
+            MatSlot.BorderBrush = new SolidColorBrush(Color.Parse("#FFC107"));
+        }
+        else
+        {
+            MatSlotName.Text = "None";
+            MatSlotHint.Text = "Drop a saved material here";
+            MatSlotThumb.Source = null;
+            MatSlotThumb.IsVisible = false;
+            MatSlot.BorderBrush = new SolidColorBrush(Color.Parse("#3A3A45"));
+        }
+    }
+
+    private void OnMatSlotDragOver(object? sender, DragEventArgs e)
+    {
+        if (e.Data.Contains("tucano/material-path") ||
+            (e.Data.Contains(DataFormats.Text) && (e.Data.Get(DataFormats.Text) as string)?.EndsWith(".tmat", StringComparison.OrdinalIgnoreCase) == true))
+        {
+            e.DragEffects = DragDropEffects.Copy;
+            MatSlot.BorderBrush = new SolidColorBrush(Color.Parse("#5FBF66"));
+            e.Handled = true;
+        }
+        else
+        {
+            e.DragEffects = DragDropEffects.None;
+        }
+    }
+
+    private void OnMatSlotDrop(object? sender, DragEventArgs e)
+    {
+        MatSlot.BorderBrush = new SolidColorBrush(Color.Parse("#3A3A45"));
+        var path = e.Data.Get("tucano/material-path") as string
+                   ?? e.Data.Get(DataFormats.Text) as string;
+        if (string.IsNullOrWhiteSpace(path)) return;
+        e.Handled = true;
+
+        var item = _allAssets.FirstOrDefault(a => a.Path == path && a.Kind == AssetKind.Material);
+        if (item?.Material is null)
+        {
+            // Try load from library
+            _materials?.Reload();
+            var mat = _materials?.Materials.FirstOrDefault(m => m.Path == path);
+            if (mat is null)
+            {
+                Log("Not a material asset");
+                return;
+            }
+            item = new AssetItem
+            {
+                Name = Path.GetFileName(path),
+                Path = path,
+                Kind = AssetKind.Material,
+                Material = mat,
+                Thumbnail = MaterialPreviewUtil.GetOrCreateThumbnail(mat, 72),
+            };
+        }
+
+        ApplyMaterial(item);
+    }
+
+    private void OnClearMaterialSlot(object? sender, RoutedEventArgs e)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        var sel = SelectedObjectIndex;
+        if (sel < 0) return;
+
+        _objectMaterialAssets.Remove(sel);
+        var white = new TucanoMaterial
+        {
+            BaseColor = new TucanoVec3(1, 1, 1),
+            Emissive = new TucanoVec3(0, 0, 0),
+            Metallic = 0,
+            Roughness = 0.55f,
+            Alpha = 1,
+        };
+        _runtime.SetObjectMaterial((uint)sel, white);
+        LoadInspector(sel);
+        Log("Cleared material slot");
+    }
+
+    private void OnMatSlotDoubleTapped(object? sender, TappedEventArgs e)
+    {
+        var sel = SelectedObjectIndex;
+        if (sel < 0) return;
+        if (!_objectMaterialAssets.TryGetValue(sel, out var path)) return;
+        var item = _allAssets.FirstOrDefault(a => a.Path == path);
+        if (item is not null) OpenMaterialEditor(item);
+    }
+
+    private void OnAssetCardPressed(object? sender, PointerPressedEventArgs e)
+    {
+        if (sender is not Control card || card.DataContext is not AssetItem item) return;
+        if (!e.GetCurrentPoint(card).Properties.IsLeftButtonPressed) return;
+        if (item.Kind != AssetKind.Material) return; // only materials drag to the slot for now
+        _pendingAssetDrag = item;
+        _pendingAssetDragStart = e.GetPosition(this);
+        _assetDragStarted = false;
+        e.Pointer.Capture(card);
+    }
+
+    private async void OnAssetCardMoved(object? sender, PointerEventArgs e)
+    {
+        if (_pendingAssetDrag is null || _assetDragStarted) return;
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
+        var pos = e.GetPosition(this);
+        if (Math.Abs(pos.X - _pendingAssetDragStart.X) < AssetDragThreshold &&
+            Math.Abs(pos.Y - _pendingAssetDragStart.Y) < AssetDragThreshold)
+            return;
+
+        _assetDragStarted = true;
+        var item = _pendingAssetDrag;
+        var data = new DataObject();
+        data.Set("tucano/material-path", item.Path);
+        data.Set("tucano/material-name", item.Name);
+        data.Set(DataFormats.Text, item.Path);
+        try
+        {
+            await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy);
+        }
+        finally
+        {
+            _pendingAssetDrag = null;
+            _assetDragStarted = false;
+        }
+    }
+
+    private void OnAssetCardReleased(object? sender, PointerReleasedEventArgs e)
+    {
+        _pendingAssetDrag = null;
+        _assetDragStarted = false;
+        e.Pointer.Capture(null);
+    }
+
+    private void OnAssetCardCaptureLost(object? sender, PointerCaptureLostEventArgs e)
+    {
+        if (!_assetDragStarted) _pendingAssetDrag = null;
     }
 
     // ── Content browser: folders and asset context menu ──
@@ -1066,6 +1370,7 @@ public partial class MainWindow : Window
         if (_materials is null || _runtime is not { IsAlive: true }) return;
 
         var created = _materials.Create("Material");
+        MaterialAsset result = created;
         // Seed from the selection when there is one, so "new material" captures what you see.
         var sel = SelectedObjectIndex;
         if (sel >= 0)
@@ -1075,10 +1380,14 @@ public partial class MainWindow : Window
             _materials.Materials.Remove(created);
             _materials.Materials.Add(seeded);
             _materials.Save(seeded);
+            result = seeded;
         }
 
         RescanAssets();
-        Log($"Created material asset '{created.Name}'");
+        Log($"Created material asset '{result.Name}'");
+
+        var item = _allAssets.FirstOrDefault(a => a.Path == result.Path);
+        if (item is not null) OpenMaterialEditor(item);
     }
 
     private void OnSaveMaterialAsset(object? sender, RoutedEventArgs e)
@@ -1477,6 +1786,7 @@ public partial class MainWindow : Window
             MatRoughness.Value = Math.Clamp(mat.Roughness, 0.02, 1.0);
             MatEmissive.Value = Math.Clamp(mat.Emissive.X, 0, 5);
             UpdateSwatch(mat.BaseColor.X, mat.BaseColor.Y, mat.BaseColor.Z);
+            UpdateMaterialSlot(index, mat);
 
             // Physics is an optional component: only shown once the object actually has a body.
             CompPhysics.IsVisible = phys != TucanoPhysicsKind.None;
@@ -1501,6 +1811,7 @@ public partial class MainWindow : Window
         _extensions.AddSection(new AnimationSection());
         _extensions.AddPanel(new EnvironmentPanel());
         _extensions.AddPanel(new TerrainPanel());
+        _extensions.AddPanel(new WorldOutlinerPanel());
 
         BuildToolsMenu();
     }

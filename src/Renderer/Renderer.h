@@ -166,6 +166,11 @@ private:
   std::shared_ptr<rhi::RootSignature> m_rootCS;
   std::shared_ptr<rhi::Texture> m_depthColor;
   std::shared_ptr<rhi::PipelineState> m_gbufferPSO;
+  std::shared_ptr<rhi::PipelineState> m_instanceGbufferPSO; // WM-6: instanced indirect g-buffer draw
+  std::shared_ptr<rhi::PipelineState> m_clipmapTerrainPSO;  // WM-8: continuous-LOD clipmap terrain
+  std::shared_ptr<rhi::PipelineState> m_clipmapFeedbackPSO; // WM-8: VT feedback pass (Phase 2b)
+  std::shared_ptr<rhi::Texture> m_vtFeedbackRT;             // R32_UINT page requests, reduced res
+  std::shared_ptr<rhi::Texture> m_vtFeedbackDepth;          // its own depth
   std::shared_ptr<rhi::PipelineState> m_shadowPSO;
   std::shared_ptr<rhi::PipelineState> m_shadowOctaPSO;
   std::shared_ptr<rhi::PipelineState> m_lightingPSO;
@@ -248,6 +253,8 @@ private:
   std::shared_ptr<rhi::Buffer> m_postCB;
   uint64_t m_postCBBump = 0;
   std::shared_ptr<rhi::Buffer> m_objectCB;
+  std::shared_ptr<rhi::Buffer> m_clipmapVtCB; // WM-8: terrain VT params (b2) for the clipmap draw
+  uint64_t m_clipmapVtBump = 0;
   // Skinning palette shared across the frame; objects index into it via ObjectCB::skinInfo.
   static constexpr uint32_t kMaxSkinningMatrices = 4096;
   std::shared_ptr<rhi::Buffer> m_skinningBuffer;

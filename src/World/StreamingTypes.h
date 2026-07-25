@@ -49,6 +49,11 @@ struct CellContent {
   void* userData = nullptr;
   uint64_t cpuBytes = 0;
   uint64_t gpuBytes = 0;
+
+  /// Detail level the scheduler picked for this cell, from its distance. 0 is full detail; higher
+  /// values mean the provider may collapse the cell into cheaper geometry (WM-5 HLOD). The
+  /// scheduler sets it before upload() and reloads the cell when the level changes.
+  uint32_t lod = 0;
 };
 
 /// Where cell data comes from, split along the three pipeline stages.
@@ -115,6 +120,8 @@ struct StreamingStats {
   uint32_t loadsFailed = 0;    ///< cumulative
   uint32_t unloadsIssued = 0;  ///< this frame
   uint32_t cancellations = 0;  ///< cumulative — cells abandoned before they finished loading
+  uint32_t lodSwitches = 0;    ///< cumulative — layers reloaded because their detail band changed
+  uint32_t reloadsIssued = 0;  ///< cumulative — cells re-streamed in place by a hot reload (WM-9)
 
   uint32_t budgetRejections = 0; ///< this frame
   uint64_t cpuBytes = 0;

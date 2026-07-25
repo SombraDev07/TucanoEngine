@@ -20,6 +20,17 @@
 #include "World/FrustumCull.h"
 #include "World/GpuCellCuller.h"
 #include "World/WorldGrid.h"
+#include "Core/TaskScheduler.h"
+#include "World/StreamingScheduler.h"
+#include "World/StreamingBudget.h"
+#include "World/SceneCellProvider.h"
+#include "World/WorldGenerator.h"
+#include "Terrain/Heightmap.h"
+#include "Terrain/TerrainGenerator.h"
+#include "Terrain/TerrainComponent.h"
+#include "Terrain/HeightmapBrush.h"
+#include "Terrain/ErosionSimulation.h"
+#include "Terrain/MaterialNodeEditor.h"
 #include "Terrain/Heightmap.h"
 #include "Terrain/TerrainGenerator.h"
 #include "Terrain/TerrainComponent.h"
@@ -37,6 +48,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -339,6 +351,10 @@ struct TucanoRuntime {
   int terrainBrushTool = 0;
   int terrainObjectIndex = -1;
 
+  // Material graph editor
+  std::unique_ptr<tucano::terrain::MaterialNodeEditor> materialNodeEditor;
+  bool materialGraphOpen = false;
+
   // Audio (Phase I-2)
   std::vector<tucano::AudioClip*> audioClips;
   std::vector<std::unique_ptr<tucano::AudioSource>> audioSources;
@@ -348,6 +364,18 @@ struct TucanoRuntime {
   std::unique_ptr<tucano::terrain::TerrainComponent> terrainComp;
   std::unique_ptr<tucano::terrain::BrushSystem> terrainBrushes;
   std::unique_ptr<tucano::terrain::ErosionSimulation> terrainErosion;
+
+  // World streaming session (WM-9 outliner). Declared streamer-last so it destroys first — it
+  // references the grid/tasks/budget/provider that follow it in memory.
+  std::unique_ptr<tucano::world::WorldGrid> streamGrid;
+  std::unique_ptr<tucano::core::TaskScheduler> streamTasks;
+  std::unique_ptr<tucano::world::StreamingBudget> streamBudget;
+  std::unique_ptr<tucano::world::SceneCellProvider> streamProvider;
+  std::unique_ptr<tucano::world::StreamingScheduler> streamer;
+  tucano::world::StreamingObserver streamObserver;
+  std::string streamWorldRoot;
+  bool streamingActive = false;
+  bool streamAutoStarted = false;
 };
 
 // `data` aliases the runtime's scene rather than copying it: the renderer draws runtime->scene, so
@@ -838,6 +866,9 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
     rt->window->pollEvents();
     rt->input->beginFrame();
     rt->debugUI->beginFrame();
+    if (rt->materialGraphOpen && rt->materialNodeEditor) {
+      rt->materialNodeEditor->render();
+    }
     if (rt->overlayVisible) {
       rt->debugUI->drawPerfHud(rt->renderer->lastFrameMs(),
           rt->renderer->drawCalls(),
@@ -967,6 +998,15 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
     }
 
     rt->input->endFrame();
+
+    // World streaming (WM-9): drive per frame if active.
+    // NOTE: streaming is started explicitly by the World Outliner tool or via API.
+    // It does NOT auto-start — production worlds are authored by artists, not procedural.
+    if (rt->streamingActive && rt->streamer) {
+      rt->streamObserver.position = rt->scene.camera.position();
+      rt->streamer->setObservers({rt->streamObserver});
+      rt->streamer->update(rt->deltaSeconds * 1000.0f);
+    }
 
     auto* cmd = rt->device->beginFrame();
     auto& bb = rt->swapChain->backBuffer();
@@ -2957,4 +2997,139 @@ TUCANO_API void tucano_terrain_set_sculpt_params(TucanoRuntime* rt, float radius
   rt->terrainBrushRadius = radius;
   rt->terrainBrushStrength = strength;
   rt->terrainBrushTool = tool;
+}
+
+TUCANO_API void tucano_material_graph_open(TucanoRuntime* rt) {
+  if (!rt) return;
+  if (!rt->materialNodeEditor)
+    rt->materialNodeEditor = std::make_unique<tucano::terrain::MaterialNodeEditor>();
+  rt->materialNodeEditor->open(tucano::terrain::MaterialGraphData::createDefault());
+  rt->materialGraphOpen = true;
+}
+
+TUCANO_API void tucano_material_graph_close(TucanoRuntime* rt) {
+  if (!rt) return;
+  rt->materialGraphOpen = false;
+}
+
+// ── World streaming / Outliner (WM-9) ────────────────
+
+TUCANO_API bool tucano_world_stream_start(TucanoRuntime* rt, int32_t extent, float loadRadius,
+                                          uint32_t density) {
+  if (!rt || !rt->device) return false;
+  tucano_world_stream_stop(rt); // clean any previous session
+
+  const tucano::world::WorldGridDesc gd{glm::vec3(0.0f), 65536.0f, 10};
+  rt->streamWorldRoot = "editor_stream_world";
+
+  // Bake a procedural world on first run. Skip if already exists.
+  {
+    tucano::world::WorldGrid bakeGrid(gd);
+    tucano::world::WorldGenSettings gen;
+    gen.outputRoot = rt->streamWorldRoot;
+    gen.level = gd.streamLevel;
+    gen.extentCells = extent > 0 ? extent : 6;
+    gen.gameplayPerCell = std::max(1u, density / 2);
+    gen.visualPerCell = std::max(1u, density / 2);
+    gen.detailPerCell = std::max(1u, density);
+
+    // Check if world already exists -- skip slow generation
+    std::error_code ec;
+    if (!std::filesystem::exists(rt->streamWorldRoot, ec) ||
+        std::filesystem::is_empty(rt->streamWorldRoot, ec)) {
+      tucano::world::WorldGenStats gs;
+      if (!tucano::world::generateWorld(gen, bakeGrid, gs)) return false;
+    }
+  }
+
+  rt->streamGrid = std::make_unique<tucano::world::WorldGrid>(gd);
+  rt->streamTasks = std::make_unique<tucano::core::TaskScheduler>();
+  rt->streamBudget = std::make_unique<tucano::world::StreamingBudget>();
+  rt->streamProvider = std::make_unique<tucano::world::SceneCellProvider>(*rt->device, rt->scene,
+                                                                          rt->streamWorldRoot);
+  tucano::world::StreamingSchedulerDesc sd;
+  sd.streamLevel = gd.streamLevel;
+  sd.maxConcurrentLoads = 24;
+  sd.unloadGraceFrames = 30;
+  rt->streamer = std::make_unique<tucano::world::StreamingScheduler>(
+      *rt->streamGrid, *rt->streamTasks, *rt->streamBudget, *rt->streamProvider, sd);
+
+  rt->streamObserver = {};
+  rt->streamObserver.id = 1;
+  rt->streamObserver.loadRadius = loadRadius > 0.0f ? loadRadius : 200.0f;
+  rt->streamObserver.unloadRadius = rt->streamObserver.loadRadius * 1.5f;
+  rt->streamingActive = true;
+  return true;
+}
+
+TUCANO_API void tucano_world_stream_stop(TucanoRuntime* rt) {
+  if (!rt) return;
+  rt->streamingActive = false;
+  if (rt->streamer) {
+    // Unload cleanly so the streamed objects leave the scene rather than lingering.
+    rt->streamer->setObservers({});
+    for (int i = 0; i < 400 && rt->streamProvider && rt->streamProvider->liveObjectCount() > 0; ++i) {
+      rt->streamer->update(16.0f);
+    }
+  }
+  rt->streamer.reset();
+  rt->streamProvider.reset();
+  rt->streamBudget.reset();
+  rt->streamTasks.reset();
+  rt->streamGrid.reset();
+}
+
+TUCANO_API bool tucano_world_stream_active(TucanoRuntime* rt) {
+  return rt && rt->streamingActive;
+}
+
+TUCANO_API void tucano_world_stream_get_stats(TucanoRuntime* rt, TucanoStreamStats* out) {
+  if (!out) return;
+  *out = {};
+  if (!rt || !rt->streamer) return;
+  const auto& s = rt->streamer->stats();
+  out->cellsResident = s.cellsResident;
+  out->cellsLoading = s.cellsLoading;
+  out->layersLoaded = s.layersLoaded;
+  out->cellsWanted = s.cellsWanted;
+  out->cellsMissing = s.cellsMissing;
+  out->loadsStarted = s.loadsStarted;
+  out->loadsCompleted = s.loadsCompleted;
+  out->unloadsIssued = s.unloadsIssued;
+  out->cancellations = s.cancellations;
+  out->lodSwitches = s.lodSwitches;
+  out->reloadsIssued = s.reloadsIssued;
+  out->budgetRejections = s.budgetRejections;
+  out->cpuBytes = s.cpuBytes;
+  out->gpuBytes = s.gpuBytes;
+  if (rt->streamProvider) {
+    out->liveObjects = uint32_t(rt->streamProvider->liveObjectCount());
+    out->liveBodies = uint32_t(rt->streamProvider->liveBodyCount());
+  }
+}
+
+TUCANO_API uint32_t tucano_world_stream_resident_cells(TucanoRuntime* rt, TucanoStreamCell* out,
+                                                       uint32_t max) {
+  if (!rt || !rt->streamer || !out || max == 0) return 0;
+  std::vector<tucano::world::StreamingScheduler::ResidentCellInfo> cells;
+  rt->streamer->snapshotResident(cells);
+  const uint32_t n = std::min<uint32_t>(max, uint32_t(cells.size()));
+  for (uint32_t i = 0; i < n; ++i) {
+    const auto& c = cells[i];
+    out[i].x = c.id.x;
+    out[i].y = c.id.y;
+    out[i].z = c.id.z;
+    out[i].level = c.id.level;
+    out[i].layerMask = c.layerMask;
+    out[i].loadingMask = c.loadingMask;
+    out[i].lod = c.lod;
+    out[i].distance = c.distance;
+  }
+  return n;
+}
+
+TUCANO_API void tucano_world_stream_reload_cell(TucanoRuntime* rt, int32_t x, int32_t y, int32_t z,
+                                                uint32_t level) {
+  if (!rt || !rt->streamer) return;
+  rt->streamer->requestReload(tucano::world::CellId{x, y, z, level});
 }

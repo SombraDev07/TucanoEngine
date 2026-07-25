@@ -136,3 +136,19 @@ FetchContent_Declare(miniaudio
 FetchContent_MakeAvailable(miniaudio)
 add_library(miniaudio_headers INTERFACE)
 target_include_directories(miniaudio_headers INTERFACE ${miniaudio_SOURCE_DIR})
+
+# ── imgui-node-editor (header-only) ──────────────────
+
+FetchContent_Declare(imgui_node_editor
+  GIT_REPOSITORY https://github.com/thedmd/imgui-node-editor.git
+  GIT_TAG develop
+  GIT_SHALLOW TRUE)
+FetchContent_GetProperties(imgui_node_editor)
+if(NOT imgui_node_editor_POPULATED)
+  FetchContent_Populate(imgui_node_editor)
+endif()
+add_library(imgui_node_editor INTERFACE)
+target_include_directories(imgui_node_editor INTERFACE ${imgui_node_editor_SOURCE_DIR})
+target_link_libraries(imgui_node_editor INTERFACE imgui_lib)
+# imgui_node_editor needs IMGUI_DEFINE_MATH_OPERATORS
+target_compile_definitions(imgui_node_editor INTERFACE IMGUI_DEFINE_MATH_OPERATORS)

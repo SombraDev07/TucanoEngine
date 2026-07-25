@@ -566,6 +566,56 @@ TUCANO_API void tucano_terrain_set_sculpt_active(TucanoRuntime* rt, bool active)
 TUCANO_API bool tucano_terrain_get_sculpt_active(TucanoRuntime* rt);
 TUCANO_API void tucano_terrain_set_sculpt_params(TucanoRuntime* rt, float radius, float strength, int tool);
 
+TUCANO_API void tucano_material_graph_open(TucanoRuntime* rt);
+TUCANO_API void tucano_material_graph_close(TucanoRuntime* rt);
+
+// ── World streaming / Outliner (WM-9) ────────────────
+// A live streaming session hosted in the editor: a small procedural world is baked to disk and
+// streamed around the viewport camera, so the World Outliner has real cells to show. All getters are
+// no-ops when no session is running.
+
+typedef struct {
+  uint32_t cellsResident;
+  uint32_t cellsLoading;
+  uint32_t layersLoaded;
+  uint32_t cellsWanted;
+  uint32_t cellsMissing;
+  uint32_t loadsStarted;
+  uint32_t loadsCompleted;
+  uint32_t unloadsIssued;
+  uint32_t cancellations;
+  uint32_t lodSwitches;
+  uint32_t reloadsIssued;
+  uint32_t budgetRejections;
+  uint64_t cpuBytes;
+  uint64_t gpuBytes;
+  uint32_t liveObjects;
+  uint32_t liveBodies;
+} TucanoStreamStats;
+
+typedef struct {
+  int32_t x, y, z;
+  uint32_t level;
+  uint32_t layerMask;   // bit l set when layer l is loaded
+  uint32_t loadingMask; // bit l set when layer l is mid-pipeline
+  uint32_t lod;
+  float distance;       // box distance to the camera/observer
+} TucanoStreamCell;
+
+// Bakes a small world (2*extent+1 cells per side, `density` props per cell) and starts streaming it
+// around the camera with the given load radius. Returns false if the bake or setup failed.
+TUCANO_API bool tucano_world_stream_start(TucanoRuntime* rt, int32_t extent, float loadRadius,
+                                          uint32_t density);
+TUCANO_API void tucano_world_stream_stop(TucanoRuntime* rt);
+TUCANO_API bool tucano_world_stream_active(TucanoRuntime* rt);
+TUCANO_API void tucano_world_stream_get_stats(TucanoRuntime* rt, TucanoStreamStats* out);
+// Fills up to `max` resident/loading cells, nearest first. Returns how many were written.
+TUCANO_API uint32_t tucano_world_stream_resident_cells(TucanoRuntime* rt, TucanoStreamCell* out,
+                                                       uint32_t max);
+// Forces a resident cell to re-stream from disk (the hot-reload path), for the outliner's context menu.
+TUCANO_API void tucano_world_stream_reload_cell(TucanoRuntime* rt, int32_t x, int32_t y, int32_t z,
+                                                uint32_t level);
+
 #ifdef __cplusplus
 }
 #endif

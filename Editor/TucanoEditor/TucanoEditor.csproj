@@ -17,6 +17,7 @@
     <PackageReference Include="Avalonia.Fonts.Inter" Version="11.2.7" />
     <PackageReference Include="Dock.Avalonia" Version="11.2.6" />
     <PackageReference Include="Dock.Model.ReactiveUI" Version="11.2.6" />
+    <PackageReference Include="SkiaSharp" Version="2.88.9" />
   </ItemGroup>
 
   <ItemGroup>

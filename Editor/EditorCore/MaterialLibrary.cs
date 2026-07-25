@@ -24,6 +24,10 @@ public sealed class MaterialAsset
     public float EmissiveG { get; set; }
     public float EmissiveB { get; set; }
 
+    /// Raw JSON object for the optional node graph (without the `"graph":` key). Preserved when
+    /// the inspector saves flat PBR fields so the Material Editor doesn't lose its graph.
+    public string? GraphJson { get; set; }
+
     public TucanoMaterial ToRuntime() => new()
     {
         BaseColor = new TucanoVec3(R, G, B),
@@ -86,6 +90,10 @@ public sealed class MaterialLibrary
     public void Save(MaterialAsset m)
     {
         m.Path ??= System.IO.Path.Combine(RootDirectory, SanitiseFileName(m.Name) + ".tmat");
+        // Keep an existing graph block if the caller didn't supply one (inspector flat save).
+        if (m.GraphJson is null && File.Exists(m.Path))
+            m.GraphJson = ExtractGraphJson(File.ReadAllText(m.Path));
+
         var inv = CultureInfo.InvariantCulture;
         var sb = new StringBuilder();
         sb.Append("{\n");
@@ -93,7 +101,15 @@ public sealed class MaterialLibrary
         sb.Append($"  \"baseColor\": [{m.R.ToString("G6", inv)}, {m.G.ToString("G6", inv)}, {m.B.ToString("G6", inv)}],\n");
         sb.Append($"  \"emissive\": [{m.EmissiveR.ToString("G6", inv)}, {m.EmissiveG.ToString("G6", inv)}, {m.EmissiveB.ToString("G6", inv)}],\n");
         sb.Append($"  \"metallic\": {m.Metallic.ToString("G6", inv)},\n");
-        sb.Append($"  \"roughness\": {m.Roughness.ToString("G6", inv)}\n");
+        if (string.IsNullOrWhiteSpace(m.GraphJson))
+        {
+            sb.Append($"  \"roughness\": {m.Roughness.ToString("G6", inv)}\n");
+        }
+        else
+        {
+            sb.Append($"  \"roughness\": {m.Roughness.ToString("G6", inv)},\n");
+            sb.Append($"  \"graph\": {m.GraphJson.Trim()}\n");
+        }
         sb.Append("}\n");
         File.WriteAllText(m.Path, sb.ToString());
     }
@@ -117,6 +133,7 @@ public sealed class MaterialLibrary
             if (em.Length >= 3) { mat.EmissiveR = em[0]; mat.EmissiveG = em[1]; mat.EmissiveB = em[2]; }
             mat.Metallic = ReadNumber(text, "metallic") ?? mat.Metallic;
             mat.Roughness = ReadNumber(text, "roughness") ?? mat.Roughness;
+            mat.GraphJson = ExtractGraphJson(text);
             return true;
         }
         catch (Exception)
@@ -162,6 +179,27 @@ public sealed class MaterialLibrary
     }
 
     private static string Escape(string s) => s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+
+    /// Pulls the `{ ... }` value of `"graph"` so flat saves can write it back unchanged.
+    private static string? ExtractGraphJson(string json)
+    {
+        var key = json.IndexOf("\"graph\"", StringComparison.Ordinal);
+        if (key < 0) return null;
+        var open = json.IndexOf('{', key);
+        if (open < 0) return null;
+        int depth = 0;
+        for (int i = open; i < json.Length; i++)
+        {
+            char c = json[i];
+            if (c == '{') depth++;
+            else if (c == '}')
+            {
+                depth--;
+                if (depth == 0) return json[open..(i + 1)];
+            }
+        }
+        return null;
+    }
 
     private static string SanitiseFileName(string name)
     {

@@ -88,6 +88,8 @@ add_library(TucanoRuntime STATIC
   Terrain/TerrainGenerator.cpp
   Terrain/TerrainComponent.cpp
   Terrain/TerrainCellProvider.cpp
+  Terrain/ClipmapTerrain.cpp
+  Terrain/TerrainVirtualTexture.cpp
   Terrain/Clipmap.cpp
   Terrain/TerrainRenderer.cpp
   Terrain/MaterialAtlas.cpp
@@ -97,6 +99,11 @@ add_library(TucanoRuntime STATIC
   Terrain/TerrainRayTracer.cpp
   Terrain/MaterialLayers.cpp
   Terrain/ErosionSimulation.cpp
+  Terrain/MaterialNodeEditor.cpp
+  Terrain/imgui_node_editor_impl.cpp
+  Terrain/crude_json.cpp
+  Terrain/imgui_canvas.cpp
+  Terrain/imgui_node_editor_api.cpp
 )
 
 target_include_directories(TucanoRuntime
@@ -114,6 +121,7 @@ target_link_libraries(TucanoRuntime
     miniaudio_headers
     meshoptimizer
     imgui_lib
+    imgui_node_editor
     tracy_stub
     Jolt
     d3d12

@@ -43,6 +43,51 @@ void StreamingScheduler::setObservers(const std::vector<StreamingObserver>& obse
   m_observers = observers;
 }
 
+void StreamingScheduler::snapshotResident(std::vector<ResidentCellInfo>& out) const {
+  out.clear();
+
+  glm::vec3 obs(0.0f);
+  bool haveObs = false;
+  {
+    std::lock_guard<std::mutex> lock(m_observerMutex);
+    for (const auto& o : m_observers) {
+      if (o.active) { obs = o.position; haveObs = true; break; }
+    }
+  }
+
+  for (const auto& [key, tracked] : m_tracked) {
+    ResidentCellInfo info;
+    info.id = tracked.id;
+    for (uint32_t l = 0; l < kLayerCount; ++l) {
+      if (tracked.loaded[l]) {
+        info.layerMask |= (1u << l);
+        info.lod = std::max(info.lod, tracked.loadedLod[l]);
+      } else if (tracked.loads[l]) {
+        info.loadingMask |= (1u << l);
+      }
+    }
+    if (info.layerMask == 0 && info.loadingMask == 0) continue;
+
+    if (haveObs) {
+      glm::vec3 mn, mx;
+      m_grid.boundsOf(tracked.id, mn, mx);
+      const glm::vec3 d = glm::max(glm::max(mn - obs, glm::vec3(0.0f)), obs - mx);
+      info.distance = glm::length(d);
+    }
+    out.push_back(info);
+  }
+
+  std::sort(out.begin(), out.end(),
+            [](const ResidentCellInfo& a, const ResidentCellInfo& b) { return a.distance < b.distance; });
+}
+
+void StreamingScheduler::requestReload(const CellId& id) {
+  // Just record the intent; update() does the tear-down and re-stream on the correct thread, next
+  // frame, through the same path a LOD change uses. Recording rather than acting here keeps this
+  // callable from a file-watch callback without needing the device or touching the pipeline.
+  m_reloadRequests.insert(id.key());
+}
+
 float StreamingScheduler::priorityOf(const WorldCell& cell, WorldLayer layer) {
   // Lower is more urgent. Distance is the base; the layer weight and observer bias scale it so the
   // nearest gameplay layer beats a nearer visual layer of a further cell.
@@ -57,6 +102,40 @@ float StreamingScheduler::priorityOf(const WorldCell& cell, WorldLayer layer) {
     best = std::min(best, p);
   }
   return best;
+}
+
+bool StreamingScheduler::layerWanted(const WorldCell& cell, WorldLayer layer,
+                                     bool forUnload) const {
+  const uint32_t l = uint32_t(layer);
+  if (!m_desc.layerEnabled[l]) return false;
+
+  std::lock_guard<std::mutex> lock(m_observerMutex);
+  for (const auto& obs : m_observers) {
+    if (!obs.active) continue;
+    // Loading uses loadRadius, unloading the wider unloadRadius. Scaling the SAME radius for both
+    // would collapse the hysteresis and let layers thrash at their own boundary.
+    const float base = forUnload ? obs.unloadRadius : obs.loadRadius;
+    if (cell.distanceTo(obs.position) <= base * m_desc.layerRadiusScale[l]) return true;
+  }
+  return false;
+}
+
+uint32_t StreamingScheduler::lodFor(const WorldCell& cell) const {
+  if (m_desc.lodDistances.empty()) return 0;
+
+  std::lock_guard<std::mutex> lock(m_observerMutex);
+  float nearest = 1e30f;
+  for (const auto& obs : m_observers) {
+    if (obs.active) nearest = std::min(nearest, cell.distanceTo(obs.position));
+  }
+  if (nearest > 1e29f) return uint32_t(m_desc.lodDistances.size()); // wanted by nobody: coarsest
+
+  uint32_t lod = 0;
+  for (float d : m_desc.lodDistances) {
+    if (nearest <= d) break;
+    ++lod;
+  }
+  return lod;
 }
 
 void StreamingScheduler::gatherWantedCells(std::vector<std::pair<CellId, float>>& wanted) {
@@ -122,7 +201,7 @@ void StreamingScheduler::addPrefetchCells(std::unordered_map<uint64_t, float>& m
 }
 
 void StreamingScheduler::startLayerLoad(TrackedCell& tracked, WorldLayer layer, float priority,
-                                        bool prefetch) {
+                                        bool prefetch, uint32_t lod) {
   auto& slot = tracked.loads[uint32_t(layer)];
   if (slot) return; // already loading or loaded
   if (m_inFlight.load(std::memory_order_relaxed) >= m_desc.maxConcurrentLoads) return;
@@ -136,6 +215,8 @@ void StreamingScheduler::startLayerLoad(TrackedCell& tracked, WorldLayer layer, 
   load->layer = layer;
   load->priority = priority;
   load->stage.store(CellState::LoadingIO, std::memory_order_release);
+  load->content.lod = lod;
+  tracked.loadedLod[uint32_t(layer)] = lod;
 
   WorldCell& cell = m_grid.getOrCreate(tracked.id);
   cell.layers[uint32_t(layer)].state.store(CellState::LoadingIO, std::memory_order_release);
@@ -143,6 +224,9 @@ void StreamingScheduler::startLayerLoad(TrackedCell& tracked, WorldLayer layer, 
   LayerLoad* raw = load.get();
   m_inFlight.fetch_add(1, std::memory_order_relaxed);
   ++m_stats.loadsStarted;
+  if (m_recorder) {
+    m_recorder->record(m_frame, tracked.id, layer, StreamingEventType::LoadStarted);
+  }
 
   // Stage 1 on a worker: read bytes off disk. Records the real cost against the reservation so the
   // IO channel learns this world's actual read time.
@@ -259,11 +343,13 @@ void StreamingScheduler::finishLayer(TrackedCell& tracked, WorldLayer layer, boo
       cl.gpuBytes = slot->content.gpuBytes;
     }
     ++m_stats.loadsCompleted;
+    if (m_recorder) m_recorder->record(m_frame, tracked.id, layer, StreamingEventType::Loaded);
     // Keep the content pointer alive on the cell via the slot; the slot stays until unload.
     slot->stage.store(CellState::Loaded, std::memory_order_release);
   } else {
     if (cell) cell->layers[uint32_t(layer)].state.store(CellState::Failed, std::memory_order_release);
     ++m_stats.loadsFailed;
+    if (m_recorder) m_recorder->record(m_frame, tracked.id, layer, StreamingEventType::Failed);
     slot.reset(); // let it be retried on a later frame
   }
 }
@@ -284,6 +370,9 @@ void StreamingScheduler::releaseLayer(const CellId& id, WorldLayer layer, LayerL
 
   if (hadContent) {
     m_provider.release(id, layer, load.content);
+  }
+  if (m_recorder && load.stage.load(std::memory_order_acquire) == CellState::Loaded) {
+    m_recorder->record(m_frame, id, layer, StreamingEventType::Unloaded);
   }
   load.content = {};
 }
@@ -320,6 +409,21 @@ void StreamingScheduler::considerUnloads() {
 
     if (wanted) {
       tracked.lastWantedFrame = m_frame;
+
+      // The cell stays, but individual layers can still fall out of their own, smaller radius.
+      // Releasing just those is what layer composition buys: walk away from a place and its decals
+      // and vegetation go first, while the colliders you might still interact with stay resident.
+      // The unload check uses the wider unload radius, so a layer does not thrash at its boundary.
+      for (uint32_t l = 0; l < kLayerCount; ++l) {
+        if (!tracked.loaded[l] || !tracked.loads[l]) continue;
+        if (layerWanted(*cell, WorldLayer(l), /*forUnload=*/true)) continue;
+        releaseLayer(tracked.id, WorldLayer(l), *tracked.loads[l]);
+        tracked.loads[l].reset();
+        tracked.loaded[l] = false;
+        cell->layers[l].state.store(CellState::Unloaded, std::memory_order_release);
+        cell->layers[l].cpuBytes = 0;
+        cell->layers[l].gpuBytes = 0;
+      }
       continue;
     }
 
@@ -396,17 +500,44 @@ void StreamingScheduler::update(float lastFrameMs) {
     // A cell only reached through prediction has cellPriority in the penalty range; its layers
     // should enter the pipeline as prefetch (lower task priority), not as urgent loads.
     const bool prefetch = cellPriority >= kPrefetchPenalty;
+    const uint32_t desiredLod = lodFor(m_grid.getOrCreate(id));
+
+    // Hot reload (WM-9): a cell whose disk content changed is torn down here unconditionally so the
+    // load path below re-reads it from disk this same frame. Distinct from the LOD case, which only
+    // rebuilds when the detail band changed.
+    const bool forceReload = m_reloadRequests.erase(id.key()) > 0;
+
+    // A layer already resident at the wrong detail level has to be rebuilt: merged HLOD geometry
+    // cannot be turned back into individual objects in place. Releasing it here lets the normal
+    // load path pick it up again at the new level on this same frame.
+    for (uint32_t l = 0; l < kLayerCount; ++l) {
+      if (!tracked.loaded[l] || !tracked.loads[l]) continue;
+      if (!forceReload && tracked.loadedLod[l] == desiredLod) continue;
+      releaseLayer(tracked.id, WorldLayer(l), *tracked.loads[l]);
+      tracked.loads[l].reset();
+      tracked.loaded[l] = false;
+      if (forceReload) ++m_stats.reloadsIssued;
+      else ++m_stats.lodSwitches;
+      if (WorldCell* c = m_grid.find(id)) {
+        c->layers[l].state.store(CellState::Unloaded, std::memory_order_release);
+      }
+    }
 
     bool anyUnloaded = false;
     for (uint32_t l = 0; l < kLayerCount; ++l) {
       if (tracked.loaded[l]) continue;
+      WorldCell& cellRef = m_grid.getOrCreate(id);
+      // Layer composition: each layer has its own slice of the radius. A cell can be well inside
+      // the Gameplay radius and still be too far for Detail, in which case Detail simply is not
+      // wanted yet — and must not count as "missing", or streaming would never report caught-up.
+      if (!prefetch && !layerWanted(cellRef, WorldLayer(l), /*forUnload=*/false)) continue;
       anyUnloaded = true;
       WorldCell& cell = m_grid.getOrCreate(id);
       // priorityOf returns 1e30 for a cell no observer can see (prefetch-only); fall back to the
       // cell's merged priority so ordering still reflects the prediction distance.
       float p = priorityOf(cell, WorldLayer(l));
       if (p >= 1e29f) p = cellPriority;
-      startLayerLoad(tracked, WorldLayer(l), p, prefetch);
+      startLayerLoad(tracked, WorldLayer(l), p, prefetch, desiredLod);
     }
     if (anyUnloaded) ++missing;
   }

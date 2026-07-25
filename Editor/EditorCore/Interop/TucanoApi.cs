@@ -657,6 +657,54 @@ public static class TucanoApi
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern void tucano_terrain_set_sculpt_params(IntPtr rt, float radius, float strength, int tool);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_material_graph_open(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_material_graph_close(IntPtr rt);
+
+    // ── World Streaming / Outliner ────────────────────
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TucanoStreamStats
+    {
+        public uint CellsResident, CellsLoading, LayersLoaded;
+        public uint CellsWanted, CellsMissing;
+        public uint LoadsStarted, LoadsCompleted, UnloadsIssued;
+        public uint Cancellations, LodSwitches, ReloadsIssued, BudgetRejections;
+        public ulong CpuBytes, GpuBytes;
+        public uint LiveObjects, LiveBodies;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TucanoStreamCell
+    {
+        public int X, Y, Z;
+        public uint Level, LayerMask, LoadingMask, Lod;
+        public float Distance;
+    }
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_world_stream_start(IntPtr rt, int extent, float loadRadius, uint density);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_world_stream_stop(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_world_stream_active(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_world_stream_get_stats(IntPtr rt, out TucanoStreamStats stats);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tucano_world_stream_resident_cells(IntPtr rt,
+        [Out] TucanoStreamCell[] cells, uint max);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_world_stream_reload_cell(IntPtr rt, int x, int y, int z, uint level);
 }
 
 [StructLayout(LayoutKind.Sequential)]

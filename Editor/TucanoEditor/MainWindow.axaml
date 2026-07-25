@@ -208,10 +208,11 @@
         </Border>
 
         <!-- ═══════════ Docked panels (all resizable) ═══════════ -->
-        <Grid ColumnDefinitions="280,4,*,4,340" RowDefinitions="*,4,220">
+        <Panel>
+        <Grid Name="SceneDock" ColumnDefinitions="280,4,*,4,340" RowDefinitions="*,4,220">
 
             <!-- ── Outliner ─────────────────────────── -->
-            <Border Grid.Row="0" Grid.Column="0" Classes="panel">
+            <Border Name="OutlinerPanel" Grid.Row="0" Grid.Column="0" Classes="panel">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Classes="header">
                         <DockPanel>
@@ -267,17 +268,17 @@
                 </DockPanel>
             </Border>
 
-            <GridSplitter Grid.Row="0" Grid.Column="1" ResizeDirection="Columns" />
+            <GridSplitter Name="LeftSplitter" Grid.Row="0" Grid.Column="1" ResizeDirection="Columns" />
 
-            <!-- ── Viewport ─────────────────────────── -->
-            <Border Grid.Row="0" Grid.Column="2" Background="#000000">
+            <!-- ── Viewport ── -->
+            <Panel Grid.Row="0" Grid.Column="2" Background="#000000">
                 <views:ViewportControl Name="Viewport" />
-            </Border>
+            </Panel>
 
-            <GridSplitter Grid.Row="0" Grid.Column="3" ResizeDirection="Columns" />
+            <GridSplitter Name="RightSplitter" Grid.Row="0" Grid.Column="3" ResizeDirection="Columns" />
 
             <!-- ── Inspector ────────────────────────── -->
-            <Border Grid.Row="0" Grid.Column="4" Classes="panel">
+            <Border Name="InspectorPanel" Grid.Row="0" Grid.Column="4" Classes="panel">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Classes="header">
                         <DockPanel>
@@ -370,9 +371,49 @@
                                     </StackPanel>
                                 </Expander.Header>
 
-                                <StackPanel Spacing="2">
-                                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,4">
-                                        <Border Grid.Column="0" Name="MatSwatch" Height="26" CornerRadius="3"
+                                <StackPanel Spacing="6">
+                                    <TextBlock Text="Material asset" Classes="label" />
+                                    <Border Name="MatSlot"
+                                            MinHeight="56" CornerRadius="5" Padding="6"
+                                            Background="#141418" BorderBrush="#3A3A45" BorderThickness="1"
+                                            Cursor="Hand"
+                                            ToolTip.Tip="Drag a .tmat from the Content Browser onto this slot"
+                                            DragDrop.AllowDrop="True"
+                                            DragDrop.DragOver="OnMatSlotDragOver"
+                                            DragDrop.Drop="OnMatSlotDrop"
+                                            DoubleTapped="OnMatSlotDoubleTapped">
+                                        <Grid ColumnDefinitions="48,*,Auto">
+                                            <Border Grid.Column="0" Width="44" Height="44" CornerRadius="4"
+                                                    Background="#1E1E23" BorderBrush="#2A2A31"
+                                                    BorderThickness="1" ClipToBounds="True">
+                                                <Panel>
+                                                    <Border Name="MatSlotColor" Background="#B7B7BF" />
+                                                    <Image Name="MatSlotThumb" Stretch="UniformToFill"
+                                                           IsVisible="False" />
+                                                </Panel>
+                                            </Border>
+                                            <StackPanel Grid.Column="1" Margin="10,0,6,0"
+                                                        VerticalAlignment="Center" Spacing="2">
+                                                <TextBlock Name="MatSlotName" Text="None"
+                                                           FontSize="12" FontWeight="SemiBold"
+                                                           Foreground="#E8E8EC"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <TextBlock Name="MatSlotHint"
+                                                           Text="Drop a saved material here"
+                                                           FontSize="10" Foreground="#666680" />
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="2" Orientation="Vertical" Spacing="4"
+                                                        VerticalAlignment="Center">
+                                                <Button Classes="tool" Content="Clear" Height="22"
+                                                        Padding="8,0" FontSize="10"
+                                                        Click="OnClearMaterialSlot"
+                                                        ToolTip.Tip="Reset to default white material" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+
+                                    <Grid ColumnDefinitions="*,Auto" Margin="0,2,0,0">
+                                        <Border Grid.Column="0" Name="MatSwatch" Height="22" CornerRadius="3"
                                                 Background="#B7B7BF" BorderBrush="#2A2A31" BorderThickness="1" />
                                         <Button Grid.Column="1" Classes="tool" Content="Save as asset"
                                                 Margin="6,0,0,0" Click="OnSaveMaterialAsset"
@@ -542,10 +583,10 @@
                 </DockPanel>
             </Border>
 
-            <GridSplitter Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="5" ResizeDirection="Rows" />
+            <GridSplitter Name="BottomSplitter" Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="5" ResizeDirection="Rows" />
 
             <!-- ── Bottom dock ─────────────────────── -->
-            <Border Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Classes="panel">
+            <Border Name="BottomDock" Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="5" Classes="panel">
                 <TabControl>
                     <TabItem Header="Content Browser">
                         <Grid ColumnDefinitions="190,4,*">
@@ -618,6 +659,7 @@
                                     <ListBox.ContextMenu>
                                         <ContextMenu>
                                             <MenuItem Header="Use / Place" Click="OnImportSelectedAsset" />
+                                            <MenuItem Header="Edit Material" Click="OnEditMaterial" />
                                             <MenuItem Header="Apply Material to Selection"
                                                       Click="OnApplyMaterialToSelection" />
                                             <Separator />
@@ -635,15 +677,28 @@
                                     </ListBox.ItemsPanel>
                                     <ListBox.ItemTemplate>
                                         <DataTemplate DataType="models:AssetItem">
-                                            <StackPanel Width="92" Height="94" Spacing="6" Margin="2">
+                                            <StackPanel Width="92" Height="94" Spacing="6" Margin="2"
+                                                        PointerPressed="OnAssetCardPressed"
+                                                        PointerMoved="OnAssetCardMoved"
+                                                        PointerReleased="OnAssetCardReleased"
+                                                        PointerCaptureLost="OnAssetCardCaptureLost">
                                                 <Border Width="60" Height="52" CornerRadius="5"
                                                         Background="#1E1E23" BorderBrush="#2A2A31"
-                                                        BorderThickness="1" HorizontalAlignment="Center">
-                                                    <Path Width="26" Height="26" Stretch="Uniform"
-                                                          Data="{Binding IconKey, Converter={StaticResource IconConverter}}"
-                                                          Stroke="{Binding IconBrush}" StrokeThickness="1.4"
-                                                          Fill="Transparent"
-                                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                                        BorderThickness="1" HorizontalAlignment="Center"
+                                                        ClipToBounds="True">
+                                                    <Panel>
+                                                        <Path Width="26" Height="26" Stretch="Uniform"
+                                                              Data="{Binding IconKey, Converter={StaticResource IconConverter}}"
+                                                              Stroke="{Binding IconBrush}" StrokeThickness="1.4"
+                                                              Fill="Transparent"
+                                                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                              IsVisible="{Binding !HasThumbnail}" />
+                                                        <Image Source="{Binding Thumbnail}"
+                                                               Stretch="UniformToFill"
+                                                               HorizontalAlignment="Stretch"
+                                                               VerticalAlignment="Stretch"
+                                                               IsVisible="{Binding HasThumbnail}" />
+                                                    </Panel>
                                                 </Border>
                                                 <TextBlock Text="{Binding Name}" FontSize="10.5"
                                                            HorizontalAlignment="Center" TextAlignment="Center"
@@ -663,5 +718,9 @@
                 </TabControl>
             </Border>
         </Grid>
+
+        <!-- Material mode: full-focus overlay (hides scene outliner/inspector/browser) -->
+        <views:MaterialGraphPanel Name="MaterialEditor" IsVisible="False" ZIndex="10" />
+        </Panel>
     </DockPanel>
 </Window>

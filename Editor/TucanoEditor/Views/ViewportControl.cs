@@ -65,6 +65,23 @@ public class ViewportControl : NativeControlHost
     private const uint SWP_NOZORDER = 0x0004;
     private const uint SWP_FRAMECHANGED = 0x0020;
 
+    [DllImport("user32.dll")]
+    private static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+
+    private const int SW_HIDE = 0;
+    private const int SW_SHOW = 5;
+
+    /// Hides or shows the embedded engine HWND. Avalonia cannot paint over NativeControlHost,
+    /// so the material editor must hide the viewport before covering the center panel.
+    public void SetNativeVisible(bool visible)
+    {
+        var cmd = visible ? SW_SHOW : SW_HIDE;
+        if (_engineHwnd != IntPtr.Zero) ShowWindow(_engineHwnd, cmd);
+        if (_childHwnd != IntPtr.Zero) ShowWindow(_childHwnd, cmd);
+        IsVisible = visible;
+        if (visible && _attached) FitEngineToContainer();
+    }
+
     public IntPtr EngineHandle => _engineHwnd;
 
     public bool IsAttached => _attached;

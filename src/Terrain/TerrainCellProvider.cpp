@@ -153,27 +153,56 @@ bool TerrainCellProvider::upload(const world::CellId& id, world::WorldLayer /*la
   if (!data) return false;
 
   const uint32_t res = m_settings.heightmapResolution;
+
+  // Composite mode: the tile feeds the clipmap's window instead of becoming its own mesh. No GPU
+  // heightmap, no scene object — just blit the heights and keep them for a window rebuild on recentre.
+  if (m_compositeMode) {
+    blitTileToComposite(data->worldOrigin, data->worldSize, data->heights, res);
+    LiveTile tile;
+    tile.worldOrigin = data->worldOrigin;
+    tile.worldSize = data->worldSize;
+    tile.physicsBody = 0xFFFFFFFFu;
+    tile.lod = content.lod;
+    tile.heightRes = res;
+    tile.cpuHeights = std::move(data->heights);
+    ++m_tilesBuilt;
+    m_live[id.key()] = std::move(tile);
+    m_compositeDirty = true;
+    content.gpuBytes = 0;
+    delete data;
+    content.userData = nullptr;
+    return true;
+  }
+
   auto hm = Heightmap::createFromData(m_device, res, data->worldSize, data->heights);
 
   // A lean per-tile mesh sampled from the heightmap. Local space [0,worldSize]²; the tile is placed
   // by the object's world matrix, matching TerrainComponent's convention so both can coexist.
-  const uint32_t mr = m_settings.meshResolution;
+  //
+  // Per-tile LOD: the scheduler set content.lod from this tile's distance to the observer (via the
+  // desc's lodDistances, the same WM-5 band mechanism that reloads a cell when its band changes). A
+  // coarser level halves the mesh grid, so a distant tile costs a quarter of the triangles a near
+  // one does — the point of the whole exercise.
+  const uint32_t mr = std::max(4u, m_settings.meshResolution >> content.lod);
   std::vector<Vertex> verts;
   std::vector<uint32_t> indices;
-  verts.reserve(size_t(mr + 1) * (mr + 1));
+  verts.reserve(size_t(mr + 3) * (mr + 3));
+
+  auto pushVertex = [&](float wx, float wz, float yOverride, bool useOverride) {
+    Vertex v{};
+    const float h = hm->sampleHeight(wx, wz);
+    v.position = {wx, useOverride ? yOverride : h, wz};
+    v.normal = hm->sampleNormal(wx, wz);
+    v.tangent = {1.0f, 0.0f, 0.0f, 1.0f};
+    v.uv = {wx * 0.05f, wz * 0.05f};
+    v.color = {1.0f, 1.0f, 1.0f, 1.0f};
+    verts.push_back(v);
+  };
+
   for (uint32_t z = 0; z <= mr; ++z) {
     for (uint32_t x = 0; x <= mr; ++x) {
-      const float fx = float(x) / float(mr);
-      const float fz = float(z) / float(mr);
-      const float wx = fx * data->worldSize;
-      const float wz = fz * data->worldSize;
-      Vertex v{};
-      v.position = {wx, hm->sampleHeight(wx, wz), wz};
-      v.normal = hm->sampleNormal(wx, wz);
-      v.tangent = {1.0f, 0.0f, 0.0f, 1.0f};
-      v.uv = {wx * 0.05f, wz * 0.05f};
-      v.color = {1.0f, 1.0f, 1.0f, 1.0f};
-      verts.push_back(v);
+      pushVertex(float(x) / float(mr) * data->worldSize, float(z) / float(mr) * data->worldSize, 0.0f,
+                 false);
     }
   }
   for (uint32_t z = 0; z < mr; ++z) {
@@ -191,12 +220,41 @@ bool TerrainCellProvider::upload(const world::CellId& id, world::WorldLayer /*la
     }
   }
 
+  // Skirts: a vertical curtain around the tile border, dropped `skirtDepth` below the edge. Where a
+  // near (dense) tile meets a far (coarse) one their edge vertices do not line up — a T-junction that
+  // would show as a thin crack to the sky. The skirt fills that crack with geometry behind it,
+  // invisible from above, so no VT/stitching is needed for a clean result.
+  if (m_settings.skirtDepth > 0.0f) {
+    const float ws = data->worldSize;
+    const float sd = m_settings.skirtDepth;
+    // Each edge: walk its mr segments, emitting a quad (top edge → dropped skirt) per segment.
+    auto edgeSkirt = [&](auto worldAt) {
+      for (uint32_t i = 0; i < mr; ++i) {
+        const auto [ax, az] = worldAt(i);
+        const auto [bx, bz] = worldAt(i + 1);
+        const float ah = hm->sampleHeight(ax, az);
+        const float bh = hm->sampleHeight(bx, bz);
+        const uint32_t base = uint32_t(verts.size());
+        pushVertex(ax, az, ah, true);        // top a
+        pushVertex(bx, bz, bh, true);        // top b
+        pushVertex(ax, az, ah - sd, true);   // bottom a
+        pushVertex(bx, bz, bh - sd, true);   // bottom b
+        // Two triangles, wound so the curtain faces outward on all four sides (cull is None anyway).
+        indices.insert(indices.end(), {base, base + 2, base + 1, base + 1, base + 2, base + 3});
+      }
+    };
+    edgeSkirt([&](uint32_t i) { return std::pair<float, float>{float(i) / mr * ws, 0.0f}; });     // z=0
+    edgeSkirt([&](uint32_t i) { return std::pair<float, float>{float(i) / mr * ws, ws}; });        // z=max
+    edgeSkirt([&](uint32_t i) { return std::pair<float, float>{0.0f, float(i) / mr * ws}; });      // x=0
+    edgeSkirt([&](uint32_t i) { return std::pair<float, float>{ws, float(i) / mr * ws}; });        // x=max
+  }
+
   SubMesh sub{};
   sub.indexCount = uint32_t(indices.size());
   sub.materialIndex = 0;
   // A real AABB, or the frustum cull hides the tile everywhere it is not at the origin — the exact
   // bug that made streamed props invisible before.
-  sub.aabbMin = {0.0f, hm->minHeight(), 0.0f};
+  sub.aabbMin = {0.0f, hm->minHeight() - m_settings.skirtDepth, 0.0f};
   sub.aabbMax = {data->worldSize, hm->maxHeight(), data->worldSize};
   auto mesh = Mesh::create(m_device, verts, indices, {sub});
 
@@ -216,6 +274,8 @@ bool TerrainCellProvider::upload(const world::CellId& id, world::WorldLayer /*la
   tile.worldOrigin = data->worldOrigin;
   tile.worldSize = data->worldSize;
   tile.physicsBody = 0xFFFFFFFFu;
+  tile.lod = content.lod;
+  tile.vertexCount = uint32_t(verts.size());
 
   // Optional collision, reusing the terrain module's Jolt heightfield builder. The TerrainComponent
   // is transient — we only need it to create the body; it survives in the physics world after the
@@ -243,6 +303,14 @@ void TerrainCellProvider::release(const world::CellId& id, world::WorldLayer /*l
   auto it = m_live.find(id.key());
   if (it == m_live.end()) return;
   LiveTile& tile = it->second;
+
+  // Composite mode owns no scene object or physics body — the tile only fed the window. Dropping it
+  // leaves its heights in the window until the next recentre rebuilds it, which is fine: unloaded far
+  // terrain lingering a moment is invisible next to the camera.
+  if (m_compositeMode) {
+    m_live.erase(it);
+    return;
+  }
 
   if (tile.physicsBody != 0xFFFFFFFFu && m_physics) {
     m_physics->removeBody(JPH::BodyID(tile.physicsBody));
@@ -276,11 +344,129 @@ bool TerrainCellProvider::sampleHeight(float worldX, float worldZ, float& outHei
   const auto it = m_live.find(cellCovering(worldX, worldZ).key());
   if (it == m_live.end()) return false;
   const LiveTile& tile = it->second;
+  if (!tile.heightmap) return false; // composite mode keeps no per-tile GPU heightmap
   // The heightmap is in tile-local coordinates: shift the query into the tile before sampling.
   const float localX = worldX - tile.worldOrigin.x;
   const float localZ = worldZ - tile.worldOrigin.z;
   outHeight = tile.heightmap->sampleHeight(localX, localZ);
   return true;
+}
+
+std::array<uint32_t, 8> TerrainCellProvider::tilesPerLod() const {
+  std::array<uint32_t, 8> hist{};
+  for (const auto& [key, tile] : m_live) ++hist[std::min<uint32_t>(tile.lod, 7)];
+  return hist;
+}
+
+bool TerrainCellProvider::tileLodAt(float worldX, float worldZ, uint32_t& outLod,
+                                    uint32_t& outVerts) const {
+  const auto it = m_live.find(cellCovering(worldX, worldZ).key());
+  if (it == m_live.end()) return false;
+  outLod = it->second.lod;
+  outVerts = it->second.vertexCount;
+  return true;
+}
+
+std::shared_ptr<Heightmap> TerrainCellProvider::tileHeightmapAt(float worldX, float worldZ,
+                                                                glm::vec3& outOrigin) const {
+  const auto it = m_live.find(cellCovering(worldX, worldZ).key());
+  if (it == m_live.end()) return nullptr;
+  outOrigin = it->second.worldOrigin;
+  return it->second.heightmap;
+}
+
+// ── Composite window (Phase 2) ──
+
+void TerrainCellProvider::enableComposite(rhi::Device& device, float worldSize, uint32_t resolution) {
+  m_compositeMode = true;
+  m_compositeWorldSize = worldSize;
+  m_compositeRes = resolution;
+  m_compositeTexel = worldSize / float(resolution);
+  m_compositeData.assign(size_t(resolution) * resolution, 0.0f);
+  m_compositeMin = glm::vec2(-worldSize * 0.5f); // recentred on the observer by the first update
+
+  rhi::TextureDesc td{};
+  td.width = resolution;
+  td.height = resolution;
+  td.format = rhi::Format::R32_FLOAT;
+  td.usage = rhi::TextureUsage::ShaderResource;
+  td.debugName = "TerrainCompositeWindow";
+  // Created once so its bindless index is stable — the clipmap caches it. Re-uploads go into this
+  // same texture (uploadTexture), never a fresh one, or the index would change every frame.
+  m_compositeTex = device.createTexture(td, m_compositeData.data(),
+                                        resolution * uint32_t(sizeof(float)));
+  m_compositeDirty = false;
+}
+
+uint32_t TerrainCellProvider::compositeBindlessIndex() const {
+  return m_compositeTex ? m_compositeTex->bindlessIndex() : 0u;
+}
+
+void TerrainCellProvider::blitTileToComposite(const glm::vec3& origin, float tileSize,
+                                              const std::vector<float>& heights, uint32_t heightRes) {
+  if (m_compositeData.empty() || heights.empty()) return;
+  const int R = int(m_compositeRes);
+
+  // Composite texels overlapping the tile's world footprint.
+  const int cx0 = std::max(0, int(std::floor((origin.x - m_compositeMin.x) / m_compositeTexel)));
+  const int cz0 = std::max(0, int(std::floor((origin.z - m_compositeMin.y) / m_compositeTexel)));
+  const int cx1 = std::min(R - 1, int(std::ceil((origin.x + tileSize - m_compositeMin.x) / m_compositeTexel)));
+  const int cz1 = std::min(R - 1, int(std::ceil((origin.z + tileSize - m_compositeMin.y) / m_compositeTexel)));
+
+  const float hs = float(heightRes - 1);
+  for (int cz = cz0; cz <= cz1; ++cz) {
+    for (int cx = cx0; cx <= cx1; ++cx) {
+      const float wx = m_compositeMin.x + float(cx) * m_compositeTexel;
+      const float wz = m_compositeMin.y + float(cz) * m_compositeTexel;
+      const float lx = wx - origin.x;
+      const float lz = wz - origin.z;
+      if (lx < 0.0f || lz < 0.0f || lx > tileSize || lz > tileSize) continue;
+
+      // Bilinear sample of the tile's heights at the local position.
+      const float fx = lx / tileSize * hs;
+      const float fz = lz / tileSize * hs;
+      const int x0 = std::min(int(fx), int(heightRes) - 1);
+      const int z0 = std::min(int(fz), int(heightRes) - 1);
+      const int x1 = std::min(x0 + 1, int(heightRes) - 1);
+      const int z1 = std::min(z0 + 1, int(heightRes) - 1);
+      const float tx = fx - float(x0);
+      const float tz = fz - float(z0);
+      const float h00 = heights[size_t(z0) * heightRes + x0];
+      const float h10 = heights[size_t(z0) * heightRes + x1];
+      const float h01 = heights[size_t(z1) * heightRes + x0];
+      const float h11 = heights[size_t(z1) * heightRes + x1];
+      const float h = glm::mix(glm::mix(h00, h10, tx), glm::mix(h01, h11, tx), tz);
+      m_compositeData[size_t(cz) * R + cx] = h;
+    }
+  }
+}
+
+void TerrainCellProvider::updateComposite(rhi::Device& device, const glm::vec2& observerXZ) {
+  if (!m_compositeMode) return;
+
+  // Recentre when the observer drifts past a quarter of the window from its centre. Recentre snaps to
+  // the texel grid so the clipmap's world→uv mapping stays stable, then rebuilds the window from every
+  // resident tile's kept heights.
+  const glm::vec2 center = m_compositeMin + glm::vec2(m_compositeWorldSize * 0.5f);
+  if (glm::length(observerXZ - center) > m_compositeWorldSize * 0.25f) {
+    glm::vec2 newMin = observerXZ - glm::vec2(m_compositeWorldSize * 0.5f);
+    newMin.x = std::floor(newMin.x / m_compositeTexel) * m_compositeTexel;
+    newMin.y = std::floor(newMin.y / m_compositeTexel) * m_compositeTexel;
+    m_compositeMin = newMin;
+    std::fill(m_compositeData.begin(), m_compositeData.end(), 0.0f);
+    for (const auto& [key, tile] : m_live) {
+      if (!tile.cpuHeights.empty()) {
+        blitTileToComposite(tile.worldOrigin, tile.worldSize, tile.cpuHeights, tile.heightRes);
+      }
+    }
+    m_compositeDirty = true;
+  }
+
+  if (m_compositeDirty && m_compositeTex) {
+    device.uploadTexture(*m_compositeTex, m_compositeData.data(), m_compositeRes, m_compositeRes,
+                         m_compositeRes * uint32_t(sizeof(float)));
+    m_compositeDirty = false;
+  }
 }
 
 } // namespace tucano::terrain
