@@ -619,3 +619,6 @@ TUCANO_API void tucano_world_stream_reload_cell(TucanoRuntime* rt, int32_t x, in
 #ifdef __cplusplus
 }
 #endif
+
+TUCANO_API int tucano_asset_import(const char* path, const char* outputDir);
+

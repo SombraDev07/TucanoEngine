@@ -705,6 +705,10 @@ public static class TucanoApi
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern void tucano_world_stream_reload_cell(IntPtr rt, int x, int y, int z, uint level);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_asset_import([MarshalAs(UnmanagedType.LPStr)] string path,
+        [MarshalAs(UnmanagedType.LPStr)] string outputDir);
 }
 
 [StructLayout(LayoutKind.Sequential)]

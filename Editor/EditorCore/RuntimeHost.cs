@@ -743,6 +743,9 @@ public sealed class RuntimeHost : IDisposable
         if (_handle != IntPtr.Zero) TucanoApi.tucano_world_stream_reload_cell(_handle, x, y, z, level);
     }
 
+    public int AssetImport(string path, string outputDir = "Assets/Imported")
+        => _handle != IntPtr.Zero ? TucanoApi.tucano_asset_import(path, outputDir) : 0;
+
     public void Dispose()
     {
         if (_disposed) return;

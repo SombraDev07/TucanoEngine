@@ -3133,3 +3133,9 @@ TUCANO_API void tucano_world_stream_reload_cell(TucanoRuntime* rt, int32_t x, in
   if (!rt || !rt->streamer) return;
   rt->streamer->requestReload(tucano::world::CellId{x, y, z, level});
 }
+
+
+TUCANO_API int tucano_asset_import(const char* path, const char* outputDir) {
+  if (!path || !outputDir) return 0;
+  return tucano::importGLTFAsTuasset(path, outputDir);
+}

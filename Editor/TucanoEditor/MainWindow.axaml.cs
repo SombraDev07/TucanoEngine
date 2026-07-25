@@ -1428,6 +1428,10 @@ public partial class MainWindow : Window
     {
         if (_runtime is not { IsAlive: true }) return;
 
+        // Generate .tuasset files (Draco compressed, chunk-based)
+        int tuCount = _runtime.AssetImport(path);
+        if (tuCount > 0) Log($"{Path.GetFileName(path)} → {tuCount} .tuasset files");
+
         var eye = _runtime.GetCameraPosition();
         var fwd = _runtime.GetCameraForward();
         const float distance = 10f;
