@@ -52,6 +52,8 @@ add_library(TucanoRuntime STATIC
   AssetPipeline/AssetCooker.cpp
   AssetPipeline/ResourceFactory.cpp
   AssetPipeline/AssetPack.cpp
+  AssetPipeline/TucanoAsset.cpp
+  AssetPipeline/AssetRegistry.cpp
   Runtime/Screenshot.cpp
   Runtime/DebugUI.cpp
   Runtime/StbImpl.cpp

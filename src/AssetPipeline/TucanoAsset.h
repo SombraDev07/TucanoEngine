@@ -1,0 +1,159 @@
+#pragma once
+
+// .tuasset — Native Tucano Asset binary format
+//
+// Layout:
+//   [Header 64B] [Dependency Table] [Metadata JSON] [Data Blob]
+//
+// Design goals:
+//   - Single binary blob per asset — no sidecar files
+//   - Dependency graph encoded in-header for fast scanning
+//   - Editor metadata separate from runtime data
+//   - CRC32 integrity check
+//   - Deterministic GUID from source path (same path = same GUID)
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace tucano::asset {
+
+inline constexpr uint32_t kTuasMagic     = 0x53415554; // "TUAS"
+inline constexpr uint32_t kTuasVersion   = 1;
+inline constexpr uint32_t kTuasHeaderSize = 64;
+
+enum class AssetType : uint32_t {
+	Unknown    = 0,
+	Mesh       = 1,
+	Texture    = 2,
+	Material   = 3,
+	Scene      = 4,
+	Animation  = 5,
+	Skeleton   = 6,
+	Audio      = 7,
+	Shader     = 8,
+	Font       = 9,
+};
+
+enum class AssetFlags : uint32_t {
+	None       = 0,
+	Compressed = 1u << 0,  // data blob is zstd/lz4 compressed
+	Streamable = 1u << 1,  // supports partial loading
+	HasLods    = 1u << 2,  // mesh has LOD chain
+	Cooked     = 1u << 3,  // shipping-ready, metadata stripped
+};
+
+inline AssetFlags operator|(AssetFlags a, AssetFlags b) { return AssetFlags(uint32_t(a) | uint32_t(b)); }
+inline bool operator&(AssetFlags a, AssetFlags b) { return (uint32_t(a) & uint32_t(b)) != 0; }
+
+struct AssetGuid {
+	uint64_t hi = 0;
+	uint64_t lo = 0;
+
+	bool valid() const { return hi != 0 || lo != 0; }
+	bool operator==(const AssetGuid& o) const { return hi == o.hi && lo == o.lo; }
+	bool operator!=(const AssetGuid& o) const { return !(*this == o); }
+	bool operator<(const AssetGuid& o) const { return hi < o.hi || (hi == o.hi && lo < o.lo); }
+
+	static AssetGuid fromPath(const std::string& path);
+	std::string toString() const;
+};
+
+struct AssetDependency {
+	AssetGuid guid;
+	AssetType type = AssetType::Unknown;
+};
+
+// 64-byte header — always at offset 0
+struct TucanoAssetHeader {
+	uint32_t magic      = kTuasMagic;
+	uint32_t version    = kTuasVersion;
+	AssetGuid guid{};
+	AssetType type      = AssetType::Unknown;
+	uint32_t flags      = 0;
+	uint32_t crc32      = 0;               // CRC32 of [header+0..EOF], with this field zeroed
+	uint32_t metadataSize = 0;             // JSON blob size (editor metadata)
+	uint32_t dependencyCount = 0;
+	uint64_t dataSize   = 0;               // binary payload (mesh/texture/material data)
+	uint32_t sourcePathHash = 0;           // fnv1a of original source path
+	uint32_t _reserved  = 0;
+};
+static_assert(sizeof(TucanoAssetHeader) == 64, "Header must be exactly 64 bytes");
+
+// ── Type-specific data layouts ───────────────────────
+
+// Mesh data stored after metadata in .tuasset
+struct MeshAssetData {
+	uint32_t vertexCount = 0;
+	uint32_t indexCount = 0;
+	uint32_t submeshCount = 0;
+	uint32_t meshletCount = 0;
+	// Followed by: [vertices] [indices] [submeshes] [meshlets]
+};
+
+// Texture data
+struct TextureAssetData {
+	uint32_t width = 0;
+	uint32_t height = 0;
+	uint32_t mipCount = 0;
+	uint32_t format = 0;   // RHITypes::Format
+	// Followed by: [pixels] or [compressed data]
+};
+
+// Material data
+struct MaterialAssetData {
+	float baseColor[4]{1,1,1,1};
+	float emissive[4]{0,0,0,0};
+	float metallic = 0.0f;
+	float roughness = 0.5f;
+	float ao = 1.0f;
+	float reflectance = 0.5f;
+	float clearcoat = 0.0f;
+	float clearcoatRoughness = 0.1f;
+	float fuzz = 0.0f;
+	float detailScale = 0.0f;
+	float alphaCutoff = 0.5f;
+	uint32_t flags = 0;  // hasNormalMap, hasEmissive, etc.
+	// Followed by: GUIDs for texture references (albedo, normal, ORM, emissive, detail)
+};
+
+// ── Reader / Writer ──────────────────────────────────
+
+class TucanoAssetWriter {
+public:
+	TucanoAssetWriter(AssetType type, const AssetGuid& guid, const std::string& sourcePath);
+
+	void addDependency(const AssetGuid& guid, AssetType type);
+	void setMetadata(const std::string& json);
+	void setData(const void* data, uint64_t size);
+
+	bool write(const std::string& filePath);
+
+private:
+	TucanoAssetHeader m_header{};
+	std::vector<AssetDependency> m_deps;
+	std::string m_metadata;
+	std::vector<uint8_t> m_data;
+};
+
+class TucanoAssetReader {
+public:
+	static bool read(const std::string& filePath, TucanoAssetHeader& header,
+	                 std::vector<AssetDependency>& deps, std::string& metadata,
+	                 std::vector<uint8_t>& data);
+
+	static bool readHeader(const std::string& filePath, TucanoAssetHeader& header);
+};
+
+uint32_t crc32(const void* data, size_t size);
+
+} // namespace tucano::asset
+
+// Hash support
+namespace std {
+template<> struct hash<tucano::asset::AssetGuid> {
+	size_t operator()(const tucano::asset::AssetGuid& g) const {
+		return size_t(g.hi) ^ size_t(g.lo);
+	}
+};
+}
