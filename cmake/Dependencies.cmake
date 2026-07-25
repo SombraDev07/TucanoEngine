@@ -152,3 +152,12 @@ target_include_directories(imgui_node_editor INTERFACE ${imgui_node_editor_SOURC
 target_link_libraries(imgui_node_editor INTERFACE imgui_lib)
 # imgui_node_editor needs IMGUI_DEFINE_MATH_OPERATORS
 target_compile_definitions(imgui_node_editor INTERFACE IMGUI_DEFINE_MATH_OPERATORS)
+
+# ── Draco (Google mesh compression) ───────────────────
+# NOTE: needs separate build step (draco_features.h generated at ninja time)
+# Enable when CI/build system supports two-phase FetchContent
+# FetchContent for draco + openfbx deferred to FASE 2
+
+# ── ZSTD (fast real-time compression) ─────────────────
+# NOTE: needs working C compiler in path for the build step.
+# Enable when CI toolchain is fully configured.

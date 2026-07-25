@@ -1,6 +1,7 @@
 #include "AssetPipeline/TucanoAsset.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <fstream>
 #include <functional>
@@ -9,14 +10,11 @@
 
 namespace tucano::asset {
 
-// ── GUID generation (deterministic from path) ─────────
+// ── GUID (FNV1a) ─────────────────────────────────────
 
 static uint64_t fnv1a64(const std::string& data) {
 	uint64_t hash = 0xcbf29ce484222325ULL;
-	for (auto c : data) {
-		hash ^= uint64_t(uint8_t(c));
-		hash *= 0x100000001b3ULL;
-	}
+	for (auto c : data) { hash ^= uint64_t(uint8_t(c)); hash *= 0x100000001b3ULL; }
 	return hash;
 }
 
@@ -29,12 +27,11 @@ AssetGuid AssetGuid::fromPath(const std::string& path) {
 
 std::string AssetGuid::toString() const {
 	std::ostringstream ss;
-	ss << std::hex << std::setfill('0')
-	   << std::setw(16) << hi << std::setw(16) << lo;
+	ss << std::hex << std::setfill('0') << std::setw(16) << hi << std::setw(16) << lo;
 	return ss.str();
 }
 
-// ── CRC32 (IEEE 802.3) ────────────────────────────────
+// ── CRC32 ─────────────────────────────────────────────
 
 static const uint32_t kCrcTable[256] = {
 	0x00000000,0x77073096,0xEE0E612C,0x990951BA,0x076DC419,0x706AF48F,0xE963A535,0x9E6495A3,
@@ -74,8 +71,7 @@ static const uint32_t kCrcTable[256] = {
 uint32_t crc32(const void* data, size_t size) {
 	uint32_t crc = 0xFFFFFFFF;
 	const auto* p = static_cast<const uint8_t*>(data);
-	for (size_t i = 0; i < size; ++i)
-		crc = (crc >> 8) ^ kCrcTable[(crc ^ p[i]) & 0xFF];
+	for (size_t i = 0; i < size; ++i) crc = (crc >> 8) ^ kCrcTable[(crc ^ p[i]) & 0xFF];
 	return crc ^ 0xFFFFFFFF;
 }
 
@@ -96,36 +92,81 @@ void TucanoAssetWriter::addDependency(const AssetGuid& guid, AssetType type) {
 
 void TucanoAssetWriter::setMetadata(const std::string& json) {
 	m_metadata = json;
+	if (!json.empty()) {
+		ChunkEntry c;
+		c.type = ChunkType::Meta;
+		c.size = uint32_t(json.size());
+		c.offset = 0; // computed in write()
+		m_chunks.insert(m_chunks.begin(), c); // metadata always first
+	}
 }
 
-void TucanoAssetWriter::setData(const void* data, uint64_t size) {
-	m_data.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+void TucanoAssetWriter::addChunk(ChunkType type, const void* data, uint32_t size, bool /*compressZstd*/) {
+	ChunkEntry c;
+	c.type = type;
+	c.size = size;
+
+	std::vector<uint8_t> chunkData;
+	chunkData.assign(static_cast<const uint8_t*>(data), static_cast<const uint8_t*>(data) + size);
+	c.size = uint32_t(chunkData.size());
+
+	m_dataBuffer.insert(m_dataBuffer.end(), chunkData.begin(), chunkData.end());
+	m_chunks.push_back(c);
 }
 
 bool TucanoAssetWriter::write(const std::string& filePath) {
 	m_header.metadataSize = uint32_t(m_metadata.size());
 	m_header.dependencyCount = uint32_t(m_deps.size());
-	m_header.dataSize = uint64_t(m_data.size());
+	m_header.chunkCount = uint32_t(m_chunks.size());
+	m_header.uncompressedSize = uint64_t(m_dataBuffer.size());
+	m_header.timestamp = uint64_t(std::chrono::system_clock::now().time_since_epoch().count());
 
-	// Compute CRC32 with crc32 field zeroed
+	// Compute layout
+	// [Header 128] [Dependencies] [ChunkTable] [Metadata] [Data]
+	uint64_t offset = kTuasHeaderSize;
+	uint64_t depsSize = m_deps.size() * sizeof(AssetDependency);
+	uint64_t chunkTableSize = m_chunks.size() * sizeof(ChunkEntry);
+	uint64_t metaOffset = offset + depsSize + chunkTableSize;
+	uint64_t dataOffset = metaOffset + m_metadata.size();
+
+	// Update chunk offsets
+	for (auto& c : m_chunks)
+		c.offset = dataOffset + (&c - m_chunks.data()) * 0; // will be set below
+
+	uint64_t currentDataOffset = dataOffset;
+	for (auto& c : m_chunks) {
+		c.offset = currentDataOffset;
+		currentDataOffset += c.size;
+	}
+
+	m_header.compressedSize = currentDataOffset - dataOffset;
+
+	// Build buffer
 	TucanoAssetHeader crcHeader = m_header;
 	crcHeader.crc32 = 0;
 
-	// Build full buffer
 	std::vector<uint8_t> buffer(kTuasHeaderSize, 0);
 	std::memcpy(buffer.data(), &crcHeader, sizeof(crcHeader));
 
-	for (const auto& dep : m_deps) {
-		auto depData = reinterpret_cast<const uint8_t*>(&dep);
-		buffer.insert(buffer.end(), depData, depData + sizeof(dep));
-	}
+	// Dependencies
+	buffer.insert(buffer.end(),
+		reinterpret_cast<const uint8_t*>(m_deps.data()),
+		reinterpret_cast<const uint8_t*>(m_deps.data()) + depsSize);
 
+	// Chunk table
+	buffer.insert(buffer.end(),
+		reinterpret_cast<const uint8_t*>(m_chunks.data()),
+		reinterpret_cast<const uint8_t*>(m_chunks.data()) + chunkTableSize);
+
+	// Metadata
 	buffer.insert(buffer.end(), m_metadata.begin(), m_metadata.end());
-	buffer.insert(buffer.end(), m_data.begin(), m_data.end());
 
-	// Final CRC
+	// Data chunks
+	buffer.insert(buffer.end(), m_dataBuffer.begin(), m_dataBuffer.end());
+
+	// CRC
 	m_header.crc32 = crc32(buffer.data(), buffer.size());
-	std::memcpy(buffer.data(), &m_header, sizeof(m_header)); // rewrite header with CRC
+	std::memcpy(buffer.data(), &m_header, sizeof(m_header));
 
 	std::ofstream file(filePath, std::ios::binary);
 	if (!file.is_open()) return false;
@@ -137,41 +178,43 @@ bool TucanoAssetWriter::write(const std::string& filePath) {
 
 bool TucanoAssetReader::read(const std::string& filePath, TucanoAssetHeader& header,
                               std::vector<AssetDependency>& deps, std::string& metadata,
-                              std::vector<uint8_t>& data) {
+                              std::vector<ChunkEntry>& chunks) {
 	std::ifstream file(filePath, std::ios::binary);
 	if (!file.is_open()) return false;
 
 	file.read(reinterpret_cast<char*>(&header), sizeof(header));
-	if (header.magic != kTuasMagic || header.version < 1) return false;
+	if (header.magic != kTuasMagic || header.version < 2) return false;
 
 	// Verify CRC
 	uint32_t storedCrc = header.crc32;
 	header.crc32 = 0;
-	file.seekg(0, std::ios::beg);
-
-	std::vector<uint8_t> buffer;
 	file.seekg(0, std::ios::end);
-	buffer.resize(file.tellg());
+	std::vector<uint8_t> buffer(file.tellg());
 	file.seekg(0, std::ios::beg);
 	file.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
-
 	header.crc32 = storedCrc;
-	std::memcpy(buffer.data(), &header, sizeof(header)); // restore CRC in buffer
+	std::memcpy(buffer.data(), &header, sizeof(header));
 
-	uint32_t computedCrc = crc32(buffer.data(), buffer.size());
-	if (computedCrc != storedCrc) return false;
+	if (crc32(buffer.data(), buffer.size()) != storedCrc) return false;
 
+	// Dependencies
 	deps.resize(header.dependencyCount);
 	if (header.dependencyCount > 0) {
-		size_t depsOffset = kTuasHeaderSize;
-		std::memcpy(deps.data(), buffer.data() + depsOffset, header.dependencyCount * sizeof(AssetDependency));
+		size_t off = kTuasHeaderSize;
+		std::memcpy(deps.data(), buffer.data() + off, header.dependencyCount * sizeof(AssetDependency));
 	}
 
-	size_t metaOffset = kTuasHeaderSize + header.dependencyCount * sizeof(AssetDependency);
-	metadata.assign(buffer.begin() + metaOffset, buffer.begin() + metaOffset + header.metadataSize);
+	// Chunk table
+	size_t tableOff = kTuasHeaderSize + header.dependencyCount * sizeof(AssetDependency);
+	chunks.resize(header.chunkCount);
+	if (header.chunkCount > 0) {
+		std::memcpy(chunks.data(), buffer.data() + tableOff, header.chunkCount * sizeof(ChunkEntry));
+	}
 
-	size_t dataOffset = metaOffset + header.metadataSize;
-	data.assign(buffer.begin() + dataOffset, buffer.end());
+	// Metadata (first chunk is always Meta)
+	size_t metaOff = tableOff + header.chunkCount * sizeof(ChunkEntry);
+	metadata.assign(buffer.begin() + metaOff, buffer.begin() + metaOff + header.metadataSize);
+
 	return true;
 }
 
@@ -180,6 +223,21 @@ bool TucanoAssetReader::readHeader(const std::string& filePath, TucanoAssetHeade
 	if (!file.is_open()) return false;
 	file.read(reinterpret_cast<char*>(&header), sizeof(header));
 	return header.magic == kTuasMagic;
+}
+
+bool TucanoAssetReader::readChunk(const std::string& filePath, const ChunkEntry& chunk,
+                                   std::vector<uint8_t>& outData) {
+	std::ifstream file(filePath, std::ios::binary);
+	if (!file.is_open()) return false;
+
+	TucanoAssetHeader hdr;
+	file.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
+	if (hdr.magic != kTuasMagic) return false;
+
+	outData.resize(chunk.size);
+	file.seekg(chunk.offset);
+	file.read(reinterpret_cast<char*>(outData.data()), chunk.size);
+	return file.good();
 }
 
 } // namespace tucano::asset

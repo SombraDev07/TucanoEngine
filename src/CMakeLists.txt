@@ -124,6 +124,7 @@ target_link_libraries(TucanoRuntime
     meshoptimizer
     imgui_lib
     imgui_node_editor
+    imgui_node_editor
     tracy_stub
     Jolt
     d3d12
