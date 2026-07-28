@@ -13,7 +13,6 @@
     </Application.Resources>
     <Application.Styles>
         <FluentTheme />
-        <!-- Editor look on top of Fluent: dark neutral base, single amber accent. -->
         <StyleInclude Source="/Styles/EditorTheme.axaml" />
     </Application.Styles>
 </Application>

@@ -218,6 +218,9 @@ TUCANO_API bool tucano_gizmo_get_world_space(TucanoRuntime* rt);
 // Snap increment: metres for translate, degrees for rotate, factor for scale. <= 0 disables.
 TUCANO_API void tucano_gizmo_set_snap(TucanoRuntime* rt, float snap);
 TUCANO_API float tucano_gizmo_get_snap(TucanoRuntime* rt);
+// Gizmo display scale (0.5-3.0). Default 1.0.
+TUCANO_API void tucano_gizmo_set_scale(TucanoRuntime* rt, float scale);
+TUCANO_API float tucano_gizmo_get_scale(TucanoRuntime* rt);
 
 // ── Stats ────────────────────────────────────────────
 
@@ -616,9 +619,30 @@ TUCANO_API uint32_t tucano_world_stream_resident_cells(TucanoRuntime* rt, Tucano
 TUCANO_API void tucano_world_stream_reload_cell(TucanoRuntime* rt, int32_t x, int32_t y, int32_t z,
                                                 uint32_t level);
 
+TUCANO_API int tucano_asset_import(const char* path, const char* outputDir);
+TUCANO_API void tucano_asset_import_async(TucanoRuntime* rt, const char* path, const char* outputDir);
+TUCANO_API float tucano_asset_import_progress(TucanoRuntime* rt);
+TUCANO_API bool tucano_asset_import_is_done(TucanoRuntime* rt);
+TUCANO_API int tucano_asset_import_count(TucanoRuntime* rt);
+
+// ── Vegetation (Veg-1) ────────────────────────────────
+
+TUCANO_API void tucano_veg_scatter(TucanoRuntime* rt, int cellX, int cellZ,
+                                    uint32_t typeId, uint32_t count, uint32_t seed);
+TUCANO_API uint32_t tucano_veg_register_type(TucanoRuntime* rt, const char* name,
+                                              float minScale, float maxScale,
+                                              float windFlex, float windHeight,
+                                              float cullDist);
+TUCANO_API uint32_t tucano_veg_register_mesh_type(TucanoRuntime* rt, const char* name,
+                                                   const char* meshPath);
+TUCANO_API void tucano_veg_set_paint(TucanoRuntime* rt, bool enabled, int mode, int typeId,
+                                      float radius, float strength);
+TUCANO_API void tucano_veg_set_wind(TucanoRuntime* rt, float strength, float speed);
+TUCANO_API uint32_t tucano_veg_instance_count(TucanoRuntime* rt);
+TUCANO_API void tucano_veg_toggle_tool(void);
+TUCANO_API bool tucano_veg_tool_visible(void);
+
 #ifdef __cplusplus
 }
 #endif
-
-TUCANO_API int tucano_asset_import(const char* path, const char* outputDir);
 

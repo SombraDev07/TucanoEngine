@@ -272,6 +272,12 @@ public static class TucanoApi
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern float tucano_gizmo_get_snap(IntPtr rt);
 
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_gizmo_set_scale(IntPtr rt, float scale);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_gizmo_get_scale(IntPtr rt);
+
     // ── Input (virtual input, Phase I-0) ──
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
@@ -709,6 +715,21 @@ public static class TucanoApi
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern int tucano_asset_import([MarshalAs(UnmanagedType.LPStr)] string path,
         [MarshalAs(UnmanagedType.LPStr)] string outputDir);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_asset_import_async(IntPtr rt,
+        [MarshalAs(UnmanagedType.LPStr)] string path,
+        [MarshalAs(UnmanagedType.LPStr)] string outputDir);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_asset_import_progress(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_asset_import_is_done(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_asset_import_count(IntPtr rt);
 }
 
 [StructLayout(LayoutKind.Sequential)]

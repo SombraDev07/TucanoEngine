@@ -14,6 +14,7 @@
 #include <iostream>
 #include <limits>
 #include <unordered_map>
+#include <cstring>
 
 namespace tucano {
 namespace {
@@ -281,56 +282,93 @@ int importGLTFAsTuasset(const std::string& path, const std::string& outputDir) {
 	std::filesystem::create_directories(assetDir);
 	int count = 0;
 
-	for (size_t mi = 0; mi < data->meshes_count; ++mi) {
-		const auto& mesh = data->meshes[mi];
-		for (size_t pi = 0; pi < mesh.primitives_count; ++pi) {
-			const auto& prim = mesh.primitives[pi];
-			if (!prim.attributes_count || !prim.indices) continue;
+	try {
+		for (size_t mi = 0; mi < data->meshes_count; ++mi) {
+			const auto& mesh = data->meshes[mi];
+			for (size_t pi = 0; pi < mesh.primitives_count; ++pi) {
+				const auto& prim = mesh.primitives[pi];
+				if (!prim.attributes_count) continue;
 
-			std::string meshName = mesh.name ? mesh.name : (assetName + "_mesh" + std::to_string(mi));
-			AssetGuid guid = AssetGuid::fromPath(path + "/mesh/" + meshName);
+				std::string meshName = mesh.name ? mesh.name : (assetName + "_mesh" + std::to_string(mi));
+				meshName += "_prim" + std::to_string(pi);
+				AssetGuid guid = AssetGuid::fromPath(path + "/mesh/" + meshName);
 
-			std::vector<float> positions, normals, uvs;
-			std::vector<uint32_t> indices;
-			uint32_t vertexCount = 0, indexCount = 0;
+				std::vector<float> positions, normals, uvs;
+				std::vector<uint32_t> indices;
+				uint32_t vertexCount = 0, indexCount = 0;
 
-			for (size_t ai = 0; ai < prim.attributes_count; ++ai) {
-				const auto& attr = prim.attributes[ai];
-				if (attr.type == cgltf_attribute_type_position) {
-					vertexCount = uint32_t(attr.data->count);
-					positions.resize(vertexCount * 3);
-					for (uint32_t i = 0; i < vertexCount; ++i) { float v[3]; cgltf_accessor_read_float(attr.data, i, v, 3); positions[i*3+0]=v[0]; positions[i*3+1]=v[1]; positions[i*3+2]=v[2]; }
+				for (size_t ai = 0; ai < prim.attributes_count; ++ai) {
+					const auto& attr = prim.attributes[ai];
+					if (attr.type == cgltf_attribute_type_position) {
+						vertexCount = uint32_t(attr.data->count);
+						positions.resize(vertexCount * 3);
+						for (uint32_t i = 0; i < vertexCount; ++i) { float v[3]; cgltf_accessor_read_float(attr.data, i, v, 3); positions[i*3+0]=v[0]; positions[i*3+1]=v[1]; positions[i*3+2]=v[2]; }
+					}
+					if (attr.type == cgltf_attribute_type_normal) {
+						uint32_t nc = uint32_t(attr.data->count); normals.resize(nc * 3);
+						for (uint32_t i = 0; i < nc; ++i) { float v[3]; cgltf_accessor_read_float(attr.data, i, v, 3); normals[i*3+0]=v[0]; normals[i*3+1]=v[1]; normals[i*3+2]=v[2]; }
+					}
+					if (attr.type == cgltf_attribute_type_texcoord) {
+						uint32_t tc = uint32_t(attr.data->count); uvs.resize(tc * 2);
+						for (uint32_t i = 0; i < tc; ++i) { float v[2]; cgltf_accessor_read_float(attr.data, i, v, 2); uvs[i*2+0]=v[0]; uvs[i*2+1]=v[1]; }
+					}
 				}
-				if (attr.type == cgltf_attribute_type_normal) {
-					uint32_t nc = uint32_t(attr.data->count); normals.resize(nc * 3);
-					for (uint32_t i = 0; i < nc; ++i) { float v[3]; cgltf_accessor_read_float(attr.data, i, v, 3); normals[i*3+0]=v[0]; normals[i*3+1]=v[1]; normals[i*3+2]=v[2]; }
+
+				if (vertexCount == 0) continue;
+
+				uint32_t nrmCount = normals.empty() ? 0 : uint32_t(normals.size() / 3);
+				uint32_t uvCount  = uvs.empty()    ? 0 : uint32_t(uvs.size() / 2);
+				if (nrmCount > 0 && nrmCount != vertexCount) {
+					std::cerr << "[Tuasset] normal count mismatch for primitive " << pi << " of mesh " << meshName
+					          << " (normals=" << nrmCount << " vertices=" << vertexCount << ") — discarding normals\n";
+					normals.clear();
 				}
-				if (attr.type == cgltf_attribute_type_texcoord) {
-					uint32_t tc = uint32_t(attr.data->count); uvs.resize(tc * 2);
-					for (uint32_t i = 0; i < tc; ++i) { float v[2]; cgltf_accessor_read_float(attr.data, i, v, 2); uvs[i*2+0]=v[0]; uvs[i*2+1]=v[1]; }
+				if (uvCount > 0 && uvCount != vertexCount) {
+					std::cerr << "[Tuasset] texcoord count mismatch for primitive " << pi << " of mesh " << meshName
+					          << " (uvs=" << uvCount << " vertices=" << vertexCount << ") — discarding uvs\n";
+					uvs.clear();
 				}
+
+				if (prim.indices) {
+					indexCount = uint32_t(prim.indices->count);
+					indices.resize(indexCount);
+					for (uint32_t i = 0; i < indexCount; ++i) indices[i] = uint32_t(cgltf_accessor_read_index(prim.indices, i));
+				} else {
+					indices.resize(vertexCount);
+					for (uint32_t i = 0; i < vertexCount; ++i) indices[i] = i;
+					indexCount = vertexCount;
+				}
+
+				std::vector<uint8_t> dracoData;
+				bool dracoOk = DracoMesh::encode(
+					positions.data(), vertexCount,
+					normals.empty() ? nullptr : normals.data(),
+					uvs.empty() ? nullptr : uvs.data(),
+					indices.data(), indexCount, 10, dracoData);
+
+				TucanoAssetWriter writer(AssetType::Mesh, guid, path);
+				writer.setMetadata("{\"name\":\"" + meshName + "\",\"vertexCount\":" + std::to_string(vertexCount) + ",\"indexCount\":" + std::to_string(indexCount) + "}");
+
+				if (dracoOk) {
+					MeshAssetData md{}; md.vertexCount = vertexCount; md.indexCount = indexCount; md.submeshCount = 1;
+					std::vector<uint8_t> payload;
+					payload.insert(payload.end(), (const uint8_t*)&md, (const uint8_t*)&md + sizeof(md));
+					uint64_t dsz = uint64_t(dracoData.size());
+					payload.insert(payload.end(), (const uint8_t*)&dsz, (const uint8_t*)&dsz + sizeof(dsz));
+					payload.insert(payload.end(), dracoData.begin(), dracoData.end());
+					writer.addChunk(ChunkType::DRCV, payload.data(), uint32_t(payload.size()));
+				} else {
+					writer.addChunk(ChunkType::Vert, positions.data(), vertexCount * 3 * uint32_t(sizeof(float)));
+					writer.addChunk(ChunkType::Indx, indices.data(), indexCount * uint32_t(sizeof(uint32_t)));
+				}
+
+				if (writer.write(assetDir + "/" + meshName + ".tuasset")) ++count;
 			}
-
-			indexCount = uint32_t(prim.indices->count);
-			indices.resize(indexCount);
-			for (uint32_t i = 0; i < indexCount; ++i) indices[i] = uint32_t(cgltf_accessor_read_index(prim.indices, i));
-
-			std::vector<uint8_t> dracoData;
-			DracoMesh::encode(positions.data(), vertexCount, normals.empty() ? nullptr : normals.data(), uvs.empty() ? nullptr : uvs.data(), indices.data(), indexCount, 10, dracoData);
-
-			TucanoAssetWriter writer(AssetType::Mesh, guid, path);
-			writer.setMetadata("{\"name\":\"" + meshName + "\",\"vertexCount\":" + std::to_string(vertexCount) + "}");
-			if (!dracoData.empty()) {
-				MeshAssetData md{}; md.vertexCount = vertexCount; md.indexCount = indexCount; md.submeshCount = 1;
-				std::vector<uint8_t> payload;
-				payload.insert(payload.end(), (const uint8_t*)&md, (const uint8_t*)&md + sizeof(md));
-				uint64_t dsz = uint64_t(dracoData.size());
-				payload.insert(payload.end(), (const uint8_t*)&dsz, (const uint8_t*)&dsz + sizeof(dsz));
-				payload.insert(payload.end(), dracoData.begin(), dracoData.end());
-				writer.addChunk(ChunkType::DRCV, payload.data(), uint32_t(payload.size()));
-			}
-			if (writer.write(assetDir + "/" + meshName + ".tuasset")) ++count;
 		}
+	} catch (const std::exception& e) {
+		std::cerr << "[Tuasset] import exception: " << e.what() << "\n";
+	} catch (...) {
+		std::cerr << "[Tuasset] import unknown exception\n";
 	}
 
 	cgltf_free(data);

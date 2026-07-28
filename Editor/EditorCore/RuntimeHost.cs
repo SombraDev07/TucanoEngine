@@ -304,6 +304,12 @@ public sealed class RuntimeHost : IDisposable
         set { if (_handle != IntPtr.Zero) TucanoApi.tucano_gizmo_set_snap(_handle, value); }
     }
 
+    public float GizmoScale
+    {
+        get => _handle != IntPtr.Zero ? TucanoApi.tucano_gizmo_get_scale(_handle) : 1f;
+        set { if (_handle != IntPtr.Zero) TucanoApi.tucano_gizmo_set_scale(_handle, value); }
+    }
+
     public TucanoVec3 GetObjectColor(uint index)
     {
         if (_scene == IntPtr.Zero) return new TucanoVec3(1, 1, 1);
@@ -743,8 +749,20 @@ public sealed class RuntimeHost : IDisposable
         if (_handle != IntPtr.Zero) TucanoApi.tucano_world_stream_reload_cell(_handle, x, y, z, level);
     }
 
-    public int AssetImport(string path, string outputDir = "Assets/Imported")
-        => _handle != IntPtr.Zero ? TucanoApi.tucano_asset_import(path, outputDir) : 0;
+    public void AssetImportAsync(string path, string outputDir = "Assets/Imported")
+    {
+        if (_handle != IntPtr.Zero)
+            TucanoApi.tucano_asset_import_async(_handle, path, outputDir);
+    }
+
+    public float AssetImportProgress()
+        => _handle != IntPtr.Zero ? TucanoApi.tucano_asset_import_progress(_handle) : 0f;
+
+    public bool AssetImportIsDone()
+        => _handle != IntPtr.Zero && TucanoApi.tucano_asset_import_is_done(_handle);
+
+    public int AssetImportCount()
+        => _handle != IntPtr.Zero ? TucanoApi.tucano_asset_import_count(_handle) : 0;
 
     public void Dispose()
     {

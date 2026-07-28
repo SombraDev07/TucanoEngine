@@ -4,6 +4,7 @@
 #include "Renderer/Renderer.h"
 #include "Runtime/DebugUI.h"
 #include "Runtime/Screenshot.h"
+#include "Lua/LuaVM.h"
 
 #include <GLFW/glfw3.h>
 
@@ -131,6 +132,15 @@ int main(int argc, char** argv) {
     scene.camera.lookAt({1.0f, 2.0f, 0.0f});
     setupDefaultRain(renderer->rain());
 
+    LuaVM::instance().init();
+    LuaVM::instance().setDevice(device.get());
+    LuaVM::instance().setScene(&scene);
+    LuaVM::instance().setRenderer(renderer.get());
+    LuaVM::instance().setCamera(&scene.camera);
+    LuaVM::instance().setInput(&input);
+    LuaVM::instance().registerAllBindings();
+    LuaVM::instance().loadScript("Scripts/main.lua");
+    LuaVM::instance().callSetup();
 
     device->setDeviceLostCallback([&]() {
       std::cerr << "[SponzaViewer] Rebuilding swapchain / renderer / scene after device recovery...\n";
@@ -248,6 +258,8 @@ int main(int argc, char** argv) {
                         (renderer->rain().enabled ? "on" : "off") + " | Tools panel | 9 rain | F12");
       }
       input.endFrame();
+
+      LuaVM::instance().tick(1.0f / 60.0f);
 
       auto* cmd = device->beginFrame();
       auto& bb = swapChain->backBuffer();

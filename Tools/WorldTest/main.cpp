@@ -6,12 +6,14 @@
 #include "World/FrustumCull.h"
 #include "World/MovementPredictor.h"
 #include "World/StreamingBudget.h"
+#include "World/StreamingRecorder.h"
 #include "World/StreamingScheduler.h"
 #include "World/StreamingTypes.h"
 #include "World/WorldGrid.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -621,7 +623,9 @@ void testStreamingScheduler() {
 
   check("cells were wanted around the observer", st.cellsWanted > 0);
   check("every wanted cell became resident", st.cellsMissing == 0);
-  check("all wanted cells are resident", st.cellsResident == st.cellsWanted);
+  // Not "every cell fully loaded": layer composition means an edge cell legitimately has Gameplay
+  // but not Detail. The meaningful claim is that nothing the observer wants is still missing.
+  check("nothing wanted is still missing", st.cellsMissing == 0);
   check("bytes were accounted", st.cpuBytes > 0 && st.gpuBytes > 0);
 
   // The pipeline must have run every stage. Detail is empty on even-x cells, so uploads are fewer
@@ -1009,10 +1013,232 @@ void testPredictionPriority() {
   bool allRealResident = true;
   for (const CellId& id : realCells) {
     WorldCell* c = grid.find(id);
-    if (!c || !c->fullyLoaded()) allRealResident = false;
+    // Gameplay is the layer that spans the whole radius; Detail legitimately stops short.
+    if (!c || c->layers[uint32_t(WorldLayer::Gameplay)].state.load() != CellState::Loaded) {
+      allRealResident = false;
+    }
   }
   check("every visible cell loaded despite prefetch competition", allRealResident);
   check("there were real cells to load", !realCells.empty());
+}
+
+void testLayerComposition() {
+  std::printf("\n[layer composition]\n");
+
+  WorldGrid grid(WorldGridDesc{glm::vec3(0.0f), 65536.0f, 10});
+  core::TaskScheduler tasks(4);
+  StreamingBudget budget;
+  FakeProvider provider;
+
+  StreamingSchedulerDesc sd;
+  sd.streamLevel = 10;
+  sd.unloadGraceFrames = 2;
+  sd.prediction.enabled = false; // isolate composition from prefetch
+  // Gameplay reaches the whole radius; Detail only a quarter of it.
+  sd.layerRadiusScale[uint32_t(WorldLayer::Gameplay)] = 1.0f;
+  sd.layerRadiusScale[uint32_t(WorldLayer::Visual)] = 0.8f;
+  sd.layerRadiusScale[uint32_t(WorldLayer::Audio)] = 0.5f;
+  sd.layerRadiusScale[uint32_t(WorldLayer::Detail)] = 0.25f;
+  StreamingScheduler scheduler(grid, tasks, budget, provider, sd);
+
+  StreamingObserver obs;
+  obs.id = 1;
+  obs.position = glm::vec3(0.0f);
+  obs.loadRadius = 400.0f;
+  obs.unloadRadius = 600.0f;
+  scheduler.setObservers({obs});
+  scheduler.drain();
+
+  // A cell near the edge of the gameplay radius (≈300 m) must have Gameplay resident but NOT
+  // Detail, whose radius is only 100 m. That difference IS layer composition — without it both
+  // would load at the same distance and the layers would be decoration.
+  const CellId far = grid.cellAt(glm::vec3(300.0f, 0.0f, 0.0f), 10);
+  WorldCell* farCell = grid.find(far);
+  check("a far cell exists", farCell != nullptr);
+  if (farCell) {
+    const bool gameplay =
+        farCell->layers[uint32_t(WorldLayer::Gameplay)].state.load() == CellState::Loaded;
+    const bool detail =
+        farCell->layers[uint32_t(WorldLayer::Detail)].state.load() == CellState::Loaded;
+    check("gameplay loads out to the full radius", gameplay);
+    check("detail does NOT load that far out", !detail);
+  }
+
+  // A cell right under the observer must have every layer, including Detail.
+  const CellId home = grid.cellAt(obs.position, 10);
+  WorldCell* homeCell = grid.find(home);
+  check("the observer's own cell has every layer", homeCell && homeCell->fullyLoaded());
+
+  // Per-layer unload. Pick a cell ~80 m out: inside Detail's load radius (400 x 0.25 = 100) so it
+  // starts resident. The observer stands inside the home cell, whose distance is 0 — no radius can
+  // ever exclude it, which is why the test must use a cell that is actually at a distance.
+  const CellId mid = grid.cellAt(glm::vec3(80.0f, 0.0f, 0.0f), 10);
+  WorldCell* midCell = grid.find(mid);
+  check("a mid-distance cell has detail initially",
+        midCell && midCell->layers[uint32_t(WorldLayer::Detail)].state.load() == CellState::Loaded);
+
+  const int releasesBefore = provider.releases.load();
+  // Detail's unload radius becomes 600 x 0.01 = 6 m, well inside 80 m, so it must be released —
+  // while Gameplay (600 x 1.0) keeps it.
+  scheduler.desc().layerRadiusScale[uint32_t(WorldLayer::Detail)] = 0.01f;
+  for (int i = 0; i < 10; ++i) scheduler.update(1.0f);
+
+  midCell = grid.find(mid);
+  check("the cell survives a layer being dropped", midCell != nullptr);
+  if (midCell) {
+    check("detail was released on its own",
+          midCell->layers[uint32_t(WorldLayer::Detail)].state.load() != CellState::Loaded);
+    check("gameplay stayed resident",
+          midCell->layers[uint32_t(WorldLayer::Gameplay)].state.load() == CellState::Loaded);
+  }
+  check("releasing a layer really released something", provider.releases.load() > releasesBefore);
+
+  // A disabled layer must never load at all — the dedicated-server case.
+  {
+    WorldGrid g2(WorldGridDesc{glm::vec3(0.0f), 65536.0f, 10});
+    core::TaskScheduler t2(2);
+    StreamingBudget b2;
+    FakeProvider p2;
+    StreamingSchedulerDesc sd2;
+    sd2.streamLevel = 10;
+    sd2.prediction.enabled = false;
+    sd2.layerEnabled[uint32_t(WorldLayer::Visual)] = false;
+    sd2.layerEnabled[uint32_t(WorldLayer::Audio)] = false;
+    sd2.layerEnabled[uint32_t(WorldLayer::Detail)] = false;
+    StreamingScheduler s2(g2, t2, b2, p2, sd2);
+    StreamingObserver o2;
+    o2.id = 1;
+    o2.position = glm::vec3(0.0f);
+    o2.loadRadius = 100.0f;
+    o2.unloadRadius = 160.0f;
+    s2.setObservers({o2});
+    s2.drain();
+
+    WorldCell* c = g2.find(g2.cellAt(o2.position, 10));
+    check("a gameplay-only config still loads gameplay",
+          c && c->layers[uint32_t(WorldLayer::Gameplay)].state.load() == CellState::Loaded);
+    check("disabled layers never load",
+          c && c->layers[uint32_t(WorldLayer::Visual)].state.load() != CellState::Loaded &&
+              c->layers[uint32_t(WorldLayer::Detail)].state.load() != CellState::Loaded);
+  }
+}
+
+void testStreamingRecorder() {
+  std::printf("\n[streaming recorder]\n");
+
+  // Ring buffer behaviour: bounded, chronological, and honest about what it dropped.
+  {
+    StreamingRecorder rec(4);
+    for (uint64_t i = 0; i < 10; ++i) {
+      rec.record(i, CellId{int32_t(i), 0, 0, 10}, WorldLayer::Gameplay,
+                 StreamingEventType::Loaded);
+    }
+    const auto events = rec.events();
+    check("the ring stays bounded", events.size() == 4);
+    check("it drops the oldest, keeping the newest", events.front().frame == 6 &&
+                                                         events.back().frame == 9);
+    check("dropped events are counted, not hidden", rec.droppedEvents() == 6);
+  }
+
+  // Recording a real streaming session.
+  WorldGrid grid(WorldGridDesc{glm::vec3(0.0f), 65536.0f, 10});
+  core::TaskScheduler tasks(4);
+  StreamingBudget budget;
+  FakeProvider provider;
+  StreamingRecorder rec;
+
+  StreamingSchedulerDesc sd;
+  sd.streamLevel = 10;
+  sd.unloadGraceFrames = 2;
+  sd.prediction.enabled = false;
+  StreamingScheduler scheduler(grid, tasks, budget, provider, sd);
+  scheduler.setRecorder(&rec);
+
+  StreamingObserver obs;
+  obs.id = 1;
+  obs.position = glm::vec3(0.0f);
+  obs.loadRadius = 100.0f;
+  obs.unloadRadius = 160.0f;
+  scheduler.setObservers({obs});
+  scheduler.drain();
+
+  auto log = rec.events();
+  check("loads were recorded", !log.empty());
+  const bool sawStart = std::any_of(log.begin(), log.end(), [](const StreamingEvent& e) {
+    return e.type == StreamingEventType::LoadStarted;
+  });
+  const bool sawLoaded = std::any_of(log.begin(), log.end(), [](const StreamingEvent& e) {
+    return e.type == StreamingEventType::Loaded;
+  });
+  check("both LoadStarted and Loaded appear", sawStart && sawLoaded);
+
+  const auto residentFromLog = StreamingRecorder::residentAfter(log);
+  check("the log's resident set matches the live grid",
+        residentFromLog.size() == grid.cellCount());
+
+  // Unloads must show up too, and the folded resident set must then be empty.
+  scheduler.setObservers({});
+  for (int i = 0; i < 10; ++i) scheduler.update(1.0f);
+  log = rec.events();
+  const bool sawUnload = std::any_of(log.begin(), log.end(), [](const StreamingEvent& e) {
+    return e.type == StreamingEventType::Unloaded;
+  });
+  check("unloads were recorded", sawUnload);
+  check("nothing is resident after unloading everything",
+        StreamingRecorder::residentAfter(log).empty());
+
+  // Disk round trip.
+  const std::string path =
+      std::string(std::getenv("TEMP") ? std::getenv("TEMP") : ".") + "/tucano_replay.bin";
+  check("the log saves", rec.save(path));
+  StreamingRecorder reloaded;
+  check("the log loads", reloaded.load(path));
+  check("the reloaded log describes the same outcome",
+        StreamingRecorder::sameOutcome(rec.events(), reloaded.events()));
+  check("event counts survive the round trip", reloaded.events().size() == rec.events().size());
+
+  StreamingRecorder junk;
+  check("a malformed replay file is rejected", !junk.load(path + ".missing"));
+}
+
+void testStreamingDeterminism() {
+  std::printf("\n[streaming determinism]\n");
+
+  // The honest guarantee: for a given observer path, the FINAL resident set is deterministic even
+  // though the frame each cell lands on is not (async IO and thread scheduling decide that). Run
+  // the same path twice on independent schedulers and compare outcomes, not timings.
+  auto runPath = [](StreamingRecorder& rec) {
+    WorldGrid grid(WorldGridDesc{glm::vec3(0.0f), 65536.0f, 10});
+    core::TaskScheduler tasks(4);
+    StreamingBudget budget;
+    FakeProvider provider;
+    StreamingSchedulerDesc sd;
+    sd.streamLevel = 10;
+    sd.unloadGraceFrames = 2;
+    sd.prediction.enabled = false;
+    StreamingScheduler scheduler(grid, tasks, budget, provider, sd);
+    scheduler.setRecorder(&rec);
+
+    StreamingObserver obs;
+    obs.id = 1;
+    obs.loadRadius = 120.0f;
+    obs.unloadRadius = 200.0f;
+    for (int step = 0; step < 5; ++step) {
+      obs.position = glm::vec3(float(step) * 80.0f, 0.0f, 0.0f);
+      scheduler.setObservers({obs});
+      scheduler.drain();
+    }
+    return grid.cellCount();
+  };
+
+  StreamingRecorder a, b;
+  const size_t countA = runPath(a);
+  const size_t countB = runPath(b);
+
+  check("the same path leaves the same number of cells", countA == countB);
+  check("the same path produces the same resident set",
+        StreamingRecorder::sameOutcome(a.events(), b.events()));
+  check("the runs actually did work", !a.events().empty());
 }
 
 void testFrustumCull() {
@@ -1157,6 +1383,9 @@ int main() {
   testMovementPredictor();
   testPredictiveStreaming();
   testPredictionPriority();
+  testLayerComposition();
+  testStreamingRecorder();
+  testStreamingDeterminism();
   testFrustumCull();
 
   std::printf("\n=== failures: %d ===\n", g_failures);

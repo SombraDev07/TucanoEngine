@@ -572,9 +572,7 @@ void Renderer::createPipelines() {
     m_gbufferPSO = m_device.createGraphicsPipeline(d);
   }
   {
-    // WM-6: instanced g-buffer draw. Same RT layout and root signature as the direct g-buffer PSO,
-    // but the VS reads per-instance transforms from a structured buffer via SV_InstanceID, so a whole
-    // instance cloud is one drawIndexedIndirect.
+    // WM-6 / Veg-P1: instanced g-buffer. CullNone for two-sided foliage cards; alpha test in PS.
     rhi::GraphicsPipelineDesc d{};
     d.rootSignature = m_root;
     d.vs = load("InstanceGBuffer_VSMain.cso");
@@ -582,8 +580,30 @@ void Renderer::createPipelines() {
     d.rtvFormats = {rhi::Format::R8G8B8A8_UNORM_SRGB, rhi::Format::R8G8B8A8_UNORM, rhi::Format::R8G8B8A8_UNORM,
                     rhi::Format::R8G8B8A8_UNORM, rhi::Format::R32_FLOAT};
     d.dsvFormat = rhi::Format::D32_FLOAT;
-    d.cullMode = rhi::CullMode::Back;
+    d.cullMode = rhi::CullMode::None;
     m_instanceGbufferPSO = m_device.createGraphicsPipeline(d);
+  }
+  {
+    rhi::GraphicsPipelineDesc d{};
+    d.rootSignature = m_root;
+    d.vs = load("InstanceShadow_VSMain.cso");
+    d.ps = load("InstanceShadow_PSMain.cso");
+    d.rtvFormats = {rhi::Format::R32_FLOAT};
+    d.dsvFormat = rhi::Format::Unknown;
+    d.depthEnable = false;
+    d.cullMode = rhi::CullMode::None;
+    m_instanceShadowPSO = m_device.createGraphicsPipeline(d);
+  }
+  {
+    rhi::GraphicsPipelineDesc d{};
+    d.rootSignature = m_root;
+    d.vs = load("InstanceBillboard_VSMain.cso");
+    d.ps = load("InstanceBillboard_PSMain.cso");
+    d.rtvFormats = {rhi::Format::R8G8B8A8_UNORM_SRGB, rhi::Format::R8G8B8A8_UNORM, rhi::Format::R8G8B8A8_UNORM,
+                    rhi::Format::R8G8B8A8_UNORM, rhi::Format::R32_FLOAT};
+    d.dsvFormat = rhi::Format::D32_FLOAT;
+    d.cullMode = rhi::CullMode::None;
+    m_instanceBillboardPSO = m_device.createGraphicsPipeline(d);
   }
   {
     // WM-8: continuous-LOD clipmap terrain. No input layout — the grid is generated from SV_VertexID —
@@ -1588,6 +1608,44 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
               ++m_drawCalls;
             }
           }
+
+          // Veg-P1: instance clouds cast into the directional cascade (after mesh objects).
+          if (m_instanceShadowPSO && !scene.instanceClouds.empty()) {
+            cmd->setPipeline(*m_instanceShadowPSO);
+            cmd->setGraphicsRootSrvTable(3, 0);
+            cmd->setGraphicsRootSamplerTable(4, sampTable);
+            for (const auto& cloud : scene.instanceClouds) {
+              if (!cloud.castShadows || !cloud.instanceBuffer || !cloud.visibleBuffer ||
+                  !cloud.argsBuffer || !cloud.mesh) {
+                continue;
+              }
+              cmd->transition(*cloud.instanceBuffer, rhi::ResourceState::ShaderResource);
+              cmd->transition(*cloud.visibleBuffer, rhi::ResourceState::ShaderResource);
+              cmd->transition(*cloud.argsBuffer, rhi::ResourceState::IndirectArgument);
+              ObjectCBData shadowOcb{};
+              shadowOcb.baseColorFactor = cloud.baseColor;
+              shadowOcb.materialParams = {cloud.metallic, cloud.roughness, 1.0f, cloud.alphaCutoff};
+              shadowOcb.textureIndices = {cloud.albedoTexIndex, 0, 0, 0};
+              cmd->setGraphicsRootCBV(2, *m_objectCB, pushObjectCB(shadowOcb));
+              RootXform xform{frame.lightViewProj[cascade], glm::mat4(1.0f)};
+              cmd->setGraphicsRootConstants(0, &xform, 32);
+              D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {asDxBuf(*cloud.instanceBuffer).srvCpu,
+                                                    asDxBuf(*cloud.instanceBuffer).srvCpu,
+                                                    asDxBuf(*cloud.visibleBuffer).srvCpu};
+              cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(srvs, 3));
+              cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+              cmd->setVertexBuffer(cloud.mesh->vertexBuffer(), sizeof(Vertex));
+              cmd->setIndexBuffer(cloud.mesh->indexBuffer(), true);
+              cmd->drawIndexedIndirect(*cloud.argsBuffer, 0);
+              ++m_drawCalls;
+            }
+            // Restore mesh shadow PSO for subsequent cascades' object loops.
+            cmd->setPipeline(*m_shadowPSO);
+            {
+              D3D12_CPU_DESCRIPTOR_HANDLE skinSrv[] = {asDxBuf(*m_skinningBuffer).srvCpu};
+              cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(skinSrv, 1));
+            }
+          }
         }
         if (m_settings.enableToroidalShadows) {
           m_shadowAtlas.clearDirty(cascade);
@@ -2002,24 +2060,40 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->setViewport(vp);
       cmd->setScissor(sc);
       cmd->setRootSignature(*m_root);
-      cmd->setPipeline(*m_instanceGbufferPSO);
+      cmd->setDescriptorHeap();
+      cmd->setGraphicsRootSrvTable(3, 0);
+      cmd->setGraphicsRootSamplerTable(4, sampTable);
       cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
+
+      const glm::vec3 camRight = scene.camera.right();
+      const glm::vec3 camUp = scene.camera.up();
+      glm::mat4 camBasis(1.0f);
+      camBasis[0] = glm::vec4(camRight, 0.0f);
+      camBasis[1] = glm::vec4(camUp, 0.0f);
+
       for (const auto& cloud : scene.instanceClouds) {
         if (!cloud.instanceBuffer || !cloud.visibleBuffer || !cloud.argsBuffer || !cloud.mesh) {
           continue;
         }
-        // The cull left visibleBuffer as a UAV; the draw reads it as an SRV.
+        const bool useBillboard = cloud.billboard && m_instanceBillboardPSO;
+        cmd->setPipeline(useBillboard ? *m_instanceBillboardPSO : *m_instanceGbufferPSO);
+        cmd->transition(*cloud.instanceBuffer, rhi::ResourceState::ShaderResource);
         cmd->transition(*cloud.visibleBuffer, rhi::ResourceState::ShaderResource);
         cmd->transition(*cloud.argsBuffer, rhi::ResourceState::IndirectArgument);
         ObjectCBData ocb{};
         ocb.baseColorFactor = cloud.baseColor;
-        ocb.materialParams = {cloud.metallic, cloud.roughness, 1.0f, 0.0f};
+        ocb.materialParams = {cloud.metallic, cloud.roughness, 1.0f, cloud.alphaCutoff};
         ocb.emissiveFactor = glm::vec4(cloud.emissive, 0.04f);
+        ocb.textureIndices = {cloud.albedoTexIndex, 0, 0, 0};
+        if (useBillboard) {
+          const float invAtlas = 1.0f / 1024.0f;
+          const float cell = 1.0f / float(std::max(1u, cloud.billboardGrid));
+          ocb.materialExt = {float(cloud.billboardViews), float(cloud.billboardGrid), invAtlas, cell};
+        }
         const uint64_t off = pushObjectCB(ocb);
-        RootXform xform{frame.viewProj, glm::mat4(1.0f)};
+        RootXform xform{frame.viewProj, useBillboard ? camBasis : glm::mat4(1.0f)};
         cmd->setGraphicsRootConstants(0, &xform, 32);
         cmd->setGraphicsRootCBV(2, *m_objectCB, off);
-        // Table over t0.. space1: slot 0 is the (unused) skin palette, 1 = Instances, 2 = Visible.
         D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {asDxBuf(*cloud.instanceBuffer).srvCpu,
                                               asDxBuf(*cloud.instanceBuffer).srvCpu,
                                               asDxBuf(*cloud.visibleBuffer).srvCpu};

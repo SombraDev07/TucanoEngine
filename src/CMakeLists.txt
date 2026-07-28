@@ -108,6 +108,16 @@ add_library(TucanoRuntime STATIC
   Terrain/crude_json.cpp
   Terrain/imgui_canvas.cpp
   Terrain/imgui_node_editor_api.cpp
+  Lua/LuaVM.cpp
+  Lua/LuaBindings.cpp
+  Lua/LuaBind_Scene.cpp
+  Lua/LuaBind_Vegetation.cpp
+  Lua/LuaBind_Biome.cpp
+  Lua/LuaBind_Interaction.cpp
+  Vegetation/VegetationDispatch.cpp
+  Vegetation/VegetationMeshes.cpp
+  AI/LLMClient.cpp
+  AI/AIAgent.cpp
 )
 
 target_include_directories(TucanoRuntime
@@ -134,6 +144,8 @@ target_link_libraries(TucanoRuntime
     draco
     tracy_stub
     Jolt
+    lua
+    libcurl
     d3d12
     dxgi
     dxguid

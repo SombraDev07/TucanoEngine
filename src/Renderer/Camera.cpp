@@ -39,4 +39,24 @@ void Camera::update() {
   m_view = glm::lookAtLH(m_position, m_position + forward(), up());
 }
 
+void Camera::screenToWorldRay(float sx, float sy, float vpW, float vpH,
+                              glm::vec3& outOrigin, glm::vec3& outDir) const {
+  float ndcX = (2.0f * sx) / vpW - 1.0f;
+  float ndcY = 1.0f - (2.0f * sy) / vpH;
+
+  glm::vec4 nearPoint(ndcX, ndcY, 0.0f, 1.0f);
+  glm::vec4 farPoint(ndcX, ndcY, 1.0f, 1.0f);
+
+  glm::mat4 invVP = glm::inverse(viewProj());
+
+  glm::vec4 worldNear = invVP * nearPoint;
+  glm::vec4 worldFar = invVP * farPoint;
+
+  worldNear /= worldNear.w;
+  worldFar /= worldFar.w;
+
+  outOrigin = m_position;
+  outDir = glm::normalize(glm::vec3(worldFar - worldNear));
+}
+
 } // namespace tucano

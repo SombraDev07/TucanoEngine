@@ -142,6 +142,11 @@ public:
   const RendererSettings& settings() const { return m_settings; }
 
   float lastFrameMs() const { return m_lastFrameMs; }
+  std::shared_ptr<rhi::RootSignature> sharedComputeRootSig() const { return m_rootCS; }
+  /// Previous-frame Hi-Z mip used for occlusion (mip 2). Null if Hi-Z disabled / not built yet.
+  rhi::Texture* hizOcclusionMip() const {
+    return (m_settings.enableHiZOcclusion && m_hizMips[2]) ? m_hizMips[2].get() : nullptr;
+  }
   uint32_t drawCalls() const { return m_drawCalls; }
   uint32_t meshletsTotal() const { return m_meshletsTotal; }
   uint32_t meshletsDrawn() const { return m_meshletsDrawn; }
@@ -167,6 +172,8 @@ private:
   std::shared_ptr<rhi::Texture> m_depthColor;
   std::shared_ptr<rhi::PipelineState> m_gbufferPSO;
   std::shared_ptr<rhi::PipelineState> m_instanceGbufferPSO; // WM-6: instanced indirect g-buffer draw
+  std::shared_ptr<rhi::PipelineState> m_instanceShadowPSO;  // Veg-P1: instanced shadow casters
+  std::shared_ptr<rhi::PipelineState> m_instanceBillboardPSO; // Veg-P2: LOD2 impostors
   std::shared_ptr<rhi::PipelineState> m_clipmapTerrainPSO;  // WM-8: continuous-LOD clipmap terrain
   std::shared_ptr<rhi::PipelineState> m_clipmapFeedbackPSO; // WM-8: VT feedback pass (Phase 2b)
   std::shared_ptr<rhi::Texture> m_vtFeedbackRT;             // R32_UINT page requests, reduced res

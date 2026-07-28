@@ -192,3 +192,75 @@ FetchContent_MakeAvailable(zstd)
 if(TARGET libzstd_static)
   target_include_directories(libzstd_static INTERFACE ${zstd_SOURCE_DIR}/lib)
 endif()
+
+# ── Lua 5.4 (MIT, scripting runtime) ──────────────────
+
+FetchContent_Declare(lua
+  GIT_REPOSITORY https://github.com/lua/lua.git
+  GIT_TAG v5.4.7
+  GIT_SHALLOW TRUE)
+FetchContent_GetProperties(lua)
+if(NOT lua_POPULATED)
+  FetchContent_Populate(lua)
+endif()
+add_library(lua STATIC
+  ${lua_SOURCE_DIR}/lapi.c
+  ${lua_SOURCE_DIR}/lauxlib.c
+  ${lua_SOURCE_DIR}/lbaselib.c
+  ${lua_SOURCE_DIR}/lcode.c
+  ${lua_SOURCE_DIR}/lcorolib.c
+  ${lua_SOURCE_DIR}/lctype.c
+  ${lua_SOURCE_DIR}/ldblib.c
+  ${lua_SOURCE_DIR}/ldebug.c
+  ${lua_SOURCE_DIR}/ldo.c
+  ${lua_SOURCE_DIR}/ldump.c
+  ${lua_SOURCE_DIR}/lfunc.c
+  ${lua_SOURCE_DIR}/lgc.c
+  ${lua_SOURCE_DIR}/linit.c
+  ${lua_SOURCE_DIR}/liolib.c
+  ${lua_SOURCE_DIR}/llex.c
+  ${lua_SOURCE_DIR}/lmathlib.c
+  ${lua_SOURCE_DIR}/lmem.c
+  ${lua_SOURCE_DIR}/loadlib.c
+  ${lua_SOURCE_DIR}/lobject.c
+  ${lua_SOURCE_DIR}/lopcodes.c
+  ${lua_SOURCE_DIR}/loslib.c
+  ${lua_SOURCE_DIR}/lparser.c
+  ${lua_SOURCE_DIR}/lstate.c
+  ${lua_SOURCE_DIR}/lstring.c
+  ${lua_SOURCE_DIR}/lstrlib.c
+  ${lua_SOURCE_DIR}/ltable.c
+  ${lua_SOURCE_DIR}/ltablib.c
+  ${lua_SOURCE_DIR}/ltm.c
+  ${lua_SOURCE_DIR}/lundump.c
+  ${lua_SOURCE_DIR}/lutf8lib.c
+  ${lua_SOURCE_DIR}/lvm.c
+  ${lua_SOURCE_DIR}/lzio.c
+)
+target_include_directories(lua PUBLIC ${lua_SOURCE_DIR})
+target_compile_definitions(lua PRIVATE LUA_COMPAT_5_3)
+if(MSVC)
+  target_compile_definitions(lua PRIVATE _CRT_SECURE_NO_WARNINGS)
+endif()
+
+# ── libcurl (MIT, HTTP for AI agent) ──────────────────
+
+FetchContent_Declare(curl
+  GIT_REPOSITORY https://github.com/curl/curl.git
+  GIT_TAG curl-8_9_1
+  GIT_SHALLOW TRUE)
+set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
+set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
+set(HTTP_ONLY ON CACHE BOOL "" FORCE)
+set(CURL_ZLIB OFF CACHE BOOL "" FORCE)
+set(CURL_BROTLI OFF CACHE BOOL "" FORCE)
+set(CURL_ZSTD OFF CACHE BOOL "" FORCE)
+FetchContent_GetProperties(curl)
+if(NOT curl_POPULATED)
+  FetchContent_Populate(curl)
+  add_subdirectory(${curl_SOURCE_DIR} ${curl_BINARY_DIR})
+endif()

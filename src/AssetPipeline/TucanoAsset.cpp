@@ -128,10 +128,6 @@ bool TucanoAssetWriter::write(const std::string& filePath) {
 	uint64_t metaOffset = offset + depsSize + chunkTableSize;
 	uint64_t dataOffset = metaOffset + m_metadata.size();
 
-	// Update chunk offsets
-	for (auto& c : m_chunks)
-		c.offset = dataOffset + (&c - m_chunks.data()) * 0; // will be set below
-
 	uint64_t currentDataOffset = dataOffset;
 	for (auto& c : m_chunks) {
 		c.offset = currentDataOffset;

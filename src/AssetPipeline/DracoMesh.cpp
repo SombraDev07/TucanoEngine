@@ -29,6 +29,7 @@ bool DracoMesh::encode(
 	posAttr.Init(draco::GeometryAttribute::POSITION, nullptr, 3, draco::DT_FLOAT32, false,
 	             sizeof(float) * 3, 0);
 	int posAttId = mesh.AddAttribute(posAttr, false, vertexCount);
+	if (posAttId < 0) return false;
 	for (uint32_t i = 0; i < vertexCount; ++i)
 		mesh.attribute(posAttId)->SetAttributeValue(
 			draco::AttributeValueIndex(i), &positions[i * 3]);
@@ -40,6 +41,7 @@ bool DracoMesh::encode(
 		nrmAttr.Init(draco::GeometryAttribute::NORMAL, nullptr, 3, draco::DT_FLOAT32, false,
 		             sizeof(float) * 3, 0);
 		nrmAttId = mesh.AddAttribute(nrmAttr, false, vertexCount);
+		if (nrmAttId < 0) return false;
 		for (uint32_t i = 0; i < vertexCount; ++i)
 			mesh.attribute(nrmAttId)->SetAttributeValue(
 				draco::AttributeValueIndex(i), &normals[i * 3]);
@@ -52,6 +54,7 @@ bool DracoMesh::encode(
 		uvAttr.Init(draco::GeometryAttribute::TEX_COORD, nullptr, 2, draco::DT_FLOAT32, false,
 		            sizeof(float) * 2, 0);
 		uvAttId = mesh.AddAttribute(uvAttr, false, vertexCount);
+		if (uvAttId < 0) return false;
 		for (uint32_t i = 0; i < vertexCount; ++i)
 			mesh.attribute(uvAttId)->SetAttributeValue(
 				draco::AttributeValueIndex(i), &uvs[i * 2]);

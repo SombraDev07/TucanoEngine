@@ -125,6 +125,15 @@ JPH::BodyID PhysicsWorld::createStaticMesh(const std::vector<glm::vec3>& vertice
   return body->GetID();
 }
 
+void PhysicsWorld::removeBody(JPH::BodyID id) {
+  if (id.IsInvalid()) return;
+  // RemoveBody takes it out of the simulation; DestroyBody frees the slot. Doing only the first
+  // leaks the slot, which is the failure mode that would surface as "physics stops working after
+  // a few minutes of flying".
+  if (m_bodyInterface.IsAdded(id)) m_bodyInterface.RemoveBody(id);
+  m_bodyInterface.DestroyBody(id);
+}
+
 JPH::BodyID PhysicsWorld::createDynamicBox(glm::vec3 halfExtent, glm::vec3 pos, glm::quat rot, float mass) {
   JPH::BoxShapeSettings shapeSettings(toJolt(halfExtent));
   JPH::ShapeRefC shape = shapeSettings.Create().Get();

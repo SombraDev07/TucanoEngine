@@ -22,6 +22,9 @@ public:
   glm::vec3 right() const;
   glm::vec3 up() const { return {0, 1, 0}; }
 
+  void screenToWorldRay(float sx, float sy, float vpW, float vpH,
+                        glm::vec3& outOrigin, glm::vec3& outDir) const;
+
 private:
   void update();
   glm::vec3 m_position{0, 2, 5};

@@ -481,13 +481,23 @@ public partial class MainWindow : Window
     {
         // The viewport has its own W/E/R handling inside the runtime; only editor-level chords land
         // here. Anything typed into a text box must not be hijacked.
-        if (FocusManager?.GetFocusedElement() is TextBox or NumericUpDown) return;
-
         var ctrl = e.KeyModifiers.HasFlag(KeyModifiers.Control);
+        // Allow Ctrl+C/V through even when NumericUpDown has focus
+        if (FocusManager?.GetFocusedElement() is TextBox) return;
+        if (FocusManager?.GetFocusedElement() is NumericUpDown && !ctrl) return;
+
         switch (e.Key)
         {
             case Key.Delete when !ctrl:
                 OnDeleteSelected(sender, new RoutedEventArgs());
+                e.Handled = true;
+                break;
+            case Key.C when ctrl:
+                OnCopySelected(sender, new RoutedEventArgs());
+                e.Handled = true;
+                break;
+            case Key.V when ctrl:
+                OnPasteSelected(sender, new RoutedEventArgs());
                 e.Handled = true;
                 break;
             case Key.D when ctrl:
@@ -793,7 +803,10 @@ public partial class MainWindow : Window
                         : null,
                 };
                 if (item.Kind == AssetKind.Material)
-                    item.Thumbnail = MaterialPreviewUtil.GetOrCreateThumbnail(item.Material, 72);
+                {
+                    try { item.Thumbnail = MaterialPreviewUtil.GetOrCreateThumbnail(item.Material, 72); }
+                    catch { /* thumbnail generation must not crash the scanner */ }
+                }
                 else if (item.Kind == AssetKind.Texture)
                     item.Thumbnail = TryLoadAssetTextureThumb(f, 72);
                 _allAssets.Add(item);
@@ -842,7 +855,7 @@ public partial class MainWindow : Window
     {
         return Path.GetExtension(path).ToLowerInvariant() switch
         {
-            ".gltf" or ".glb" => AssetKind.Mesh,
+            ".gltf" or ".glb" or ".fbx" or ".tuasset" => AssetKind.Mesh,
             ".tmat" => AssetKind.Material,
             ".png" or ".jpg" or ".jpeg" or ".tga" or ".hdr" or ".dds" => AssetKind.Texture,
             ".tscene" => AssetKind.Scene,
@@ -943,6 +956,11 @@ public partial class MainWindow : Window
         switch (asset.Kind)
         {
             case AssetKind.Mesh:
+                if (asset.Path.EndsWith(".tuasset", StringComparison.OrdinalIgnoreCase))
+                {
+                    Log($".tuasset instantiation not yet implemented — use Import as Assets to generate them");
+                    return;
+                }
                 ImportMeshAt(asset.Path);
                 break;
             case AssetKind.Material:
@@ -1424,13 +1442,60 @@ public partial class MainWindow : Window
         ImportMeshAt(path);
     }
 
+    private async void OnImportAssets(object? sender, RoutedEventArgs e)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Import assets (.tuasset)",
+            AllowMultiple = true,
+            FileTypeFilter = new[] { new FilePickerFileType("3D meshes")
+            {
+                Patterns = new[] { "*.gltf", "*.glb", "*.fbx" },
+                MimeTypes = new[] { "model/gltf-binary", "model/gltf+json" }
+            }}
+        });
+        if (files.Count == 0 || _runtime is not { IsAlive: true }) return;
+
+        var outputDir = Path.Combine(ProjectRoot, "Assets", "Imported");
+        Directory.CreateDirectory(outputDir);
+
+        var paths = files.Select(f => f.TryGetLocalPath()).Where(p => p is not null).ToList();
+        var importIndex = 0;
+        string currentPath = "";
+        Action startNext = null!;
+        startNext = () =>
+        {
+            if (importIndex >= paths.Count)
+            {
+                RescanAssets();
+                Log($"Import complete — {paths.Count} file(s) processed");
+                return;
+            }
+            currentPath = paths[importIndex]!;
+            Log($"Importing: {Path.GetFileName(currentPath)}...");
+            _runtime.AssetImportAsync(currentPath, outputDir);
+            importIndex++;
+
+            var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            timer.Tick += (_, _) =>
+            {
+                if (!_runtime.AssetImportIsDone()) return;
+                var count = _runtime.AssetImportCount();
+                if (count > 0)
+                    Log($"  -> {count} .tuasset(s) written to {Path.Combine("Assets", "Imported")}");
+                else
+                    Log($"  -> Import failed for {Path.GetFileName(currentPath)}");
+                timer.Stop();
+                startNext();
+            };
+            timer.Start();
+        };
+        startNext();
+    }
+
     private void ImportMeshAt(string path)
     {
         if (_runtime is not { IsAlive: true }) return;
-
-        // Generate .tuasset files (Draco compressed, chunk-based)
-        int tuCount = _runtime.AssetImport(path);
-        if (tuCount > 0) Log($"{Path.GetFileName(path)} → {tuCount} .tuasset files");
 
         var eye = _runtime.GetCameraPosition();
         var fwd = _runtime.GetCameraForward();
@@ -1606,6 +1671,12 @@ public partial class MainWindow : Window
     {
         if (_syncingUi || _runtime is not { IsAlive: true }) return;
         _runtime.GizmoSnap = (float)(GizmoSnap.Value ?? 0m);
+    }
+
+    private void OnGizmoSizeChanged(object? sender, NumericUpDownValueChangedEventArgs e)
+    {
+        if (_syncingUi || _runtime is not { IsAlive: true }) return;
+        _runtime.GizmoScale = (float)(GizmoSize.Value ?? 1m);
     }
 
     /// The viewport's own W/E/R/X shortcuts change the mode behind the toolbar's back.
@@ -2010,6 +2081,45 @@ public partial class MainWindow : Window
             new TucanoVec3(0, 0, 0), new TucanoVec3(0, 0, 0), new TucanoVec3(1, 1, 1));
         LoadInspector(sel);
         Log($"Reset transform of #{sel}");
+    }
+
+    // ── Copy / Paste ──────────────────────────────────
+
+    private int _clipboardObjectIndex = -1;
+
+    private void OnCopySelected(object? sender, RoutedEventArgs e)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        var sel = SelectedObjectIndex;
+        if (sel < 0 || sel >= (int)_runtime.ObjectCount) return;
+        _clipboardObjectIndex = sel;
+        Log($"Copied #{sel}");
+    }
+
+    private void OnPasteSelected(object? sender, RoutedEventArgs e)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+        if (_clipboardObjectIndex < 0 || _clipboardObjectIndex >= (int)_runtime.ObjectCount) return;
+        var src = (uint)_clipboardObjectIndex;
+        var (px, py, pz) = _runtime.GetObjectPosition(src);
+        var index = _runtime.DuplicateObject(src, px + 2f, py, pz);
+        if (index == RuntimeHost.InvalidObject) return;
+        RefreshOutliner();
+        SelectObject((int)index);
+        Log($"Pasted #{_clipboardObjectIndex} → #{index}");
+    }
+
+    // ── Bottom dock auto-expand ────────────────────────
+
+    private void OnBottomDockEnter(object? sender, PointerEventArgs e)
+    {
+        if (BottomDock.Height < 100)
+            BottomDock.Height = 200;
+    }
+
+    private void OnBottomDockLeave(object? sender, PointerEventArgs e)
+    {
+        BottomDock.Height = 28;
     }
 
     // ── Light editing ─────────────────────────────────

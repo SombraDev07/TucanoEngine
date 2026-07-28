@@ -36,6 +36,20 @@
 #include "Terrain/TerrainComponent.h"
 #include "Terrain/HeightmapBrush.h"
 #include "Terrain/ErosionSimulation.h"
+#include "Vegetation/VegetationSystem.h"
+#include "Vegetation/VegetationRenderer.h"
+#include "Vegetation/VegetationDispatch.h"
+#include "Vegetation/VegetationTool.h"
+#include "Vegetation/WindSystem.h"
+#include "Vegetation/SeasonSystem.h"
+#include "Vegetation/GrowthSystem.h"
+#include "Vegetation/VegetationInteraction.h"
+#include "Vegetation/VegetationEditor.h"
+#include "Vegetation/LODManager.h"
+#include "Lua/LuaVM.h"
+
+#include <functional>
+#include <cmath>
 
 #include <GLFW/glfw3.h>
 
@@ -45,10 +59,13 @@
 #include <glm/gtx/matrix_decompose.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <thread>
+#include <mutex>
 #include <fstream>
 #include <iterator>
 #include <limits>
@@ -342,6 +359,7 @@ struct TucanoRuntime {
   bool gizmoEnabled = true;
   bool gizmoWorldSpace = true;
   float gizmoSnap = 0.0f;
+  float gizmoScale = 1.0f;
   bool gizmoBlocking = false;
 
   // Terrain sculpt mode (TM-5)
@@ -355,6 +373,14 @@ struct TucanoRuntime {
   std::unique_ptr<tucano::terrain::MaterialNodeEditor> materialNodeEditor;
   bool materialGraphOpen = false;
 
+  // Async asset import
+  std::atomic<float> importProgress{0.0f};
+  std::atomic<bool> importDone{true};
+  std::atomic<int> importCount{0};
+  mutable std::mutex importMutex;
+  std::string importStatus;
+  std::thread importThread;
+
   // Audio (Phase I-2)
   std::vector<tucano::AudioClip*> audioClips;
   std::vector<std::unique_ptr<tucano::AudioSource>> audioSources;
@@ -364,6 +390,10 @@ struct TucanoRuntime {
   std::unique_ptr<tucano::terrain::TerrainComponent> terrainComp;
   std::unique_ptr<tucano::terrain::BrushSystem> terrainBrushes;
   std::unique_ptr<tucano::terrain::ErosionSimulation> terrainErosion;
+
+  // Vegetation (Veg-1)
+  std::unique_ptr<tucano::veg::VegetationRenderer> vegRenderer;
+  bool vegEnabled = false;
 
   // World streaming session (WM-9 outliner). Declared streamer-last so it destroys first — it
   // references the grid/tasks/budget/provider that follow it in memory.
@@ -423,6 +453,61 @@ TUCANO_API TucanoRuntime* tucano_runtime_init(const TucanoInitDesc* desc) {
     buildCleanScene(*rt->device, rt->scene);
     rt->scene.camera.setPerspective(glm::radians(65.0f), rt->window->aspect(), 0.2f, 4000.0f);
 
+    {
+      using namespace tucano;
+      LuaVM::instance().init();
+      LuaVM::instance().setDevice(rt->device.get());
+      LuaVM::instance().setScene(&rt->scene);
+      LuaVM::instance().setRenderer(rt->renderer.get());
+      LuaVM::instance().setCamera(&rt->scene.camera);
+      LuaVM::instance().setInput(rt->input.get());
+      LuaVM::instance().setAudio(&Audio::instance());
+      LuaVM::instance().registerAllBindings();
+      LuaVM::instance().loadScript("Scripts/main.lua");
+      LuaVM::instance().callSetup();
+
+      rt->vegRenderer = std::make_unique<veg::VegetationRenderer>(*rt->device, 100000);
+      auto csRoot = rt->renderer->sharedComputeRootSig();
+      if (csRoot) {
+        rt->vegRenderer->createPipeline(csRoot);
+        rt->vegEnabled = true;
+
+        auto& vegSys = veg::VegetationSystem::instance();
+        veg::VegetationType grassType;
+        grassType.name = "Grass";
+        grassType.proceduralKind = 1;
+        grassType.minScale = 0.3f; grassType.maxScale = 0.8f;
+        grassType.windFlexibility = 1.5f; grassType.windHeight = 0.6f;
+        grassType.cullDistance = 120.0f;
+        vegSys.registerType(grassType);
+
+        veg::VegetationType bushType;
+        bushType.name = "Bush";
+        bushType.proceduralKind = 2;
+        bushType.minScale = 0.5f;
+        bushType.maxScale = 1.5f;
+        bushType.windFlexibility = 0.3f;
+        bushType.windHeight = 1.2f;
+        bushType.cullDistance = 200.0f;
+        bushType.lodDistance0 = 40.0f;
+        bushType.lodDistance1 = 90.0f;
+        bushType.lodDistance2 = 200.0f;
+        vegSys.registerType(bushType);
+
+        for (int cx = -2; cx <= 2; ++cx)
+          for (int cz = -2; cz <= 2; ++cz)
+            vegSys.scatter(cx, cz, 0, 200, uint32_t(42 + cx * 100 + cz));
+
+        for (int cx = -1; cx <= 1; ++cx)
+          for (int cz = -1; cz <= 1; ++cz)
+            vegSys.scatter(cx, cz, 1, 50, uint32_t(100 + cx * 50 + cz));
+
+        veg::VegetationConfig vegCfg;
+        vegCfg.globalWindStrength = 0.8f;
+        vegSys.configure(vegCfg);
+      }
+    }
+
     rt->device->setDeviceLostCallback([rt]() {
       const auto cam = rt->scene.camera;
       const auto settings = rt->renderer->settings();
@@ -456,7 +541,9 @@ TUCANO_API TucanoRuntime* tucano_runtime_init(const TucanoInitDesc* desc) {
 
 TUCANO_API void tucano_runtime_shutdown(TucanoRuntime* rt) {
   if (!rt) return;
+  tucano::LuaVM::instance().shutdown();
   rt->device->waitIdle();
+  if (rt->importThread.joinable()) rt->importThread.join();
   rt->debugUI->shutdown();
   delete rt;
 }
@@ -863,11 +950,28 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
     ~Guard() { rt->inRender = false; }
   } guard{rt};
   try {
+    using namespace tucano;
     rt->window->pollEvents();
     rt->input->beginFrame();
     rt->debugUI->beginFrame();
     if (rt->materialGraphOpen && rt->materialNodeEditor) {
       rt->materialNodeEditor->render();
+    }
+
+    veg::VegetationTool::instance().drawUI();
+
+    // Async import progress bar
+    if (!rt->importDone.load()) {
+      ImGui::SetNextWindowPos(ImVec2(10, ImGui::GetIO().DisplaySize.y - 60), ImGuiCond_Always);
+      ImGui::SetNextWindowSize(ImVec2(400, 50));
+      ImGui::Begin("Importing...", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoResize |
+                    ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove);
+      ImGui::ProgressBar(rt->importProgress.load(), ImVec2(380, 20));
+      {
+        std::lock_guard<std::mutex> lock(rt->importMutex);
+        ImGui::Text("%s", rt->importStatus.c_str());
+      }
+      ImGui::End();
     }
     if (rt->overlayVisible) {
       rt->debugUI->drawPerfHud(rt->renderer->lastFrameMs(),
@@ -877,6 +981,14 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
 
     tickClock(rt);
     updateAnimations(rt);
+
+    tucano::LuaVM::instance().tick(rt->deltaSeconds);
+
+    veg::SeasonSystem::instance().update(rt->deltaSeconds);
+    veg::GrowthSystem::instance().update(rt->deltaSeconds);
+    veg::DestructionSystem::instance().update(rt->deltaSeconds);
+    veg::LODManager::instance().advanceFrame();
+    veg::VegetationInteraction::instance().update(rt->deltaSeconds, 0);
 
     // Sample physical input once per frame, then resolve the virtual layer from it.
     rt->prevInputSnapshot = rt->inputSnapshot;
@@ -993,6 +1105,114 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
       }
     }
 
+    // Vegetation paint: place/erase plants (or density) under the cursor.
+    {
+      using namespace tucano;
+      auto& paint = veg::VegetationSystem::instance().paint();
+      if (paint.enabled && rt->input && !ImGui::GetIO().WantCaptureMouse) {
+        double mx, my;
+        glfwGetCursorPos(rt->window->handle(), &mx, &my);
+        float ndcX = float(mx) / float(rt->window->width()) * 2.0f - 1.0f;
+        float ndcY = 1.0f - float(my) / float(rt->window->height()) * 2.0f;
+
+        glm::mat4 invVP = glm::inverse(rt->scene.camera.viewProj());
+        glm::vec4 nearP = invVP * glm::vec4(ndcX, ndcY, 0.0f, 1.0f);
+        glm::vec4 farP = invVP * glm::vec4(ndcX, ndcY, 1.0f, 1.0f);
+        nearP /= nearP.w;
+        farP /= farP.w;
+        glm::vec3 origin(nearP);
+        glm::vec3 dir = glm::normalize(glm::vec3(farP) - origin);
+        float maxDist = glm::length(glm::vec3(farP) - origin);
+
+        bool hit = false;
+        float hitX = 0, hitY = 0, hitZ = 0;
+        if (rt->terrainHm) {
+          float step = 1.0f;
+          for (float t = 0.0f; t < maxDist; t += step) {
+            glm::vec3 p = origin + dir * t;
+            float h = rt->terrainHm->sampleHeight(p.x, p.z);
+            if (p.y < h) {
+              float lo = t - step, hi = t;
+              for (int i = 0; i < 8; ++i) {
+                float mid = (lo + hi) * 0.5f;
+                glm::vec3 mp = origin + dir * mid;
+                if (mp.y < rt->terrainHm->sampleHeight(mp.x, mp.z)) hi = mid;
+                else lo = mid;
+              }
+              glm::vec3 hitP = origin + dir * (lo + hi) * 0.5f;
+              hitX = hitP.x;
+              hitZ = hitP.z;
+              hitY = rt->terrainHm->sampleHeight(hitX, hitZ);
+              hit = true;
+              break;
+            }
+          }
+        } else if (std::abs(dir.y) > 1e-5f) {
+          float tPlane = -origin.y / dir.y;
+          if (tPlane > 0.0f && tPlane < maxDist) {
+            glm::vec3 hitP = origin + dir * tPlane;
+            hitX = hitP.x;
+            hitY = 0.0f;
+            hitZ = hitP.z;
+            hit = true;
+          }
+        }
+
+        if (hit) {
+          auto& sys = veg::VegetationSystem::instance();
+          const bool lmb = rt->input->mouseDown(GLFW_MOUSE_BUTTON_LEFT);
+          const bool click = rt->input->mousePressed(GLFW_MOUSE_BUTTON_LEFT);
+          std::function<float(float, float)> heightFn;
+          if (rt->terrainHm) {
+            heightFn = [rt](float x, float z) { return rt->terrainHm->sampleHeight(x, z); };
+          }
+
+          using Mode = veg::VegetationPaintState::Mode;
+          if (paint.mode == Mode::PlaceSingle && click && sys.typeCount() > 0) {
+            sys.placeAt({hitX, hitY, hitZ}, uint32_t(paint.typeId));
+          } else if (lmb && sys.typeCount() > 0) {
+            const float stroke = paint.brushStrength * std::min(rt->deltaSeconds * 6.0f, 1.0f);
+            if (paint.mode == Mode::PlaceBrush) {
+              sys.paintBrush({hitX, hitY, hitZ}, paint.brushRadius, uint32_t(paint.typeId), stroke,
+                             paint.plantsPerSquareMeter, heightFn);
+            } else if (paint.mode == Mode::EraseBrush) {
+              sys.eraseBrush({hitX, hitY, hitZ}, paint.brushRadius);
+            } else if (paint.mode == Mode::DensityPaint && sys.densityMap()) {
+              sys.densityMap()->paintBrush(hitX, hitZ, paint.brushRadius, stroke);
+            } else if (paint.mode == Mode::DensityErase && sys.densityMap()) {
+              sys.densityMap()->eraseBrush(hitX, hitZ, paint.brushRadius, stroke);
+            }
+          }
+
+          ImDrawList* dl = ImGui::GetForegroundDrawList();
+          glm::vec4 clipPt = rt->scene.camera.viewProj() * glm::vec4(hitX, hitY + 0.15f, hitZ, 1.0f);
+          if (glm::abs(clipPt.w) > 1e-6f) {
+            float csx = (clipPt.x / clipPt.w * 0.5f + 0.5f) * float(rt->window->width());
+            float csy = (1.0f - (clipPt.y / clipPt.w * 0.5f + 0.5f)) * float(rt->window->height());
+            dl->AddCircleFilled(ImVec2(csx, csy), 4.0f, IM_COL32(120, 220, 120, 255));
+            const int segs = 32;
+            ImVec2 pts[32];
+            int valid = 0;
+            for (int i = 0; i < segs; ++i) {
+              float a = float(i) / float(segs) * 6.2831853f;
+              float wx = hitX + std::cos(a) * paint.brushRadius;
+              float wz = hitZ + std::sin(a) * paint.brushRadius;
+              float h = hitY;
+              if (rt->terrainHm) h = rt->terrainHm->sampleHeight(wx, wz);
+              glm::vec4 cp = rt->scene.camera.viewProj() * glm::vec4(wx, h + 0.15f, wz, 1.0f);
+              if (glm::abs(cp.w) > 1e-6f) {
+                pts[valid++] =
+                    ImVec2((cp.x / cp.w * 0.5f + 0.5f) * float(rt->window->width()),
+                           (1.0f - (cp.y / cp.w * 0.5f + 0.5f)) * float(rt->window->height()));
+              }
+            }
+            if (valid >= 3)
+              dl->AddPolyline(pts, valid, IM_COL32(140, 255, 140, 200), ImDrawFlags_Closed, 2.0f);
+          }
+        }
+      }
+    }
+
     if (rt->cameraNavigation) {
       updateEditorCamera(rt);
     }
@@ -1010,6 +1230,31 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
 
     auto* cmd = rt->device->beginFrame();
     auto& bb = rt->swapChain->backBuffer();
+
+    if (rt->vegEnabled && rt->vegRenderer) {
+      auto& vegSys = veg::VegetationSystem::instance();
+      auto& paint = vegSys.paint();
+      if (paint.meshDirty) {
+        if (auto* t = vegSys.type(uint32_t(paint.typeId))) {
+          if (!t->meshPath.empty())
+            rt->vegRenderer->loadMeshForType(uint32_t(paint.typeId), t->meshPath);
+        }
+        paint.meshDirty = false;
+      }
+
+      veg::VegetationInteraction::instance().clearInteractionPoints();
+      const glm::vec3 camPos = rt->scene.camera.position();
+      veg::VegetationInteraction::instance().addInteractionPoint(camPos, 3.0f, 1.0f);
+
+      veg::WindSystem::instance().update(rt->deltaSeconds);
+      rt->vegRenderer->uploadFromSystem(vegSys, camPos, 200.0f);
+      veg::VegDispatch::recordDispatch(
+          *rt->device, *cmd, *rt->vegRenderer, rt->scene.camera.viewProj(), camPos, 200.0f,
+          rt->renderer->hizOcclusionMip(), rt->window->width(), rt->window->height());
+      rt->scene.instanceClouds.clear();
+      rt->vegRenderer->submitClouds(rt->scene.instanceClouds);
+    }
+
     rt->renderer->render(cmd, bb, rt->scene);
     rt->debugUI->endFrame(*cmd, bb);
     cmd->transition(bb, tucano::rhi::ResourceState::Present);
@@ -1019,6 +1264,86 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
     rt->alive = false;
     return false;
   }
+}
+
+// ── Vegetation C API ──────────────────────────────────
+
+TUCANO_API void tucano_veg_scatter(TucanoRuntime* rt, int cellX, int cellZ,
+                                    uint32_t typeId, uint32_t count, uint32_t seed) {
+  if (!rt) return;
+  using namespace tucano;
+  veg::VegetationSystem::instance().scatter(cellX, cellZ, typeId, count, seed);
+}
+
+TUCANO_API uint32_t tucano_veg_register_type(TucanoRuntime* rt, const char* name,
+                                              float minScale, float maxScale,
+                                              float windFlex, float windHeight,
+                                              float cullDist) {
+  if (!rt) return UINT32_MAX;
+  using namespace tucano;
+  veg::VegetationType t;
+  t.name = name ? name : "Veg";
+  t.minScale = minScale;
+  t.maxScale = maxScale;
+  t.windFlexibility = windFlex;
+  t.windHeight = windHeight;
+  t.cullDistance = cullDist;
+  return veg::VegetationSystem::instance().registerType(t);
+}
+
+TUCANO_API uint32_t tucano_veg_register_mesh_type(TucanoRuntime* rt, const char* name,
+                                                   const char* meshPath) {
+  if (!rt || !name) return UINT32_MAX;
+  using namespace tucano;
+  veg::VegetationType t;
+  t.name = name;
+  t.meshPath = meshPath ? meshPath : "";
+  t.proceduralKind = 2;
+  uint32_t id = veg::VegetationSystem::instance().registerType(t);
+  if (meshPath && meshPath[0] && rt->vegRenderer) {
+    rt->vegRenderer->loadMeshForType(id, meshPath);
+  } else {
+    veg::VegetationSystem::instance().paint().meshDirty = true;
+    veg::VegetationSystem::instance().paint().typeId = int(id);
+  }
+  return id;
+}
+
+TUCANO_API void tucano_veg_set_paint(TucanoRuntime* rt, bool enabled, int mode, int typeId,
+                                      float radius, float strength) {
+  if (!rt) return;
+  using namespace tucano;
+  auto& p = veg::VegetationSystem::instance().paint();
+  p.enabled = enabled;
+  p.mode = veg::VegetationPaintState::Mode(mode);
+  p.typeId = typeId;
+  p.brushRadius = radius;
+  p.brushStrength = strength;
+}
+
+TUCANO_API void tucano_veg_set_wind(TucanoRuntime* rt, float strength, float speed) {
+  if (!rt) return;
+  using namespace tucano;
+  veg::WindParams p;
+  p.strength = strength;
+  p.speed = speed;
+  veg::WindSystem::instance().configure(p);
+}
+
+TUCANO_API uint32_t tucano_veg_instance_count(TucanoRuntime* rt) {
+  if (!rt) return 0;
+  using namespace tucano;
+  return veg::VegetationSystem::instance().instanceCount();
+}
+
+TUCANO_API void tucano_veg_toggle_tool(void) {
+  using namespace tucano;
+  veg::VegetationTool::instance().toggle();
+}
+
+TUCANO_API bool tucano_veg_tool_visible(void) {
+  using namespace tucano;
+  return veg::VegetationTool::instance().isOpen();
 }
 
 TUCANO_API bool tucano_runtime_screenshot(TucanoRuntime* rt, const char* pngPath) {
@@ -2567,6 +2892,14 @@ TUCANO_API float tucano_gizmo_get_snap(TucanoRuntime* rt) {
   return rt ? rt->gizmoSnap : 0.0f;
 }
 
+TUCANO_API void tucano_gizmo_set_scale(TucanoRuntime* rt, float scale) {
+  if (rt) rt->gizmoScale = scale > 0.0f ? scale : 1.0f;
+}
+
+TUCANO_API float tucano_gizmo_get_scale(TucanoRuntime* rt) {
+  return rt ? rt->gizmoScale : 1.0f;
+}
+
 // ── Stats ────────────────────────────────────────────
 
 TUCANO_API float tucano_runtime_last_frame_ms(TucanoRuntime* rt) {
@@ -3138,4 +3471,45 @@ TUCANO_API void tucano_world_stream_reload_cell(TucanoRuntime* rt, int32_t x, in
 TUCANO_API int tucano_asset_import(const char* path, const char* outputDir) {
   if (!path || !outputDir) return 0;
   return tucano::importGLTFAsTuasset(path, outputDir);
+}
+
+TUCANO_API void tucano_asset_import_async(TucanoRuntime* rt, const char* path, const char* outputDir) {
+  if (!rt || !path || !outputDir) return;
+  std::string p(path), o(outputDir);
+  rt->importProgress.store(0.0f);
+  rt->importDone.store(false);
+  rt->importCount.store(0);
+  {
+    std::lock_guard<std::mutex> lock(rt->importMutex);
+    rt->importStatus = "Parsing...";
+  }
+
+  if (rt->importThread.joinable()) rt->importThread.join();
+
+  rt->importThread = std::thread([rt, p, o]() {
+    {
+      std::lock_guard<std::mutex> lock(rt->importMutex);
+      rt->importStatus = "Converting...";
+    }
+    int count = tucano::importGLTFAsTuasset(p, o);
+    rt->importProgress.store(1.0f);
+    rt->importCount.store(count);
+    {
+      std::lock_guard<std::mutex> lock(rt->importMutex);
+      rt->importStatus = count > 0 ? ("Done: " + std::to_string(count) + " assets") : "Failed";
+    }
+    rt->importDone.store(true);
+  });
+}
+
+TUCANO_API float tucano_asset_import_progress(TucanoRuntime* rt) {
+  return rt ? rt->importProgress.load() : 0.0f;
+}
+
+TUCANO_API bool tucano_asset_import_is_done(TucanoRuntime* rt) {
+  return rt ? rt->importDone.load() : true;
+}
+
+TUCANO_API int tucano_asset_import_count(TucanoRuntime* rt) {
+  return rt ? rt->importCount.load() : 0;
 }

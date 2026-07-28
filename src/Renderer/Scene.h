@@ -45,14 +45,21 @@ struct RenderObject {
 /// The renderer only reads these as opaque RHI handles, so the World module owns the culler and the
 /// renderer stays free of a dependency on it.
 struct InstanceCloudRender {
-  rhi::Buffer* instanceBuffer = nullptr; ///< StructuredBuffer<InstanceGpu>, per-instance transforms
-  rhi::Buffer* visibleBuffer = nullptr;  ///< RWStructuredBuffer<uint>, compacted visible indices
-  rhi::Buffer* argsBuffer = nullptr;     ///< DrawIndexedInstanced args, element 0 (indirect)
-  Mesh* mesh = nullptr;                  ///< the shared single-submesh mesh every instance draws
+  rhi::Buffer* instanceBuffer = nullptr;
+  rhi::Buffer* visibleBuffer = nullptr;
+  rhi::Buffer* argsBuffer = nullptr;
+  Mesh* mesh = nullptr;
   glm::vec4 baseColor{0.5f, 0.5f, 0.5f, 1.0f};
   glm::vec3 emissive{0.0f};
   float metallic = 0.0f;
   float roughness = 0.8f;
+  float alphaCutoff = 0.0f;
+  uint32_t albedoTexIndex = 0;
+  bool castShadows = true;
+  bool twoSided = false;
+  bool billboard = false; ///< LOD2 camera-facing impostor path
+  uint32_t billboardViews = 8;
+  uint32_t billboardGrid = 16;
 };
 
 enum class LightType : uint32_t { Directional = 0, Point = 1, Spot = 2 };

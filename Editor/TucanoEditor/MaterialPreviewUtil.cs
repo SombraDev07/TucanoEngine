@@ -22,25 +22,11 @@ public static class MaterialPreviewUtil
             if (Cache.TryGetValue(mat.Path, out var hit) && hit.stamp == stamp)
                 return hit.bmp;
 
-            string? albedo = null, normal = null;
-            try
-            {
-                var graph = MaterialGraph.LoadOrCreate(mat);
-                var output = graph.FindNode("output")
-                             ?? graph.Nodes.Find(n => n.Type == "MaterialOutput");
-                if (output is not null)
-                {
-                    albedo = graph.GetConnectedTexturePath(output, "albedo");
-                    normal = graph.GetConnectedTexturePath(output, "normal");
-                }
-            }
-            catch { /* flat material is fine */ }
-
             var evaluated = mat;
             try { evaluated = MaterialGraph.LoadOrCreate(mat).ToMaterialAsset(); }
             catch { /* keep flat */ }
 
-            var bmp = RenderSphere(evaluated, albedo, normal, size);
+            var bmp = RenderSphere(evaluated, null, null, size);
             Cache[mat.Path] = (stamp, bmp);
             return bmp;
         }

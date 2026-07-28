@@ -42,6 +42,11 @@ public:
   JPH::BodyID createStaticSphere(float radius, glm::vec3 pos);
   JPH::BodyID createStaticMesh(const std::vector<glm::vec3>& vertices, const std::vector<uint32_t>& indices, glm::vec3 pos);
 
+  /// Removes a body and frees it. Required by streaming: cells load and unload continuously, and
+  /// without this the body count climbs until it hits maxBodies and creation starts failing
+  /// silently. Nothing else in the engine needed it, because play mode destroys the whole world.
+  void removeBody(JPH::BodyID id);
+
   JPH::BodyID createDynamicBox(glm::vec3 halfExtent, glm::vec3 pos, glm::quat rot = {1,0,0,0}, float mass = 1.0f);
   JPH::BodyID createDynamicSphere(float radius, glm::vec3 pos, float mass = 1.0f);
 
