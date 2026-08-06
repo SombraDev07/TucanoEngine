@@ -141,6 +141,11 @@ tucano_compile_shader(TerrainClipmap.hlsl CSMain cs_6_0)
 tucano_compile_shader(TerrainMaterial.hlsl CSFillAtlas cs_6_0)
 tucano_compile_shader(HeightQuery.hlsl CSMain cs_6_0)
 
+# ── FASE 2: Vertex Compression + OIT ──
+tucano_compile_shader(OITCollect.hlsl OITCollectVS vs_6_0)
+tucano_compile_shader(OITCollect.hlsl OITCollectPS ps_6_0)
+tucano_compile_shader(OITResolve.hlsl OITResolveCS cs_6_0)
+
 add_custom_target(TucanoShaders ALL DEPENDS ${TUCANO_COMPILED_SHADERS})
 
 # Deploy selected test exes into repo TestPlay/ (clean sky lab + editor only).
