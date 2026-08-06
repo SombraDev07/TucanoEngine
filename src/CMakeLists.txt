@@ -66,6 +66,7 @@ add_library(TucanoRuntime STATIC
   Runtime/StbImpl.cpp
   Physics/PhysicsWorld.cpp
   Core/JobSystem.cpp
+  Core/Memory.cpp
   AssetPipeline/TinyExrImpl.cpp
   Renderer/Sky/Celestial.cpp
   Core/Json.cpp
@@ -146,6 +147,7 @@ target_link_libraries(TucanoRuntime
     imgui_node_editor
     imgui_node_editor
     openfbx
+    rpmalloc
     draco
     tracy_stub
     Jolt

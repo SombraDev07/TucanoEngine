@@ -1,4 +1,5 @@
 #include "Platform/Window.h"
+#include "Core/Memory.h"
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -16,6 +17,8 @@
 namespace tucano {
 
 Window::Window(const WindowDesc& desc) : m_width(desc.width), m_height(desc.height) {
+  core::memoryInit();
+
   if (!glfwInit()) {
     throw std::runtime_error("glfwInit failed");
   }

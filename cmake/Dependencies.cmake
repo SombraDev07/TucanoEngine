@@ -245,6 +245,15 @@ endif()
 
 # ── libcurl (MIT, HTTP for AI agent) ──────────────────
 
+FetchContent_Declare(rpmalloc
+  GIT_REPOSITORY https://github.com/mjansson/rpmalloc.git
+  GIT_TAG 1.4.5
+  GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(rpmalloc)
+add_library(rpmalloc STATIC ${rpmalloc_SOURCE_DIR}/rpmalloc/rpmalloc.c)
+target_include_directories(rpmalloc PUBLIC ${rpmalloc_SOURCE_DIR}/rpmalloc)
+target_compile_definitions(rpmalloc PRIVATE ENABLE_ASSERTS=0)
+
 FetchContent_Declare(curl
   GIT_REPOSITORY https://github.com/curl/curl.git
   GIT_TAG curl-8_9_1

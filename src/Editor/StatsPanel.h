@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/EditorContext.h"
+#include "Core/Memory.h"
 
 #include <imgui.h>
 
@@ -44,6 +45,19 @@ public:
 		}
 		ImGui::SameLine();
 		ImGui::Text("avg: %.2f ms (%u frames)", m_frameCount > 0 ? m_accumMs / m_frameCount : 0.0f, m_frameCount);
+
+		ImGui::Separator();
+		ImGui::TextDisabled("Memory");
+		auto printAlloc = [](const char* label, const tucano::core::MemoryAllocator& a) {
+			float mb = a.bytesAllocated() / (1024.0f * 1024.0f);
+			ImGui::Text("%s: %.2f MB (%llu allocs)", label, mb, a.allocationCount());
+		};
+		printAlloc("Global", tucano::core::g_allocGlobal);
+		printAlloc("RHI", tucano::core::g_allocRHI);
+		printAlloc("ECS", tucano::core::g_allocECS);
+		printAlloc("Renderer", tucano::core::g_allocRenderer);
+		printAlloc("Streaming", tucano::core::g_allocStreaming);
+		printAlloc("Physics", tucano::core::g_allocPhysics);
 
 		m_accumMs += ctx.frameMs;
 		++m_frameCount;

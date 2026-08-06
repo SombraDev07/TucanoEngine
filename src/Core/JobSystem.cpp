@@ -1,4 +1,5 @@
 #include "Core/JobSystem.h"
+#include "Core/Memory.h"
 
 #include <algorithm>
 
@@ -28,6 +29,7 @@ JobSystem::~JobSystem() {
 }
 
 void JobSystem::workerLoop() {
+  memoryInitThreadHeap();
   uint64_t seenBatch = 0;
   for (;;) {
     {
