@@ -94,6 +94,9 @@ Sponza is not stored in this repo. Download manually:
 
 ```
 ┌─────────────────────────────────────────────────┐
+│  Editor (Native ImGui)                           │
+│  Dockspace · Outliner · Inspector · Console      │
+├─────────────────────────────────────────────────┤
 │  Samples & Tools                                 │
 │  SponzaViewer · PhysicsDemo · SkyLab · WaterLab  │
 ├─────────────────────────────────────────────────┤
@@ -138,18 +141,41 @@ TucanoEngine/
 │   ├── Audio/          miniaudio-based sound
 │   ├── Lua/            Lua 5.4 scripting bindings
 │   ├── Network/        UDP networking, replication, RPC
-│   ├── Editor/         In-engine ImGui editor shell
-│   ├── EditorAPI/      C ABI DLL for .NET interop
-│   └── Runtime/        ImGui debug UI, screenshot
+│   ├── Editor/         Native ImGui editor (dockspace, outliner, inspector, console)
+│   └── Runtime/        ImGui backend, transform gizmo, screenshot
 ├── Samples/            HelloTriangle · PBRTest · SponzaViewer · SponzaPhysics
 │                       PhysicsDemo · SkyLab · WaterLab · TestEditor
 ├── EngineAssets/       Engine textures (rain DDS, IBL, sky catalog)
 ├── Tools/              Benchmark · ECSTest · AssetTest · RHITest
-├── Editor/             .NET Avalonia editor application
 ├── docs/               Architecture Decision Records
 ├── cmake/              Build configuration, dependency declarations
 └── test/               Unit tests
 ```
+
+---
+
+## Editor
+
+The native editor runs in-process with the engine using Dear ImGui (docking branch).
+No external dependencies — no .NET runtime, no C ABI bridge.
+
+```powershell
+# Launch the editor
+.\build\windows-release\Samples\TestEditor\TestEditor.exe
+```
+
+| Feature | Status |
+|---------|--------|
+| Dockspace layout | Done |
+| Outliner (scene hierarchy) | Planned |
+| Inspector (properties via reflection) | Planned |
+| Content browser | Planned |
+| Console (log sink) | Done |
+| Transform gizmo (ImGuizmo) | Done |
+| Environment/Weather panels | Planned |
+| Terrain sculpting tools | Planned |
+| Animation controls | Planned |
+| Play/Pause/Stop | Planned |
 
 ---
 

@@ -170,32 +170,4 @@ target_compile_definitions(TucanoRuntime
     GLM_FORCE_LEFT_HANDED
 )
 
-# ── Editor API DLL (C ABI for .NET P/Invoke) ──────────
-
-add_library(TucanoEditorAPI SHARED
-  EditorAPI/TucanoAPI.cpp
-)
-
-target_include_directories(TucanoEditorAPI
-  PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    "${CMAKE_SOURCE_DIR}/Samples"
-)
-
-target_link_libraries(TucanoEditorAPI
-  PUBLIC
-    TucanoRuntime
-)
-
-target_compile_definitions(TucanoEditorAPI
-  PRIVATE
-    TUCANO_API_EXPORTS
-)
-
-# Copy DLL to TestPlay for .NET editor
-add_custom_command(TARGET TucanoEditorAPI POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "$<TARGET_FILE:TucanoEditorAPI>"
-    "${TUCANO_TESTPLAY_DIR}/"
-  COMMENT "Deploy TucanoEditorAPI.dll → TestPlay/"
-  VERBATIM)
+# Editor is now native ImGui (src/Editor/EditorShell.cpp) — no C ABI bridge needed

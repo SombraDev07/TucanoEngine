@@ -5,20 +5,17 @@
 #include <string>
 
 // -----------------------------------------------------------------------------
-// EditorShell — the docking frame of the native editor (MASTER_ROADMAP Track D0).
+// EditorShell — the docking frame of the native ImGui editor.
 //
-// Replaces the Avalonia/.NET editor front-end: this runs in-process with the engine, so a panel
-// reads engine state directly instead of going through the C marshaling bridge in src/EditorAPI/.
-// See MASTER_ROADMAP §6 for the decision.
+// Runs in-process with the engine. Every panel reads engine state directly —
+// no serialization, no C ABI bridge, no external process.
 //
-// What D0 owns: the host window, the dockspace, the menu bar, and persistence of both the dock
-// layout and which panels are open. The panels themselves are empty frames here — D2 fills the
-// Outliner, D3 the Inspector, D4 the Content Browser. Until an owner draws a panel, endFrame()
-// paints a placeholder into it, so the frame is visible and dockable from day one.
+// The panels themselves are empty frames here; callers fill the Outliner,
+// Inspector, Content Browser, and Console via panel(). Until a panel is
+// drawn, endFrame() paints a placeholder so the frame is visible and dockable.
 //
-// The central dock node is left empty on purpose and the host window is transparent: the 3D scene
-// renders behind the dockspace and shows through the middle. D1 replaces that with a real Viewport
-// panel that owns its own render target.
+// The central dock node is left empty: the 3D scene renders behind the
+// dockspace and shows through the middle.
 //
 // Deliberately ImGui-free in this header — samples include it without pulling in ImGui.
 // -----------------------------------------------------------------------------

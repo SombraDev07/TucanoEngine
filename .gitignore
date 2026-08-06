@@ -57,14 +57,11 @@ CMakeUserPresets.json
 /captures/*.dot
 
 # Editor / generated files
-**/bin/
-**/obj/
-/Editor/cache/
-/Editor/imgui.ini
 /imgui.ini
 /lua_log.txt
 /NodeEditor.json
 /NUL.obj
+EditorLayout.ini
 
 # Screenshots / debug images (root only)
 /*.png
