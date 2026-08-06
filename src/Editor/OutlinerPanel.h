@@ -14,7 +14,7 @@ public:
 		if (!ctx.scene) { ImGui::TextDisabled("No scene."); return; }
 
 		ImGui::SetNextItemWidth(-1);
-		m_filter.Draw("##OutlinerFilter", "Search...");
+		m_filter.Draw("##OutlinerFilter", -1.0f);
 
 		ImGui::Separator();
 		ImGui::BeginChild("OutlinerTree", ImVec2(0, 0), false);

@@ -24,8 +24,6 @@
 
 using namespace tucano;
 
-namespace {
-
 int main(int argc, char** argv) {
 	std::string screenshotPath;
 	double fpsTestSeconds = 0.0;

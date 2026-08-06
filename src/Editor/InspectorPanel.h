@@ -6,7 +6,7 @@
 #include <imgui.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/type_ptr.hpp>
-#include <glm/gtx/euler_angles.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 namespace tucano::editor {
 
@@ -33,9 +33,10 @@ public:
 				obj.transform.translation = pos;
 			}
 
-			glm::vec3 euler = glm::degrees(glm::eulerAngles(obj.transform.rotation));
+			const float RAD2DEG = 180.0f / glm::pi<float>();
+			glm::vec3 euler = glm::eulerAngles(obj.transform.rotation) * RAD2DEG;
 			if (ImGui::DragFloat3("Rotation", glm::value_ptr(euler), 0.5f)) {
-				obj.transform.rotation = glm::quat(glm::radians(euler));
+				obj.transform.rotation = glm::quat(euler / RAD2DEG);
 			}
 
 			glm::vec3 scale = obj.transform.scale;
