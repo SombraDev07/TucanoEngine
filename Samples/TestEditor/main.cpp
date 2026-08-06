@@ -21,8 +21,37 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <algorithm>
 
 using namespace tucano;
+
+// Simple ray-AABB intersection for object picking.
+static int pickObject(const Scene& scene, const glm::vec3& rayO, const glm::vec3& rayD) {
+	int best = -1;
+	float bestT = 1e30f;
+	for (size_t i = 0; i < scene.objects.size(); ++i) {
+		const auto& obj = scene.objects[i];
+		if (!obj.visible || !obj.mesh) continue;
+
+		// Use a simple bounding sphere around the object's world position.
+		const glm::vec3 center = obj.transform.translation;
+		const float radius = 1.5f; // approximate
+
+		const glm::vec3 oc = rayO - center;
+		const float b = glm::dot(oc, rayD);
+		const float c = glm::dot(oc, oc) - radius * radius;
+		const float disc = b * b - c;
+		if (disc < 0.0f) continue;
+
+		float t = -b - std::sqrt(disc);
+		if (t < 0.0f) t = -b + std::sqrt(disc);
+		if (t > 0.0f && t < bestT) {
+			bestT = t;
+			best = static_cast<int>(i);
+		}
+	}
+	return best;
+}
 
 int main(int argc, char** argv) {
 	std::string screenshotPath;
@@ -146,6 +175,37 @@ int main(int argc, char** argv) {
 			}
 
 			shell.endFrame();
+
+			// ── Viewport object picking ──
+			if (!ImGui::GetIO().WantCaptureMouse && !ui.gizmoHovered()) {
+				if (input.mousePressed(GLFW_MOUSE_BUTTON_LEFT)) {
+					float mx = 0, my = 0;
+					input.mousePosition(mx, my);
+					glm::vec3 rayO, rayD;
+					scene.camera.screenToWorldRay(mx, my,
+					                              static_cast<float>(ctx.viewportW),
+					                              static_cast<float>(ctx.viewportH), rayO, rayD);
+					int picked = pickObject(scene, rayO, rayD);
+					if (picked >= 0) {
+						ctx.selectedObject = picked;
+						ctx.logInfo("Selected: " + scene.objects[picked].name);
+					} else {
+						ctx.selectedObject = -1;
+					}
+				}
+			}
+
+			// ── Transform gizmo on selected object ──
+			if (ctx.selectedObject >= 0 && static_cast<size_t>(ctx.selectedObject) < scene.objects.size()) {
+				auto& obj = scene.objects[ctx.selectedObject];
+				glm::mat4 model = obj.transform.matrix();
+				if (ui.drawTransformGizmo(scene.camera.view(), scene.camera.proj(), model,
+				                          DebugUI::GizmoOp::Translate, true, 0.0f,
+				                          ctx.viewportW, ctx.viewportH)) {
+					// Gizmo is being dragged - update transform
+					obj.transform.translation = glm::vec3(model[3]);
+				}
+			}
 
 			// Status bar
 			{
