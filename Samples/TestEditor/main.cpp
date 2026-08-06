@@ -7,6 +7,7 @@
 #include "Editor/ConsolePanel.h"
 #include "Editor/EnvironmentPanel.h"
 #include "Editor/ToolsPanel.h"
+#include "Editor/AnimationPanel.h"
 #include "Editor/StatsPanel.h"
 #include "Platform/Input.h"
 #include "Platform/Window.h"
@@ -95,9 +96,10 @@ int main(int argc, char** argv) {
 		editor::InspectorPanel inspector;
 		editor::ContentBrowser contentBrowser;
 		editor::ConsolePanel console;
-		editor::EnvironmentPanel environment;
-		editor::ToolsPanel tools;
-		editor::StatsPanel stats;
+	editor::EnvironmentPanel environment;
+	editor::ToolsPanel tools;
+	editor::StatsPanel stats;
+	editor::AnimationPanel animation;
 
 		shell.onNewScene = [&]() { ctx.logInfo("New Scene (not implemented)."); };
 		shell.onOpenScene = [&]() { ctx.logInfo("Open Scene (not implemented)."); };
@@ -172,6 +174,14 @@ int main(int argc, char** argv) {
 			}
 			if (shell.isVisible(editor::Panel::Stats)) {
 				shell.panel(editor::Panel::Stats, [&]() { stats.draw(ctx); });
+			}
+			// Animation panel (custom window, not in dock by default)
+			{
+				ImGui::SetNextWindowSize(ImVec2(360, 400), ImGuiCond_FirstUseEver);
+				if (ImGui::Begin("Animation", nullptr)) {
+					animation.draw(ctx);
+				}
+				ImGui::End();
 			}
 
 			shell.endFrame();
