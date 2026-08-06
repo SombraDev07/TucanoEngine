@@ -205,25 +205,40 @@ std::shared_ptr<Texture> checkerNormal(rhi::Device& device, uint32_t size, uint3
   return upload(device, pixels, size, /*srgb=*/false, "DevChecker_Normal");
 }
 
+// These cache GPU resources, so they must not release themselves during static destruction: by
+// then the rhi::Device is gone and ~DX12Texture dereferences its (dangling) device pointer.
+// releaseDefaults() drops them while the device is still alive. Plain shared_ptrs rather than
+// call_once so they can be rebuilt if a new device comes up afterwards.
+namespace {
+std::mutex g_defaultsMutex;
+std::shared_ptr<Texture> g_defaultAlbedo;
+std::shared_ptr<Texture> g_defaultFloor;
+std::shared_ptr<Texture> g_defaultNormal;
+} // namespace
+
 std::shared_ptr<Texture> defaultAlbedo(rhi::Device& device) {
-  static std::shared_ptr<Texture> cached;
-  static std::once_flag once;
-  std::call_once(once, [&] { cached = checkerAlbedo(device); });
-  return cached;
+  std::lock_guard<std::mutex> lock(g_defaultsMutex);
+  if (!g_defaultAlbedo) g_defaultAlbedo = checkerAlbedo(device);
+  return g_defaultAlbedo;
 }
 
 std::shared_ptr<Texture> defaultFloor(rhi::Device& device) {
-  static std::shared_ptr<Texture> cached;
-  static std::once_flag once;
-  std::call_once(once, [&] { cached = floorAlbedo(device); });
-  return cached;
+  std::lock_guard<std::mutex> lock(g_defaultsMutex);
+  if (!g_defaultFloor) g_defaultFloor = floorAlbedo(device);
+  return g_defaultFloor;
 }
 
 std::shared_ptr<Texture> defaultNormal(rhi::Device& device) {
-  static std::shared_ptr<Texture> cached;
-  static std::once_flag once;
-  std::call_once(once, [&] { cached = checkerNormal(device); });
-  return cached;
+  std::lock_guard<std::mutex> lock(g_defaultsMutex);
+  if (!g_defaultNormal) g_defaultNormal = checkerNormal(device);
+  return g_defaultNormal;
+}
+
+void releaseDefaults() {
+  std::lock_guard<std::mutex> lock(g_defaultsMutex);
+  g_defaultAlbedo.reset();
+  g_defaultFloor.reset();
+  g_defaultNormal.reset();
 }
 
 } // namespace tucano::devtex

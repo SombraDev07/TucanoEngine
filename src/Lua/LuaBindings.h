@@ -53,5 +53,10 @@ void registerSeason(lua_State* L);
 void registerGrowth(lua_State* L);
 void registerWindEvents(lua_State* L);
 
+// Drops GPU resources cached by the bindings (the shared cube mesh). Must run before the device
+// they were created on is destroyed — releasing one afterwards dereferences a dangling device
+// pointer in ~DX12Buffer. Rebuilt on next use.
+void releaseCachedResources();
+
 } // namespace LuaBindings
 } // namespace tucano

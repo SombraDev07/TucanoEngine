@@ -1,4 +1,5 @@
 #include "AssetPipeline/GLTFLoader.h"
+#include "Editor/EditorShell.h"
 #include "Platform/Input.h"
 #include "Platform/Window.h"
 #include "Renderer/Renderer.h"
@@ -48,7 +49,10 @@ void setupDefaultRain(RainParams& rain) {
 int main(int argc, char** argv) {
   std::string scenePath = "Assets/Sponza/Sponza.gltf";
   std::string screenshotPath;
+  std::string layoutPath = "EditorLayout.ini";
   int maxFrames = -1;
+  int shotFrame = 5;
+  bool editorMode = false;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--scene" && i + 1 < argc) {
@@ -57,6 +61,15 @@ int main(int argc, char** argv) {
       screenshotPath = argv[++i];
     } else if (a == "--frames" && i + 1 < argc) {
       maxFrames = std::stoi(argv[++i]);
+    } else if (a == "--shotframe" && i + 1 < argc) {
+      // Editor UI needs a few frames to settle (dock layout build, first-use sizing), so a gate
+      // that screenshots the editor wants a later frame than the renderer gate does.
+      shotFrame = std::stoi(argv[++i]);
+    } else if (a == "--editor") {
+      editorMode = true;
+    } else if (a == "--layout" && i + 1 < argc) {
+      // Lets the layout gate use a throwaway ini instead of stomping the dev's own.
+      layoutPath = argv[++i];
     }
   }
 
@@ -94,6 +107,18 @@ int main(int argc, char** argv) {
     Input input(window.handle());
     DebugUI ui;
     ui.init(window, *device);
+
+    // Editor mode (Track D0): docking shell over the live scene. Must init after DebugUI (it needs
+    // the ImGui context) and before the first frame (so ImGui loads the layout ini).
+    editor::EditorShell shell;
+    if (editorMode) {
+      if (shell.init(layoutPath)) {
+        window.setTitle("Tucano Editor");
+        std::cout << "[SponzaViewer] Editor mode — layout: " << layoutPath << "\n";
+      } else {
+        std::cerr << "[SponzaViewer] Editor mode unavailable (no ImGui context)\n";
+      }
+    }
 
     Scene scene;
     auto applyFabricFuzz = [&]() {
@@ -148,6 +173,9 @@ int main(int argc, char** argv) {
       const RendererSettings settings = renderer->settings();
       const RainParams rain = renderer->rain();
 
+      // The ImGui context dies with the UI, taking the shell's settings handler with it, so both
+      // are torn down and rebuilt as a pair.
+      shell.shutdown();
       ui.shutdown();
       renderer.reset();
       swapChain.reset();
@@ -159,6 +187,9 @@ int main(int argc, char** argv) {
       reloadScene();
       scene.camera = cam;
       ui.init(window, *device);
+      if (editorMode) {
+        shell.init(layoutPath);
+      }
     });
 
     window.setResizeCallback([&](uint32_t w, uint32_t h) {
@@ -172,12 +203,22 @@ int main(int argc, char** argv) {
 
     int frame = 0;
     bool shotDone = screenshotPath.empty();
-    while (!window.shouldClose()) {
+    while (!window.shouldClose() && !shell.quitRequested()) {
       window.pollEvents();
       input.beginFrame();
       ui.beginFrame();
-      ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
+      // The dockspace has to be submitted before the windows that dock into it.
+      shell.beginFrame();
+      if (shell.ready()) {
+        const float fps = 1000.0f / std::max(1.0f, renderer->lastFrameMs());
+        shell.setStatus(std::to_string(int(fps)) + " FPS  |  " + std::to_string(renderer->drawCalls()) +
+                        " draws  |  " + std::to_string(window.width()) + "x" + std::to_string(window.height()));
+      } else {
+        ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
+      }
       ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+      // Panels nobody owns yet get their placeholder — D2/D3/D4 replace these with real content.
+      shell.endFrame();
 
       if (!ui.wantCaptureKeyboard()) {
         if (input.keyPressed(GLFW_KEY_0)) {
@@ -252,7 +293,7 @@ int main(int argc, char** argv) {
         scene.camera.fly(1.0f / 60.0f, move * speed, 0, 0);
       }
 
-      if (frame % 60 == 0) {
+      if (frame % 60 == 0 && !shell.ready()) {
         const float fps = 1000.0f / std::max(1.0f, renderer->lastFrameMs());
         window.setTitle("Tucano Sponza | " + std::to_string(int(fps)) + " FPS | rain " +
                         (renderer->rain().enabled ? "on" : "off") + " | Tools panel | 9 rain | F12");
@@ -267,7 +308,7 @@ int main(int argc, char** argv) {
       ui.endFrame(*cmd, bb);
 
       ScreenshotPending shot;
-      if (!shotDone && frame >= 5) {
+      if (!shotDone && frame >= shotFrame) {
         shot = beginScreenshot(*device, *cmd, bb);
       }
       cmd->transition(bb, rhi::ResourceState::Present);
@@ -288,6 +329,7 @@ int main(int argc, char** argv) {
     }
 
     device->waitIdle();
+    shell.shutdown(); // flushes the layout while the ImGui context is still alive
     ui.shutdown();
     return 0;
   } catch (const std::exception& ex) {

@@ -12,6 +12,8 @@
 #include "Renderer/RayTracing/RayTracingScene.h"
 #include "Renderer/Weather/RainSystem.h"
 #include "Renderer/Weather/CloudSystem.h"
+#include "Renderer/Weather/WaterSystem.h"
+#include "Renderer/Weather/FogSystem.h"
 #include "Renderer/Sky/Celestial.h"
 #include "Renderer/Texture.h"
 #include "RHI/RHI.h"
@@ -153,6 +155,10 @@ public:
   uint64_t rgAliasedBytes() const { return m_graph.aliasedBytes(); }
   RainParams& rain() { return m_rain.params(); }
   const RainParams& rain() const { return m_rain.params(); }
+  WaterParams& water() { return m_water.params(); }
+  const WaterParams& water() const { return m_water.params(); }
+  FogParams& fog() { return m_fog.params(); }
+  const FogParams& fog() const { return m_fog.params(); }
 
 private:
   void createTargets();
@@ -304,6 +310,9 @@ private:
   SkyVisibility m_skyVis;
   RainSystem m_rain;
   std::shared_ptr<rhi::Buffer> m_rainCB;
+  WaterSystem m_water;
+  FogSystem m_fog;
+  std::shared_ptr<rhi::Buffer> m_waterCB;
   CloudSystem m_clouds;
   std::shared_ptr<rhi::Buffer> m_cloudCB;
   float m_timeSeconds = 0.0f;

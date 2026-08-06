@@ -26,6 +26,11 @@ public struct TucanoInitDesc
     public bool EnableDebugLayer;
     [MarshalAs(UnmanagedType.I1)]
     public bool Borderless;
+    /// Present with a sync interval. Must stay false while the runtime window is embedded in the
+    /// editor: a vsynced Present blocks the calling thread — which is the Avalonia UI thread —
+    /// for a whole refresh interval every frame.
+    [MarshalAs(UnmanagedType.I1)]
+    public bool VSync;
 }
 
 public enum TucanoResult
@@ -97,6 +102,13 @@ public struct TucanoEnvironment
     public float StarIntensity, StarTwinkle, StarSizeDeg;
     public float PurkinjeStrength;
     public float LatitudeDeg, DayOfYear;
+
+    // Volumetric fog — appended at the end to match the C struct, which grows only there.
+    public int EnableFog, VolumetricFog;
+    public float FogDensityVol, FogBaseHeight, FogHeightFalloff, FogAlbedo, FogAnisotropy;
+    public float FogScatterR, FogScatterG, FogScatterB;
+    public float FogSunIntensity, FogAmbientIntensity, FogShadowStrength;
+    public float FogNoiseStrength, FogNoiseScale, FogNoiseSpeed, FogMaxDistance;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -127,9 +139,35 @@ public struct TucanoMaterial
     public float Metallic, Roughness, Alpha;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+public struct TucanoFieldInfo
+{
+    public IntPtr Name;      // const char*
+    public IntPtr Label;
+    public IntPtr Tooltip;
+    public uint Type;        // 0 bool, 1 float, 2 int, 3 vec2, 4 vec3, 5 color
+    public uint Components;
+    public float MinValue;
+    public float MaxValue;
+    public float Step;
+}
+
+public enum TucanoFieldType
+{
+    Bool = 0,
+    Float = 1,
+    Int = 2,
+    Vec2 = 3,
+    Vec3 = 4,
+    Color = 5,
+}
+
 public static class TucanoApi
 {
     private const string DllName = "TucanoEditorAPI.dll";
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern int tucano_api_version();
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern IntPtr tucano_runtime_version();
@@ -139,6 +177,49 @@ public static class TucanoApi
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     public static extern void tucano_runtime_shutdown(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_veg_set_enabled(IntPtr rt, [MarshalAs(UnmanagedType.I1)] bool enabled);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_overlay_set_flags(IntPtr rt, uint flags);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tucano_overlay_get_flags(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_overlay_set_drop_hint(IntPtr rt,
+        [MarshalAs(UnmanagedType.LPStr)] string? text);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tucano_reflect_block_count(IntPtr rt);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern IntPtr tucano_reflect_block_name(IntPtr rt, uint block);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern uint tucano_reflect_field_count(IntPtr rt, uint block);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    [return: MarshalAs(UnmanagedType.I1)]
+    public static extern bool tucano_reflect_field_info(IntPtr rt, uint block, uint field,
+        out TucanoFieldInfo info);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_reflect_get(IntPtr rt, uint block, uint field, uint component);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_reflect_set(IntPtr rt, uint block, uint field, uint component,
+        float value);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern float tucano_scene_fit_objects(IntPtr scene, uint firstIndex, uint count,
+        float maxSize, TucanoVec3 anchor);
+
+    [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
+    public static extern void tucano_runtime_frame_breakdown(IntPtr rt, out float simMs,
+        out float vegMs, out float gpuWaitMs, out float recordMs, out float uiMs,
+        out float presentMs);
 
     [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)]
     [return: MarshalAs(UnmanagedType.I1)]

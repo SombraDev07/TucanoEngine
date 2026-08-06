@@ -116,7 +116,15 @@ GBufferOut PSMain(VSOutput input) {
 
   if (materialParams.w > 0.0 && albedo.a < materialParams.w) discard;
 
-  float3 n = normalize(float3(0.1, 0.8, 0.1));
+  // A constant normal made every impostor in the field shade identically, so the LOD2 band read
+  // as a flat sheet of colour next to the lit LOD1 geometry behind it. Bend the normal outward
+  // across the quad instead: the card stands in for a roughly cylindrical plant, so the left and
+  // right edges should face away from the camera and the top should tip upward.
+  const float2 bend = input.uv * float2(2.0, -2.0) + float2(-1.0, 1.0); // -1..1, y up
+  const float3 camRight = normalize(camBasis[0].xyz);
+  const float3 camUp = normalize(camBasis[1].xyz);
+  const float3 camFwd = normalize(cross(camUp, camRight));
+  float3 n = normalize(-camFwd * 0.75 + camRight * bend.x * 0.6 + camUp * (0.35 + bend.y * 0.25));
 
   GBufferOut o;
   o.albedo = float4(max(albedo.rgb, float3(0.02, 0.02, 0.02)), 0.05);

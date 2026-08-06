@@ -90,15 +90,28 @@ void TucanoAssetWriter::addDependency(const AssetGuid& guid, AssetType type) {
 	m_deps.push_back({guid, type});
 }
 
+void TucanoAssetWriter::addFlags(uint32_t flags) {
+	m_header.flags |= flags;
+}
+
 void TucanoAssetWriter::setMetadata(const std::string& json) {
 	m_metadata = json;
-	if (!json.empty()) {
-		ChunkEntry c;
-		c.type = ChunkType::Meta;
-		c.size = uint32_t(json.size());
-		c.offset = 0; // computed in write()
-		m_chunks.insert(m_chunks.begin(), c); // metadata always first
+
+	// The metadata bytes live in their own region *before* the data section, so its chunk entry
+	// must not consume data-section offset space (see write()). Track its index so repeated
+	// setMetadata() calls replace the entry instead of stacking duplicates.
+	if (m_metaChunkIndex >= 0) {
+		m_chunks.erase(m_chunks.begin() + m_metaChunkIndex);
+		m_metaChunkIndex = -1;
 	}
+	if (json.empty()) return;
+
+	ChunkEntry c;
+	c.type = ChunkType::Meta;
+	c.size = uint32_t(json.size());
+	c.offset = 0; // computed in write()
+	m_chunks.insert(m_chunks.begin(), c); // metadata always first
+	m_metaChunkIndex = 0;
 }
 
 void TucanoAssetWriter::addChunk(ChunkType type, const void* data, uint32_t size, bool /*compressZstd*/) {
@@ -128,8 +141,17 @@ bool TucanoAssetWriter::write(const std::string& filePath) {
 	uint64_t metaOffset = offset + depsSize + chunkTableSize;
 	uint64_t dataOffset = metaOffset + m_metadata.size();
 
+	// The Meta chunk points at the metadata region, which sits between the chunk table and the
+	// data section. Letting it walk `currentDataOffset` like a data chunk shifted every real
+	// chunk forward by metadataSize and pushed the last one past EOF.
 	uint64_t currentDataOffset = dataOffset;
-	for (auto& c : m_chunks) {
+	for (size_t i = 0; i < m_chunks.size(); ++i) {
+		auto& c = m_chunks[i];
+		if (int(i) == m_metaChunkIndex) {
+			c.offset = metaOffset;
+			c.size = uint32_t(m_metadata.size());
+			continue;
+		}
 		c.offset = currentDataOffset;
 		currentDataOffset += c.size;
 	}
@@ -180,34 +202,43 @@ bool TucanoAssetReader::read(const std::string& filePath, TucanoAssetHeader& hea
 	file.read(reinterpret_cast<char*>(&header), sizeof(header));
 	if (header.magic != kTuasMagic || header.version < 2) return false;
 
-	// Verify CRC
-	uint32_t storedCrc = header.crc32;
-	header.crc32 = 0;
 	file.seekg(0, std::ios::end);
-	std::vector<uint8_t> buffer(file.tellg());
+	const std::streamoff fileSize = file.tellg();
+	if (fileSize < std::streamoff(kTuasHeaderSize)) return false;
+	const size_t fileBytes = static_cast<size_t>(fileSize);
+	std::vector<uint8_t> buffer(fileBytes);
 	file.seekg(0, std::ios::beg);
-	file.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
-	header.crc32 = storedCrc;
-	std::memcpy(buffer.data(), &header, sizeof(header));
+	file.read(reinterpret_cast<char*>(buffer.data()), std::streamsize(buffer.size()));
+	if (!file) return false;
 
+	// The writer CRCs the file with the crc32 field zeroed, so the check must zero it in the
+	// buffer too. Restoring header.crc32 before the memcpy fed the stored CRC back into the
+	// checksummed bytes and made every single read fail.
+	const uint32_t storedCrc = header.crc32;
+	TucanoAssetHeader zeroed = header;
+	zeroed.crc32 = 0;
+	std::memcpy(buffer.data(), &zeroed, sizeof(zeroed));
 	if (crc32(buffer.data(), buffer.size()) != storedCrc) return false;
 
 	// Dependencies
+	const size_t depsBytes = size_t(header.dependencyCount) * sizeof(AssetDependency);
+	const size_t tableOff = kTuasHeaderSize + depsBytes;
+	const size_t tableBytes = size_t(header.chunkCount) * sizeof(ChunkEntry);
+	const size_t metaOff = tableOff + tableBytes;
+	if (metaOff + header.metadataSize > buffer.size()) return false;
+
 	deps.resize(header.dependencyCount);
 	if (header.dependencyCount > 0) {
-		size_t off = kTuasHeaderSize;
-		std::memcpy(deps.data(), buffer.data() + off, header.dependencyCount * sizeof(AssetDependency));
+		std::memcpy(deps.data(), buffer.data() + kTuasHeaderSize, depsBytes);
 	}
 
 	// Chunk table
-	size_t tableOff = kTuasHeaderSize + header.dependencyCount * sizeof(AssetDependency);
 	chunks.resize(header.chunkCount);
 	if (header.chunkCount > 0) {
-		std::memcpy(chunks.data(), buffer.data() + tableOff, header.chunkCount * sizeof(ChunkEntry));
+		std::memcpy(chunks.data(), buffer.data() + tableOff, tableBytes);
 	}
 
-	// Metadata (first chunk is always Meta)
-	size_t metaOff = tableOff + header.chunkCount * sizeof(ChunkEntry);
+	// Metadata region (the Meta chunk entry, when present, points here)
 	metadata.assign(buffer.begin() + metaOff, buffer.begin() + metaOff + header.metadataSize);
 
 	return true;
@@ -229,9 +260,14 @@ bool TucanoAssetReader::readChunk(const std::string& filePath, const ChunkEntry&
 	file.read(reinterpret_cast<char*>(&hdr), sizeof(hdr));
 	if (hdr.magic != kTuasMagic) return false;
 
+	file.seekg(0, std::ios::end);
+	const std::streamoff fileSize = file.tellg();
+	if (std::streamoff(chunk.offset) + std::streamoff(chunk.size) > fileSize) return false;
+
 	outData.resize(chunk.size);
-	file.seekg(chunk.offset);
-	file.read(reinterpret_cast<char*>(outData.data()), chunk.size);
+	if (chunk.size == 0) return true;
+	file.seekg(std::streamoff(chunk.offset), std::ios::beg);
+	file.read(reinterpret_cast<char*>(outData.data()), std::streamsize(chunk.size));
 	return file.good();
 }
 

@@ -23,6 +23,11 @@ int main(int argc, char** argv) {
   bool withRain = false;
   bool toroidal = false;
   float coverage = -1.0f;
+  float fogDensity = -1.0f;
+  bool noFog = false;
+  bool noUI = false;
+  bool noWater = false;
+  float tod = -1.0f;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--screenshot" && i + 1 < argc) {
@@ -41,6 +46,16 @@ int main(int argc, char** argv) {
       coverage = std::stof(argv[++i]);
     } else if (a == "--toroidal") {
       toroidal = true;
+    } else if (a == "--fog" && i + 1 < argc) {
+      fogDensity = std::stof(argv[++i]);
+    } else if (a == "--nofog") {
+      noFog = true;
+    } else if (a == "--noui") {
+      noUI = true;
+    } else if (a == "--nowater") {
+      noWater = true;
+    } else if (a == "--tod" && i + 1 < argc) {
+      tod = std::stof(argv[++i]);
     }
   }
 
@@ -67,6 +82,18 @@ int main(int argc, char** argv) {
     }
     if (toroidal) {
       renderer->settings().enableToroidalShadows = true;
+    }
+    if (fogDensity >= 0.0f) {
+      renderer->fog().density = fogDensity;
+    }
+    if (noFog) {
+      renderer->fog().enabled = false;
+    }
+    if (noWater) {
+      renderer->water().enabled = false;
+    }
+    if (tod >= 0.0f) {
+      renderer->settings().timeOfDay = tod;
     }
 
     Input input(window.handle());
@@ -106,8 +133,10 @@ int main(int argc, char** argv) {
       window.pollEvents();
       input.beginFrame();
       ui.beginFrame();
-      ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
-      ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+      if (!noUI) {
+        ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
+        ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+      }
 
       if (!ui.wantCaptureKeyboard() && input.keyPressed(GLFW_KEY_F12) && screenshotPath.empty()) {
         screenshotPath = "skylab_capture.png";

@@ -28,6 +28,18 @@ public:
 
   bool shouldClose() const;
   void pollEvents();
+
+  /// Pumps only the messages addressed to this window (and its children).
+  ///
+  /// Use this instead of pollEvents() when the window is embedded as a child of a host UI that
+  /// runs its own message loop on the same thread. glfwPollEvents drains the entire thread queue,
+  /// which means it swallows and re-dispatches the host's messages from inside whatever callback
+  /// happens to be running — the host's dispatcher then re-enters itself, and its frame pacing
+  /// falls apart. Filtering by HWND leaves the host's messages for the host's own pump.
+  ///
+  /// Falls back to pollEvents() on platforms without a filtered pump.
+  void pollEventsEmbedded();
+
   void setTitle(const std::string& title);
 
   GLFWwindow* handle() const { return m_window; }

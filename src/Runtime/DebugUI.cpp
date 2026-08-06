@@ -41,20 +41,23 @@ void DebugUI::init(Window& window, rhi::Device& device) {
   hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   hd.NumDescriptors = 64;
   hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  static ComPtr<ID3D12DescriptorHeap> s_heap;
-  if (FAILED(dx.device()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&s_heap)))) {
+  // Owned by this DebugUI, not by a static: a static's Release() runs during process teardown,
+  // long after the D3D12 device has been destroyed, and releasing a device child at that point is
+  // a use-after-free. shutdown() releases it while the device is still alive.
+  ID3D12DescriptorHeap* heap = nullptr;
+  if (FAILED(dx.device()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)))) {
     return;
   }
-  m_srvHeap = s_heap.Get();
+  m_srvHeap = heap;
 
   ImGui_ImplDX12_InitInfo init{};
   init.Device = dx.device();
   init.CommandQueue = dx.queue();
   init.NumFramesInFlight = static_cast<int>(rhi::kMaxFramesInFlight);
   init.RTVFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
-  init.SrvDescriptorHeap = s_heap.Get();
-  init.LegacySingleSrvCpuDescriptor = s_heap->GetCPUDescriptorHandleForHeapStart();
-  init.LegacySingleSrvGpuDescriptor = s_heap->GetGPUDescriptorHandleForHeapStart();
+  init.SrvDescriptorHeap = heap;
+  init.LegacySingleSrvCpuDescriptor = heap->GetCPUDescriptorHandleForHeapStart();
+  init.LegacySingleSrvGpuDescriptor = heap->GetGPUDescriptorHandleForHeapStart();
   init.SrvDescriptorAllocFn = imguiAllocSrv;
   init.SrvDescriptorFreeFn = imguiFreeSrv;
   if (!ImGui_ImplDX12_Init(&init)) {
@@ -64,13 +67,18 @@ void DebugUI::init(Window& window, rhi::Device& device) {
 }
 
 void DebugUI::shutdown() {
-  if (!m_ready) {
-    return;
+  if (m_ready) {
+    ImGui_ImplDX12_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    m_ready = false;
   }
-  ImGui_ImplDX12_Shutdown();
-  ImGui_ImplGlfw_Shutdown();
-  ImGui::DestroyContext();
-  m_ready = false;
+  // Outside the m_ready guard on purpose: init() can bail out after the heap exists, and that
+  // reference still has to go while the device is alive.
+  if (m_srvHeap) {
+    static_cast<ID3D12DescriptorHeap*>(m_srvHeap)->Release();
+    m_srvHeap = nullptr;
+  }
 }
 
 void DebugUI::beginFrame() {

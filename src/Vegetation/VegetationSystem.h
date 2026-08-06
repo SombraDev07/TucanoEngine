@@ -103,6 +103,7 @@ public:
 	uint32_t registerType(const VegetationType& type) {
 		uint32_t id = uint32_t(m_types.size());
 		m_types.push_back(type);
+		bumpRevision();
 		return id;
 	}
 
@@ -126,6 +127,7 @@ public:
 		cell.instances.push_back(inst);
 		cell.dirty = true;
 		++m_cachedCount;
+		bumpRevision();
 	}
 
 	void removeInstances(int32_t cellX, int32_t cellZ) {
@@ -134,6 +136,7 @@ public:
 			m_cachedCount -= uint32_t(it->second.instances.size());
 			it->second.instances.clear();
 			it->second.dirty = true;
+			bumpRevision();
 		}
 	}
 
@@ -213,6 +216,7 @@ public:
 				cell.dirty = true;
 			}
 		}
+		if (removed) bumpRevision();
 		m_cachedCount = recount();
 		return removed;
 	}
@@ -261,6 +265,7 @@ public:
 			++m_cachedCount;
 		}
 		cell.dirty = true;
+		bumpRevision();
 	}
 
 	std::vector<VegetationInstance> queryVisible(const glm::vec3& cameraPos, float radius) const {
@@ -320,18 +325,18 @@ public:
 
 	uint32_t instanceCount() const { return m_cachedCount; }
 
-	void updateGPUWind(float /*dt*/, float /*time*/) {}
-
 	void clear() {
 		m_cells.clear();
 		m_types.clear();
 		m_cachedCount = 0;
 		m_nextInstanceId = 1;
+		bumpRevision();
 	}
 
 	void clearInstancesOnly() {
 		m_cells.clear();
 		m_cachedCount = 0;
+		bumpRevision();
 	}
 
 	void scatterBiome(int32_t cellX, int32_t cellZ, const BiomeSystem& biome,
@@ -390,6 +395,7 @@ public:
 			}
 		}
 		cell.dirty = true;
+		bumpRevision();
 	}
 
 	void setDensityMap(std::shared_ptr<DensityMap> map) { m_densityMap = map; }
@@ -408,7 +414,14 @@ public:
 		outZ = int32_t(std::floor(z / m_config.cellSize));
 	}
 
+	/// Bumped by every call that adds, removes or moves instances or types. Consumers cache
+	/// derived data (the renderer's GPU instance arrays) against this instead of rebuilding it
+	/// from scratch every frame.
+	uint64_t revision() const { return m_revision; }
+
 private:
+	void bumpRevision() { ++m_revision; }
+
 	static uint64_t cellKey(int32_t x, int32_t z) {
 		return (uint64_t(uint32_t(x)) << 32) | uint32_t(z);
 	}
@@ -426,6 +439,7 @@ private:
 	float m_windTime = 0;
 	uint32_t m_cachedCount = 0;
 	uint32_t m_nextInstanceId = 1;
+	uint64_t m_revision = 1;
 	std::mt19937 m_rng{42};
 	std::shared_ptr<DensityMap> m_densityMap;
 	std::shared_ptr<ExclusionZone> m_exclusionZones;

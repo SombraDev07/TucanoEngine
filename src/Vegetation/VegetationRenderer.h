@@ -20,6 +20,7 @@
 #include <array>
 #include <string>
 #include <algorithm>
+#include <limits>
 
 #ifndef TUCANO_SHADER_DIR
 #define TUCANO_SHADER_DIR "shaders"
@@ -51,6 +52,7 @@ struct VegTypeBatch {
 	uint32_t albedoTexIndex = 0;
 	uint32_t impostorAtlasIndex = 0;
 	bool castShadows = true;
+	float shadowDistance = 50.0f;
 	bool twoSided = true;
 };
 
@@ -188,6 +190,7 @@ public:
 			LODManager::instance().setPerTypeLODRanges(i, range);
 
 			b.castShadows = t->castShadows;
+			b.shadowDistance = t->shadowDistance;
 			b.twoSided = true;
 			b.alphaCutoff = t->meshPath.empty() ? 0.35f : 0.45f;
 
@@ -203,11 +206,41 @@ public:
 		ensureImpostorAtlas(n);
 	}
 
+	/// (Re)bakes the LOD2 impostor atlas whenever the set of meshes changes — a type gaining its
+	/// real mesh after a load has to reach the distant silhouettes too.
+	///
+	/// The bake is deliberately untinted: InstanceBillboard.hlsl multiplies the atlas sample by
+	/// baseColorFactor, so the season tint is applied at draw time for free. Baking it in instead
+	/// would make the atlas depend on a value that drifts every frame, and a rebake allocates a
+	/// megabytes-large texture — the whole frame would be spent re-baking foliage.
 	void ensureImpostorAtlas(uint32_t typeCount) {
-		if (m_impostorAtlas && m_impostorAtlasTypes >= typeCount) return;
-		m_impostorAtlas = bakeImpostorAtlas(m_device, std::max(typeCount, 1u), 8, 1024);
+		std::vector<ImpostorSource> sources;
+		sources.reserve(typeCount);
+		for (uint32_t i = 0; i < typeCount && i < m_batches.size(); ++i) {
+			sources.push_back(
+			    ImpostorSource::fromMesh(m_batches[i].mesh.get(), glm::vec4(1.0f)));
+		}
+		if (sources.empty()) return;
+
+		// Signature over the geometry alone, so an unchanged frame does no work.
+		uint64_t signature = 1469598103934665603ull;
+		auto mix = [&signature](uint64_t v) {
+			signature ^= v;
+			signature *= 1099511628211ull;
+		};
+		mix(uint64_t(sources.size()));
+		for (const auto& s : sources) {
+			mix(reinterpret_cast<uint64_t>(s.positions));
+		}
+		if (m_impostorAtlas && signature == m_impostorSignature) return;
+
+		auto baked = bakeImpostorAtlas(m_device, sources, 8, 1024);
+		if (!baked) return; // keep the previous atlas rather than dropping to an untextured LOD2
+
+		m_impostorAtlas = std::move(baked);
+		m_impostorSignature = signature;
 		m_impostorAtlasTypes = typeCount;
-		m_impostorAtlasIndex = m_impostorAtlas ? m_impostorAtlas->bindlessIndex() : 0;
+		m_impostorAtlasIndex = m_impostorAtlas->bindlessIndex();
 		for (auto& b : m_batches) {
 			b.impostorAtlasIndex = m_impostorAtlasIndex;
 		}
@@ -230,16 +263,67 @@ public:
 		return true;
 	}
 
-	void uploadFromSystem(const VegetationSystem& sys, const glm::vec3& cameraPos, float radius) {
+	/// Builds the per-type GPU instance arrays and uploads them into this frame's ring slot.
+	///
+	/// The build is cached. Rebuilding every frame meant walking every cell in radius, allocating
+	/// a vector per type and composing three matrices plus four system lookups per plant — with a
+	/// scattered field that dominated the whole frame while producing identical data. Wind is
+	/// applied in the cull shader, not here, so a static camera over a static field genuinely has
+	/// nothing to recompute.
+	///
+	/// Invalidated by: the system's revision (anything placed, erased or scattered), camera
+	/// movement past a threshold (which changes both the visible set and the interaction bend),
+	/// and a slow periodic refresh so growth and destruction still land.
+	void uploadFromSystem(const VegetationSystem& sys, const glm::vec3& cameraPos, float radius,
+	                      float deltaSeconds = 0.0f) {
 		syncMeshesFromSystem(sys);
 		m_activeTypeCount = std::min(sys.typeCount(), kMaxGpuTypes);
+
+		constexpr float kCameraEpsilon = 0.25f;    // metres
+		constexpr float kRefreshInterval = 0.25f;  // seconds between growth/destruction catch-ups
+
+		const bool cameraMoved =
+		    glm::distance(cameraPos, m_lastUploadCamera) > kCameraEpsilon;
+		const bool revisionChanged = sys.revision() != m_lastUploadRevision;
+		const bool radiusChanged = radius != m_lastUploadRadius;
+
+		// The catch-up exists only for growth and destruction, which mutate instance transforms
+		// without touching the system's revision. When neither has any registered state — the
+		// common case — there is nothing to catch up to and the rebuild is pure waste.
+		//
+		// It is timed in seconds, not frames: a frame counter fires more often the faster the
+		// renderer runs, which is exactly backwards. At 220 FPS a 15-frame period meant fourteen
+		// full rebuilds per second, and a rebuild is the single most expensive thing here.
+		const bool dynamicsActive = GrowthSystem::instance().instanceCount() > 0 ||
+		                            DestructionSystem::instance().hasDestroyed();
+		m_secondsSinceRebuild += std::max(deltaSeconds, 0.0f);
+		const bool periodic = dynamicsActive && m_secondsSinceRebuild >= kRefreshInterval;
+
+		const bool rebuild =
+		    cameraMoved || revisionChanged || radiusChanged || periodic || !m_haveCachedInstances;
+
+		if (!rebuild) {
+			// Nothing changed, but the ring rotates: only the slots not yet holding this data
+			// need the copy.
+			uploadCachedToRing();
+			return;
+		}
+
+		m_lastUploadCamera = cameraPos;
+		m_lastUploadRevision = sys.revision();
+		m_lastUploadRadius = radius;
+		m_secondsSinceRebuild = 0.0f;
+		m_haveCachedInstances = true;
+		m_dirtyRingSlots = (1u << rhi::kMaxFramesInFlight) - 1u;
+		m_cachedInstances.resize(kMaxGpuTypes);
 
 		for (uint32_t typeId = 0; typeId < m_activeTypeCount; ++typeId) {
 			auto& b = m_batches[typeId];
 			if (!b.instanceRing[0]) continue;
 
 			auto insts = sys.queryVisibleByType(cameraPos, radius, typeId);
-			std::vector<gpu::VegInstance> gpuInsts;
+			std::vector<gpu::VegInstance>& gpuInsts = m_cachedInstances[typeId];
+			gpuInsts.clear();
 			gpuInsts.reserve(insts.size());
 
 			for (auto& i : insts) {
@@ -279,12 +363,29 @@ public:
 			}
 
 			b.instanceCount = uint32_t(std::min(gpuInsts.size(), size_t(b.capacity)));
-			if (b.instanceCount > 0) {
-				auto& upload = *b.instanceRing[frameSlot()];
-				std::memcpy(upload.mapped(), gpuInsts.data(),
-				            size_t(b.instanceCount) * sizeof(gpu::VegInstance));
-			}
 		}
+
+		uploadCachedToRing();
+	}
+
+	/// Copies the cached instance arrays into the current frame's upload buffer, but only while
+	/// that slot still holds stale data — after kMaxFramesInFlight frames every slot is current
+	/// and a still camera costs nothing at all.
+	void uploadCachedToRing() {
+		const uint32_t slot = frameSlot();
+		const uint32_t bit = 1u << slot;
+		if ((m_dirtyRingSlots & bit) == 0) return;
+
+		for (uint32_t typeId = 0; typeId < m_activeTypeCount && typeId < m_batches.size(); ++typeId) {
+			auto& b = m_batches[typeId];
+			if (!b.instanceRing[slot] || b.instanceCount == 0) continue;
+			if (typeId >= m_cachedInstances.size()) continue;
+			void* mapped = b.instanceRing[slot]->mapped();
+			if (!mapped) continue;
+			std::memcpy(mapped, m_cachedInstances[typeId].data(),
+			            size_t(b.instanceCount) * sizeof(gpu::VegInstance));
+		}
+		m_dirtyRingSlots &= ~bit;
 	}
 
 	void writeFrameConstants(uint32_t typeId, const glm::mat4& viewProj, const glm::vec3& cameraPos,
@@ -396,7 +497,7 @@ public:
 					cloud.billboard = true;
 					cloud.albedoTexIndex = b.impostorAtlasIndex ? b.impostorAtlasIndex : b.albedoTexIndex;
 					cloud.billboardViews = 8;
-					cloud.billboardGrid = 16;
+					cloud.billboardGrid = kImpostorGrid;
 				} else if (lod == 1 && b.meshLOD1) {
 					cloud.mesh = b.meshLOD1.get();
 					cloud.albedoTexIndex = b.albedoTexIndex;
@@ -408,7 +509,14 @@ public:
 				cloud.metallic = b.metallic;
 				cloud.roughness = b.roughness + lod * 0.02f;
 				cloud.alphaCutoff = b.alphaCutoff;
-				cloud.castShadows = b.castShadows && lod < 2;
+				// VegetationType::shadowDistance was editable in the tool but had no effect. A
+				// LOD band whose near edge is already past it lies entirely outside shadow
+				// range, so drop the whole band — the cull runs per band, not per instance, so
+				// this is the level at which the setting can be honoured.
+				const auto& lodRange = LODManager::instance().rangeForType(typeId);
+				const float bandStart =
+				    lod == 0 ? 0.0f : (lod == 1 ? lodRange.distance0 : lodRange.distance1);
+				cloud.castShadows = b.castShadows && lod < 2 && bandStart < b.shadowDistance;
 				cloud.twoSided = b.twoSided;
 				out.push_back(cloud);
 			}
@@ -462,6 +570,16 @@ private:
 	std::shared_ptr<rhi::Texture> m_impostorAtlas;
 	uint32_t m_impostorAtlasTypes = 0;
 	uint32_t m_impostorAtlasIndex = 0;
+	uint64_t m_impostorSignature = 0;
+
+	// Instance-build cache — see uploadFromSystem.
+	std::vector<std::vector<gpu::VegInstance>> m_cachedInstances;
+	glm::vec3 m_lastUploadCamera{std::numeric_limits<float>::max()};
+	uint64_t m_lastUploadRevision = 0;
+	float m_lastUploadRadius = -1.0f;
+	float m_secondsSinceRebuild = 0.0f;
+	uint32_t m_dirtyRingSlots = 0; // bit per ring slot still holding stale instance data
+	bool m_haveCachedInstances = false;
 	BillboardAtlas m_atlas;
 };
 

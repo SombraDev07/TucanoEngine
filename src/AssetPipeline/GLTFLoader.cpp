@@ -7,6 +7,7 @@
 #include <filesystem>
 #include "AssetPipeline/TucanoAsset.h"
 #include "AssetPipeline/DracoMesh.h"
+#include "AssetPipeline/AssetImport.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -36,12 +37,27 @@ glm::mat4 nodeLocalMatrix(const cgltf_node* node) {
   return t.matrix();
 }
 
+/// Decoded images, keyed by source image and colour space. glTF routinely points many materials
+/// at the same image — Sponza has ~25 materials over a much smaller set of files — and without
+/// this each material view decoded and uploaded its own copy of the same pixels.
+using TextureCache = std::unordered_map<const cgltf_image*, std::shared_ptr<Texture>>;
+
 std::shared_ptr<Texture> loadTexture(rhi::Device& device, const cgltf_texture_view& view, const std::string& baseDir,
-                                     bool srgb) {
+                                     bool srgb, TextureCache* cacheSrgb = nullptr,
+                                     TextureCache* cacheLinear = nullptr) {
   if (!view.texture || !view.texture->image) {
     return nullptr;
   }
   const cgltf_image* image = view.texture->image;
+
+  // Colour space is part of the identity: the same file used as albedo and as a mask needs two
+  // different GPU formats, so they cannot share one entry.
+  TextureCache* cache = srgb ? cacheSrgb : cacheLinear;
+  if (cache) {
+    auto it = cache->find(image);
+    if (it != cache->end()) return it->second;
+  }
+
   ImageData img;
   if (image->uri) {
     img = loadImageRGBA8(joinPath(baseDir, image->uri));
@@ -59,10 +75,13 @@ std::shared_ptr<Texture> loadTexture(rhi::Device& device, const cgltf_texture_vi
   desc.format = srgb ? rhi::Format::R8G8B8A8_UNORM_SRGB : rhi::Format::R8G8B8A8_UNORM;
   desc.usage = rhi::TextureUsage::ShaderResource;
   desc.debugName = image->name ? image->name : "gltf_tex";
-  return Texture::create(device, desc, img.pixels.data(), img.width * 4);
+  auto tex = Texture::create(device, desc, img.pixels.data(), img.width * 4);
+  if (cache) (*cache)[image] = tex;
+  return tex;
 }
 
-std::shared_ptr<Material> loadMaterial(rhi::Device& device, const cgltf_material& mat, const std::string& baseDir) {
+std::shared_ptr<Material> loadMaterial(rhi::Device& device, const cgltf_material& mat, const std::string& baseDir,
+                                       TextureCache& cacheSrgb, TextureCache& cacheLinear) {
   auto m = std::make_shared<Material>();
   m->name = mat.name ? mat.name : "material";
   if (mat.has_pbr_metallic_roughness) {
@@ -70,12 +89,12 @@ std::shared_ptr<Material> loadMaterial(rhi::Device& device, const cgltf_material
     m->baseColorFactor = glm::make_vec4(pbr.base_color_factor);
     m->metallicFactor = pbr.metallic_factor;
     m->roughnessFactor = pbr.roughness_factor;
-    m->albedo = loadTexture(device, pbr.base_color_texture, baseDir, true);
-    m->metallicRoughness = loadTexture(device, pbr.metallic_roughness_texture, baseDir, false);
+    m->albedo = loadTexture(device, pbr.base_color_texture, baseDir, true, &cacheSrgb, &cacheLinear);
+    m->metallicRoughness = loadTexture(device, pbr.metallic_roughness_texture, baseDir, false, &cacheSrgb, &cacheLinear);
   }
-  m->normal = loadTexture(device, mat.normal_texture, baseDir, false);
-  m->ao = loadTexture(device, mat.occlusion_texture, baseDir, false);
-  m->emissive = loadTexture(device, mat.emissive_texture, baseDir, true);
+  m->normal = loadTexture(device, mat.normal_texture, baseDir, false, &cacheSrgb, &cacheLinear);
+  m->ao = loadTexture(device, mat.occlusion_texture, baseDir, false, &cacheSrgb, &cacheLinear);
+  m->emissive = loadTexture(device, mat.emissive_texture, baseDir, true, &cacheSrgb, &cacheLinear);
   m->emissiveFactor = glm::make_vec3(mat.emissive_factor);
   m->alphaMask = mat.alpha_mode == cgltf_alpha_mode_mask;
   m->alphaCutoff = mat.alpha_cutoff;
@@ -239,8 +258,9 @@ bool loadGLTFScene(rhi::Device& device, const std::string& path, Scene& outScene
   const std::string baseDir = parentPath(path);
   std::vector<std::shared_ptr<Material>> materials;
   materials.reserve(data->materials_count);
+  TextureCache cacheSrgb, cacheLinear;
   for (cgltf_size i = 0; i < data->materials_count; ++i) {
-    materials.push_back(loadMaterial(device, data->materials[i], baseDir));
+    materials.push_back(loadMaterial(device, data->materials[i], baseDir, cacheSrgb, cacheLinear));
   }
   if (materials.empty()) {
     materials.push_back(std::make_shared<Material>());
@@ -264,7 +284,7 @@ bool loadGLTFScene(rhi::Device& device, const std::string& path, Scene& outScene
   cgltf_free(data);
 
   std::cout << "Loaded glTF: " << path << " (" << outScene.objects.size() << " objects, " << materials.size()
-            << " materials)\n";
+            << " materials, " << (cacheSrgb.size() + cacheLinear.size()) << " unique textures)\n";
   return !outScene.objects.empty();
 }
 
@@ -277,6 +297,7 @@ int importGLTFAsTuasset(const std::string& path, const std::string& outputDir) {
 	if (cgltf_parse_file(&options, path.c_str(), &data) != cgltf_result_success) return 0;
 	if (cgltf_load_buffers(&options, data, path.c_str()) != cgltf_result_success) { cgltf_free(data); return 0; }
 
+	const std::string baseDir = parentPath(path);
 	std::string assetName = std::filesystem::path(path).stem().string();
 	std::string assetDir = outputDir + "/" + assetName;
 	std::filesystem::create_directories(assetDir);
@@ -349,8 +370,13 @@ int importGLTFAsTuasset(const std::string& path, const std::string& outputDir) {
 				TucanoAssetWriter writer(AssetType::Mesh, guid, path);
 				writer.setMetadata("{\"name\":\"" + meshName + "\",\"vertexCount\":" + std::to_string(vertexCount) + ",\"indexCount\":" + std::to_string(indexCount) + "}");
 
+				MeshAssetData md{};
+				md.vertexCount = vertexCount;
+				md.indexCount = indexCount;
+				md.submeshCount = 1;
+
 				if (dracoOk) {
-					MeshAssetData md{}; md.vertexCount = vertexCount; md.indexCount = indexCount; md.submeshCount = 1;
+					writer.addFlags(uint32_t(AssetFlags::DracoEnc));
 					std::vector<uint8_t> payload;
 					payload.insert(payload.end(), (const uint8_t*)&md, (const uint8_t*)&md + sizeof(md));
 					uint64_t dsz = uint64_t(dracoData.size());
@@ -358,8 +384,47 @@ int importGLTFAsTuasset(const std::string& path, const std::string& outputDir) {
 					payload.insert(payload.end(), dracoData.begin(), dracoData.end());
 					writer.addChunk(ChunkType::DRCV, payload.data(), uint32_t(payload.size()));
 				} else {
-					writer.addChunk(ChunkType::Vert, positions.data(), vertexCount * 3 * uint32_t(sizeof(float)));
+					// Uncompressed fallback carries normals and UVs too. Writing bare positions
+					// dropped both, so anything that fell back here came out unlit and untextured.
+					std::vector<uint8_t> payload;
+					auto appendFloats = [&](const std::vector<float>& v) {
+						payload.insert(payload.end(), (const uint8_t*)v.data(),
+						               (const uint8_t*)v.data() + v.size() * sizeof(float));
+					};
+					payload.insert(payload.end(), (const uint8_t*)&md, (const uint8_t*)&md + sizeof(md));
+					appendFloats(positions);
+					if (!normals.empty()) { writer.addFlags(uint32_t(AssetFlags::HasNormals)); appendFloats(normals); }
+					if (!uvs.empty())     { writer.addFlags(uint32_t(AssetFlags::HasUVs));     appendFloats(uvs); }
+					writer.addChunk(ChunkType::Vert, payload.data(), uint32_t(payload.size()));
 					writer.addChunk(ChunkType::Indx, indices.data(), indexCount * uint32_t(sizeof(uint32_t)));
+				}
+
+				// Material. The format carries no texture pixels yet, so record where the maps
+				// live: without this every cooked asset came back white and untextured.
+				if (prim.material) {
+					const auto& gm = *prim.material;
+					auto uriOf = [&](const cgltf_texture_view& view) -> std::string {
+						if (!view.texture || !view.texture->image || !view.texture->image->uri) return {};
+						return std::filesystem::absolute(joinPath(baseDir, view.texture->image->uri))
+						    .lexically_normal()
+						    .string();
+					};
+					glm::vec4 baseColor(1.0f);
+					float metallic = 1.0f, roughness = 1.0f;
+					std::string albedoPath, ormPath;
+					if (gm.has_pbr_metallic_roughness) {
+						const auto& pbr = gm.pbr_metallic_roughness;
+						baseColor = glm::make_vec4(pbr.base_color_factor);
+						metallic = pbr.metallic_factor;
+						roughness = pbr.roughness_factor;
+						albedoPath = uriOf(pbr.base_color_texture);
+						ormPath = uriOf(pbr.metallic_roughness_texture);
+					}
+					const auto matlChunk = encodeMaterialChunk(
+					    baseColor, glm::make_vec3(gm.emissive_factor), metallic, roughness,
+					    gm.alpha_cutoff, gm.alpha_mode == cgltf_alpha_mode_mask, albedoPath,
+					    uriOf(gm.normal_texture), ormPath, uriOf(gm.emissive_texture));
+					writer.addChunk(ChunkType::Matl, matlChunk.data(), uint32_t(matlChunk.size()));
 				}
 
 				if (writer.write(assetDir + "/" + meshName + ".tuasset")) ++count;

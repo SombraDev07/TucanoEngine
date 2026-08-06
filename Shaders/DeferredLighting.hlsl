@@ -37,6 +37,9 @@ cbuffer FrameCB : register(b1) {
   float4 worldToEq0;         // rows of world -> equatorial. Together they ARE the sidereal rotation.
   float4 worldToEq1;
   float4 worldToEq2;
+  float4 fogVolumeParams;  // froxelX, froxelY, froxelZ, depthPower
+  float4 fogVolumeExtra;   // maxDistance, enable, _, _
+  uint4 fogVolumeIds;      // integratedVolume, _, _, _
 };
 
 cbuffer LightCB : register(b2) {
@@ -55,6 +58,8 @@ cbuffer LightCB : register(b2) {
 };
 
 Texture2D bindlessHeap[] : register(t0, space0);
+// Same descriptor heap, viewed as 3D. Used for the volumetric fog scattering volume.
+Texture3D bindlessHeap3D[] : register(t0, space2);
 SamplerState samp : register(s0);
 SamplerState shadowSamp : register(s1);
 
@@ -154,6 +159,32 @@ float sampleVSM(float3 worldPos) {
   float compare = ndc.z - 0.0015;
   float d = phys.Sample(shadowSamp, puv).r;
   return shadowCompare(compare, d);
+}
+
+/// Applies the froxel volumetric fog: `color * transmittance + inScattering`, read from the
+/// volume the compute passes built. Returns the colour unchanged when the volume is absent, so
+/// the analytic height fog above stays the fallback.
+///
+/// The lookup mirrors the slice distribution used to build the volume
+/// (`depth = maxDistance * pow(slice/numSlices, depthPower)`), inverted. Depths beyond the
+/// volume clamp to the last slice, which keeps distant geometry fogged at the far-field value
+/// instead of popping back to unfogged.
+float3 applyVolumetricFog(float3 color, float2 uv, float3 worldPos) {
+  if (fogVolumeExtra.y < 0.5) return color;
+  uint volId = safeBindless(fogVolumeIds.x);
+  if (volId == 0) return color;
+
+  const float viewDepth = length(worldPos - cameraPos.xyz);
+  const float maxDist = max(fogVolumeExtra.x, 1.0);
+  const float slices = max(fogVolumeParams.z, 1.0);
+  const float w = pow(saturate(viewDepth / maxDist), 1.0 / max(fogVolumeParams.w, 1.0));
+
+  // Half-texel inset on Z: the volume stores the value at the far edge of each slice, and
+  // sampling exactly on the boundary would blend with a slice the ray never crossed.
+  const float3 uvw = float3(uv, saturate(w) * (slices - 1.0) / slices + 0.5 / slices);
+  const float4 fog = bindlessHeap3D[NonUniformResourceIndex(volId)].SampleLevel(samp, uvw, 0);
+
+  return color * fog.a + fog.rgb;
 }
 
 float sampleShadow(float3 worldPos, float viewDepth) {
@@ -535,5 +566,7 @@ float4 PSMain(VSOut input) : SV_Target {
     float3 fogCol = atmosphereFogColor(sunDirectionIntensity.xyz, atmParams.x, sunDirectionIntensity.w);
     color = lerp(color, fogCol, fogF);
   }
+
+  color = applyVolumetricFog(color, input.uv, worldPos);
   return float4(color, 1.0);
 }

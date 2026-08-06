@@ -3,6 +3,8 @@
 #include "Platform/Input.h"
 #include "Platform/Window.h"
 #include "AssetPipeline/GLTFAnimation.h"
+#include "AssetPipeline/AssetImport.h"
+#include "Renderer/Weather/WeatherReflection.h"
 #include "AssetPipeline/GLTFLoader.h"
 #include "Core/Json.h"
 #include "Input/VirtualInput.h"
@@ -47,6 +49,7 @@
 #include "Vegetation/VegetationEditor.h"
 #include "Vegetation/LODManager.h"
 #include "Lua/LuaVM.h"
+#include "Lua/LuaBindings.h"
 
 #include <functional>
 #include <cmath>
@@ -64,6 +67,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <iostream>
 #include <thread>
 #include <mutex>
 #include <fstream>
@@ -348,6 +352,15 @@ struct TucanoRuntime {
   // it. Recording D3D12 commands re-entrantly corrupts the device, so the nested call is dropped.
   bool inRender = false;
 
+  // Per-frame phase breakdown, in milliseconds. Exposed through
+  // tucano_runtime_frame_breakdown so the host can attribute a slow frame instead of guessing.
+  float phaseSimMs = 0.0f;      // input, scripts, animation, physics, streaming
+  float phaseGpuWaitMs = 0.0f;  // waiting for the GPU / presentation engine to free a slot
+  float phaseRecordMs = 0.0f;   // building this frame's scene command list
+  float phaseUiMs = 0.0f;       // ImGui overlay recording
+  float phaseVegMs = 0.0f;      // vegetation instance upload + GPU cull dispatch
+  float phasePresentMs = 0.0f;  // submit + Present
+
   // Virtual input (Phase I-0). The snapshot pair gives edge detection for physical buttons; the
   // VirtualInput layer turns those into named buttons and axes.
   tucano::input::VirtualInput virtualInput;
@@ -361,6 +374,13 @@ struct TucanoRuntime {
   float gizmoSnap = 0.0f;
   float gizmoScale = 1.0f;
   bool gizmoBlocking = false;
+
+  // ── Editor overlay ──
+  // Widgets drawn inside the viewport by the engine, because the host's UI toolkit cannot paint
+  // over a native child window. See drawEditorOverlay().
+  uint32_t overlayFlags = 0;      // see TUCANO_OVERLAY_* bits
+  std::string dropHint;           // non-empty shows a badge following the cursor
+
 
   // Terrain sculpt mode (TM-5)
   bool terrainSculptActive = false;
@@ -418,6 +438,10 @@ struct TucanoScene {
 
 // ── Lifecycle ────────────────────────────────────────
 
+TUCANO_API int tucano_api_version(void) {
+  return TUCANO_API_VERSION;
+}
+
 TUCANO_API const char* tucano_runtime_version(void) {
   return "0.1.0";
 }
@@ -441,7 +465,7 @@ TUCANO_API TucanoRuntime* tucano_runtime_init(const TucanoInitDesc* desc) {
     rt->device = tucano::rhi::Device::create(desc->enableDebugLayer);
 
     rt->swapChain = rt->device->createSwapChain(
-        rt->window->nativeHandle(), w, h, true);
+        rt->window->nativeHandle(), w, h, desc->vsync);
 
     rt->renderer = std::make_unique<tucano::Renderer>(*rt->device, w, h);
     configureCleanRenderer(*rt->renderer);
@@ -515,7 +539,7 @@ TUCANO_API TucanoRuntime* tucano_runtime_init(const TucanoInitDesc* desc) {
       rt->renderer.reset();
       rt->swapChain.reset();
       rt->swapChain = rt->device->createSwapChain(
-          rt->window->nativeHandle(), rt->window->width(), rt->window->height(), true);
+          rt->window->nativeHandle(), rt->window->width(), rt->window->height(), rt->desc.vsync);
       rt->renderer = std::make_unique<tucano::Renderer>(*rt->device,
           rt->window->width(), rt->window->height());
       rt->renderer->settings() = settings;
@@ -542,6 +566,12 @@ TUCANO_API TucanoRuntime* tucano_runtime_init(const TucanoInitDesc* desc) {
 TUCANO_API void tucano_runtime_shutdown(TucanoRuntime* rt) {
   if (!rt) return;
   tucano::LuaVM::instance().shutdown();
+  // Process-lifetime caches own GPU resources, so they have to be dropped here, while the device
+  // is still alive. Left to static destruction they release after the device is gone, and
+  // ~DX12Texture / ~DX12Buffer then dereference a dangling device pointer — an intermittent
+  // access violation during process teardown.
+  tucano::LuaBindings::releaseCachedResources();
+  tucano::devtex::releaseDefaults();
   rt->device->waitIdle();
   if (rt->importThread.joinable()) rt->importThread.join();
   rt->debugUI->shutdown();
@@ -846,6 +876,119 @@ void updatePlay(TucanoRuntime* rt) {
   }
 }
 
+/// Widgets drawn in viewport space by the engine itself.
+///
+/// The host is an Avalonia application and Avalonia cannot paint over a NativeControlHost, so
+/// anything that has to appear *on* the 3D image — a drop badge following the cursor, an object
+/// label pinned to a world position, a live gizmo readout — cannot come from the host. Drawing it
+/// here costs nothing extra: ImGui is already in the frame for the gizmo.
+///
+/// Must run between DebugUI::beginFrame() and endFrame().
+void drawEditorOverlay(TucanoRuntime* rt) {
+  if (!rt->overlayFlags && rt->dropHint.empty()) return;
+
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  // ImGui's own display size, not the runtime's cached viewport dimensions: those are updated by
+  // the host's resize callback and can lag a frame, which parks a bottom-anchored widget off the
+  // bottom of the screen.
+  const ImVec2 screen = ImGui::GetIO().DisplaySize;
+  if (screen.x < 1.0f || screen.y < 1.0f) return;
+
+  // Editor palette, matching the host's chrome so the overlay reads as one product.
+  const ImU32 kInk = IM_COL32(242, 239, 230, 235);
+  const ImU32 kInkDim = IM_COL32(154, 154, 164, 220);
+  const ImU32 kAmber = IM_COL32(255, 201, 74, 255);
+  const ImU32 kPanel = IM_COL32(12, 12, 15, 205);
+  const ImU32 kEdge = IM_COL32(58, 44, 16, 255);
+
+  auto badge = [&](ImVec2 at, const char* text, ImU32 textCol, ImU32 edgeCol) {
+    const ImVec2 sz = ImGui::CalcTextSize(text);
+    const ImVec2 pad(7.0f, 4.0f);
+    const ImVec2 lo(at.x, at.y);
+    const ImVec2 hi(at.x + sz.x + pad.x * 2.0f, at.y + sz.y + pad.y * 2.0f);
+    dl->AddRectFilled(lo, hi, kPanel, 4.0f);
+    dl->AddRect(lo, hi, edgeCol, 4.0f);
+    dl->AddText(ImVec2(lo.x + pad.x, lo.y + pad.y), textCol, text);
+    return ImVec2(hi.x - lo.x, hi.y - lo.y);
+  };
+
+  // ── Drop badge: follows the cursor, which is the whole reason this exists ──
+  if (!rt->dropHint.empty()) {
+    double mx = 0.0, my = 0.0;
+    glfwGetCursorPos(rt->window->handle(), &mx, &my);
+    badge(ImVec2(float(mx) + 16.0f, float(my) + 16.0f), rt->dropHint.c_str(), kAmber, kEdge);
+  }
+
+  // ── World-space object labels ──
+  if (rt->overlayFlags & 2u) {
+    const glm::mat4 viewProj = rt->scene.camera.viewProj();
+    for (size_t i = 0; i < rt->scene.objects.size(); ++i) {
+      const auto& obj = rt->scene.objects[i];
+      if (!obj.visible || obj.name.empty()) continue;
+
+      glm::vec3 lo, hi;
+      if (!objectLocalBounds(obj, lo, hi)) continue;
+      // Label sits above the object's bounding box, not at its origin, so it does not sit inside
+      // the geometry it names.
+      const glm::vec3 topLocal((lo.x + hi.x) * 0.5f, hi.y, (lo.z + hi.z) * 0.5f);
+      const glm::vec4 clip = viewProj * obj.worldMatrix * glm::vec4(topLocal, 1.0f);
+      if (clip.w <= 1e-4f) continue;
+
+      const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+      if (ndc.x < -1.2f || ndc.x > 1.2f || ndc.y < -1.2f || ndc.y > 1.2f) continue;
+
+      const ImVec2 at((ndc.x * 0.5f + 0.5f) * screen.x,
+                      (0.5f - ndc.y * 0.5f) * screen.y - 24.0f);
+      const bool selected = int(i) == rt->selectedObject;
+      const ImVec2 sz = ImGui::CalcTextSize(obj.name.c_str());
+      badge(ImVec2(at.x - sz.x * 0.5f - 7.0f, at.y), obj.name.c_str(),
+            selected ? kAmber : kInkDim, selected ? kEdge : IM_COL32(36, 36, 45, 255));
+    }
+  }
+
+  // ── Viewport HUD, bottom-left ──
+  if (rt->overlayFlags & 1u) {
+    const glm::vec3 eye = rt->scene.camera.position();
+    char line[256];
+    float y = screen.y - 30.0f;
+
+    std::snprintf(line, sizeof(line), "cam  %.1f  %.1f  %.1f", eye.x, eye.y, eye.z);
+    badge(ImVec2(12.0f, y), line, kInkDim, IM_COL32(36, 36, 45, 255));
+
+    if (rt->selectedObject >= 0 && rt->selectedObject < int(rt->scene.objects.size())) {
+      const auto& obj = rt->scene.objects[size_t(rt->selectedObject)];
+      const glm::vec3 p = obj.transform.translation;
+      std::snprintf(line, sizeof(line), "#%d  %s    %.2f  %.2f  %.2f", rt->selectedObject,
+                    obj.name.empty() ? "(unnamed)" : obj.name.c_str(), p.x, p.y, p.z);
+      y -= 26.0f;
+      badge(ImVec2(12.0f, y), line, kInk, kEdge);
+    }
+  }
+
+  // ── Gizmo readout: the manipulated values, next to the handles ──
+  if ((rt->overlayFlags & 4u) && rt->gizmoBlocking && rt->selectedObject >= 0 &&
+      rt->selectedObject < int(rt->scene.objects.size())) {
+    const auto& t = rt->scene.objects[size_t(rt->selectedObject)].transform;
+    const glm::vec3 euler = glm::degrees(glm::eulerAngles(t.rotation));
+    char line[192];
+    switch (rt->gizmoOp) {
+      case tucano::DebugUI::GizmoOp::Rotate:
+        std::snprintf(line, sizeof(line), "rot  %.1f  %.1f  %.1f", euler.x, euler.y, euler.z);
+        break;
+      case tucano::DebugUI::GizmoOp::Scale:
+        std::snprintf(line, sizeof(line), "scale  %.3f  %.3f  %.3f", t.scale.x, t.scale.y, t.scale.z);
+        break;
+      default:
+        std::snprintf(line, sizeof(line), "pos  %.2f  %.2f  %.2f", t.translation.x,
+                      t.translation.y, t.translation.z);
+        break;
+    }
+    double mx = 0.0, my = 0.0;
+    glfwGetCursorPos(rt->window->handle(), &mx, &my);
+    badge(ImVec2(float(mx) + 20.0f, float(my) - 30.0f), line, kAmber, kEdge);
+  }
+}
+
 // Draws the ImGuizmo handles for the selection and writes the manipulated matrix back into the
 // object's transform. Must run between DebugUI::beginFrame() and endFrame().
 void updateGizmo(TucanoRuntime* rt) {
@@ -934,6 +1077,17 @@ TUCANO_API void tucano_runtime_set_camera_navigation(TucanoRuntime* rt, bool ena
 TUCANO_API bool tucano_runtime_get_camera_navigation(TucanoRuntime* rt) {
   return rt && rt->cameraNavigation;
 }
+TUCANO_API void tucano_runtime_frame_breakdown(TucanoRuntime* rt, float* simMs, float* vegMs,
+                                               float* gpuWaitMs, float* recordMs, float* uiMs,
+                                               float* presentMs) {
+  if (vegMs) *vegMs = rt ? rt->phaseVegMs : 0.0f;
+  if (simMs) *simMs = rt ? rt->phaseSimMs : 0.0f;
+  if (gpuWaitMs) *gpuWaitMs = rt ? rt->phaseGpuWaitMs : 0.0f;
+  if (recordMs) *recordMs = rt ? rt->phaseRecordMs : 0.0f;
+  if (uiMs) *uiMs = rt ? rt->phaseUiMs : 0.0f;
+  if (presentMs) *presentMs = rt ? rt->phasePresentMs : 0.0f;
+}
+
 TUCANO_API void tucano_runtime_set_overlay_visible(TucanoRuntime* rt, bool visible) {
   if (rt) rt->overlayVisible = visible;
 }
@@ -949,9 +1103,25 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
     TucanoRuntime* rt;
     ~Guard() { rt->inRender = false; }
   } guard{rt};
+  const auto tFrameStart = std::chrono::steady_clock::now();
   try {
     using namespace tucano;
-    rt->window->pollEvents();
+    // The runtime window is a child of the editor's Avalonia window and shares its UI thread, so
+    // pump only our own messages — a full glfwPollEvents() re-dispatches Avalonia's messages from
+    // inside this call and makes its dispatcher re-enter itself.
+    rt->window->pollEventsEmbedded();
+
+    // Presentation throttling must not park the caller's thread. The host calls this from its UI
+    // thread, and the swapchain's frame-latency wait blocks for most of a refresh interval — the
+    // UI then only ran in the gaps, which is what made the viewport's frame rate oscillate.
+    // Poll instead: when the presentation engine is not ready, return and let the host do
+    // something useful, and it will call back in a moment.
+    // Returns false for "no frame this tick" — not an error. The host uses it to keep its frame
+    // counter honest.
+    if (!rt->swapChain->tryAcquireFrame()) {
+      return false;
+    }
+
     rt->input->beginFrame();
     rt->debugUI->beginFrame();
     if (rt->materialGraphOpen && rt->materialNodeEditor) {
@@ -1077,6 +1247,7 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
       }
     } else {
       updateGizmo(rt);
+      drawEditorOverlay(rt);
     }
 
     // Draw terrain preview grid when landscape mode is active but no terrain loaded yet
@@ -1228,9 +1399,17 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
       rt->streamer->update(rt->deltaSeconds * 1000.0f);
     }
 
-    auto* cmd = rt->device->beginFrame();
-    auto& bb = rt->swapChain->backBuffer();
+    // Phase timings. "The editor feels slow" needs a breakdown to act on: the host sees only the
+    // total, which hides whether the cost is simulation, GPU work, or waiting on presentation.
+    using Clock = std::chrono::steady_clock;
+    const auto tSimEnd = Clock::now();
 
+    auto* cmd = rt->device->beginFrame();
+    const auto tBeginEnd = Clock::now();
+    auto& bb = rt->swapChain->backBuffer();
+    const auto tAcquireEnd = Clock::now();
+
+    const auto tVegStart = Clock::now();
     if (rt->vegEnabled && rt->vegRenderer) {
       auto& vegSys = veg::VegetationSystem::instance();
       auto& paint = vegSys.paint();
@@ -1247,18 +1426,32 @@ TUCANO_API bool tucano_runtime_render(TucanoRuntime* rt) {
       veg::VegetationInteraction::instance().addInteractionPoint(camPos, 3.0f, 1.0f);
 
       veg::WindSystem::instance().update(rt->deltaSeconds);
-      rt->vegRenderer->uploadFromSystem(vegSys, camPos, 200.0f);
+      rt->vegRenderer->uploadFromSystem(vegSys, camPos, 200.0f, rt->deltaSeconds);
       veg::VegDispatch::recordDispatch(
           *rt->device, *cmd, *rt->vegRenderer, rt->scene.camera.viewProj(), camPos, 200.0f,
           rt->renderer->hizOcclusionMip(), rt->window->width(), rt->window->height());
       rt->scene.instanceClouds.clear();
       rt->vegRenderer->submitClouds(rt->scene.instanceClouds);
     }
+    const auto tVegEnd = Clock::now();
 
     rt->renderer->render(cmd, bb, rt->scene);
+    const auto tSceneEnd = Clock::now();
     rt->debugUI->endFrame(*cmd, bb);
     cmd->transition(bb, tucano::rhi::ResourceState::Present);
+    const auto tRecordEnd = Clock::now();
     rt->device->endFrame(*rt->swapChain);
+    const auto tPresentEnd = Clock::now();
+
+    auto ms = [](Clock::time_point a, Clock::time_point b) {
+      return std::chrono::duration<float, std::milli>(b - a).count();
+    };
+    rt->phaseSimMs = ms(tFrameStart, tSimEnd);
+    rt->phaseGpuWaitMs = ms(tSimEnd, tBeginEnd) + ms(tBeginEnd, tAcquireEnd);
+    rt->phaseVegMs = ms(tVegStart, tVegEnd);
+    rt->phaseRecordMs = ms(tVegEnd, tSceneEnd);
+    rt->phaseUiMs = ms(tSceneEnd, tRecordEnd);
+    rt->phasePresentMs = ms(tRecordEnd, tPresentEnd);
     return true;
   } catch (...) {
     rt->alive = false;
@@ -1309,6 +1502,14 @@ TUCANO_API uint32_t tucano_veg_register_mesh_type(TucanoRuntime* rt, const char*
   return id;
 }
 
+TUCANO_API void tucano_veg_set_enabled(TucanoRuntime* rt, bool enabled) {
+  if (!rt) return;
+  rt->vegEnabled = enabled && rt->vegRenderer != nullptr;
+  if (!rt->vegEnabled) rt->scene.instanceClouds.clear();
+}
+
+TUCANO_API bool tucano_veg_get_enabled(TucanoRuntime* rt) { return rt && rt->vegEnabled; }
+
 TUCANO_API void tucano_veg_set_paint(TucanoRuntime* rt, bool enabled, int mode, int typeId,
                                       float radius, float strength) {
   if (!rt) return;
@@ -1358,6 +1559,7 @@ TUCANO_API bool tucano_runtime_screenshot(TucanoRuntime* rt, const char* pngPath
                                rt->window->width(), rt->window->height());
     }
     updateGizmo(rt);
+    drawEditorOverlay(rt);
 
     auto* cmd = rt->device->beginFrame();
     auto& bb = rt->swapChain->backBuffer();
@@ -1383,6 +1585,13 @@ TUCANO_API TucanoScene* tucano_scene_create(TucanoRuntime* rt) {
 }
 
 TUCANO_API void tucano_scene_destroy(TucanoScene* scene) {
+  if (!scene) return;
+  // Destroying the scene releases every mesh and texture it owns. The host tears the scene down
+  // before the runtime, so the device is still alive here and still has frames in flight — drain
+  // it first or the driver faults while the last frames are reading resources being freed.
+  if (scene->runtime && scene->runtime->device) {
+    scene->runtime->device->waitIdle();
+  }
   delete scene;
 }
 
@@ -1771,6 +1980,15 @@ TUCANO_API void tucano_scene_set_object_color(TucanoScene* scene, uint32_t index
 
 TUCANO_API void tucano_scene_remove_object(TucanoScene* scene, uint32_t index) {
   if (!scene || index >= scene->data.objects.size()) return;
+
+  // Erasing the object runs its destructor, which releases the mesh's vertex/index buffers and
+  // its textures. Those can still be referenced by command lists the GPU has not finished — with
+  // two frames in flight, deleting something that was on screen a moment ago faults inside the
+  // driver. Drain first: deletion is a rare, user-initiated action, so the stall costs nothing.
+  if (scene->runtime && scene->runtime->device) {
+    scene->runtime->device->waitIdle();
+  }
+
   if (auto* rt = scene->runtime) {
     // Restore the tint before the object goes away, then keep the selection pointing at the same
     // object now that the indices after it have shifted down.
@@ -1785,8 +2003,61 @@ TUCANO_API void tucano_scene_remove_object(TucanoScene* scene, uint32_t index) {
   scene->data.objects.erase(scene->data.objects.begin() + index);
 }
 
+TUCANO_API float tucano_scene_fit_objects(TucanoScene* scene, uint32_t firstIndex, uint32_t count,
+                                          float maxSize, TucanoVec3 anchor) {
+  if (!scene || count == 0 || maxSize <= 0.0f) return 1.0f;
+  auto& objects = scene->data.objects;
+  if (firstIndex >= objects.size()) return 1.0f;
+  const uint32_t last = std::min<uint32_t>(firstIndex + count, uint32_t(objects.size()));
+
+  // World-space bounds of the whole import: each object's local AABB corners pushed through its
+  // world matrix, because a rotated node's axis-aligned local box is not axis-aligned in world.
+  glm::vec3 lo(std::numeric_limits<float>::max());
+  glm::vec3 hi(std::numeric_limits<float>::lowest());
+  bool any = false;
+  for (uint32_t i = firstIndex; i < last; ++i) {
+    glm::vec3 l, h;
+    if (!objectLocalBounds(objects[i], l, h)) continue;
+    const glm::mat4& m = objects[i].worldMatrix;
+    for (int c = 0; c < 8; ++c) {
+      const glm::vec3 corner((c & 1) ? h.x : l.x, (c & 2) ? h.y : l.y, (c & 4) ? h.z : l.z);
+      const glm::vec3 w = glm::vec3(m * glm::vec4(corner, 1.0f));
+      lo = glm::min(lo, w);
+      hi = glm::max(hi, w);
+    }
+    any = true;
+  }
+  if (!any) return 1.0f;
+
+  const glm::vec3 extent = hi - lo;
+  const float largest = std::max({extent.x, extent.y, extent.z});
+  if (largest <= maxSize || largest <= 1e-5f) return 1.0f; // already small enough: leave it alone
+
+  // Scale about the drop point so the model stays where it was put, and sit it on that point
+  // rather than centred on it — dropped objects should look like they are standing there.
+  const float factor = maxSize / largest;
+  const glm::vec3 pivot{anchor.x, anchor.y, anchor.z};
+  const glm::vec3 centre = (lo + hi) * 0.5f;
+  const glm::vec3 groundOffset(0.0f, (centre.y - lo.y) * factor, 0.0f);
+
+  for (uint32_t i = firstIndex; i < last; ++i) {
+    auto& obj = objects[i];
+    const glm::mat4 fit = glm::translate(glm::mat4(1.0f), pivot + groundOffset) *
+                          glm::scale(glm::mat4(1.0f), glm::vec3(factor)) *
+                          glm::translate(glm::mat4(1.0f), -centre);
+    obj.worldMatrix = fit * obj.worldMatrix;
+    obj.transform.translation = glm::vec3(obj.worldMatrix[3]);
+    obj.transform.scale *= factor;
+  }
+  return factor;
+}
+
 TUCANO_API void tucano_scene_clear(TucanoScene* scene) {
   if (!scene) return;
+  // Same hazard as remove_object: these destructors free GPU resources that may be in flight.
+  if (scene->runtime && scene->runtime->device) {
+    scene->runtime->device->waitIdle();
+  }
   scene->data.objects.clear();
   if (scene->runtime) {
     scene->runtime->sources.clear();
@@ -1855,6 +2126,37 @@ TUCANO_API uint32_t tucano_scene_import_mesh(TucanoScene* scene, const char* pat
                                              TucanoVec3 position, float scale) {
   if (!scene || !scene->runtime || !scene->runtime->device || !path || !*path) return 0xFFFFFFFFu;
   if (scale <= 0.0f) scale = 1.0f;
+
+  // Cooked assets carry a single mesh and no scene graph, so they take a direct path rather than
+  // going through the glTF parser (which would reject the binary outright).
+  {
+    std::string p(path);
+    const size_t dot = p.find_last_of('.');
+    std::string ext = dot == std::string::npos ? "" : p.substr(dot);
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    if (ext == ".tuasset") {
+      std::string err;
+      std::shared_ptr<tucano::Material> material;
+      auto mesh = tucano::loadTuassetMesh(*scene->runtime->device, p, &err, &material);
+      if (!mesh) {
+        std::cerr << "[Tuasset] " << err << "\n";
+        return 0xFFFFFFFFu;
+      }
+      tucano::RenderObject obj;
+      obj.mesh = std::move(mesh);
+      // Falls back to a default material only when the asset carries none.
+      obj.materials.push_back(material ? material : std::make_shared<tucano::Material>());
+      obj.name = std::filesystem::path(p).stem().string();
+      obj.transform.translation = {position.x, position.y, position.z};
+      obj.transform.scale = glm::vec3(scale);
+      obj.worldMatrix = obj.transform.matrix();
+      const uint32_t index = uint32_t(scene->data.objects.size());
+      scene->data.objects.push_back(std::move(obj));
+      scene->runtime->sources.push_back(ObjectSource{ObjectSource::Kind::Gltf, p});
+      return index;
+    }
+  }
 
   // loadGLTFScene fills a whole Scene; import into a scratch one and move its objects over so the
   // file's own lights/camera don't clobber the level being edited.
@@ -2663,6 +2965,106 @@ TUCANO_API float tucano_sky_moon_illumination(TucanoRuntime* rt) {
 
 // ── Environment ──────────────────────────────────────
 
+
+// ── Viewport overlay ─────────────────────────────────
+
+TUCANO_API void tucano_overlay_set_flags(TucanoRuntime* rt, uint32_t flags) {
+  if (rt) rt->overlayFlags = flags;
+}
+
+TUCANO_API uint32_t tucano_overlay_get_flags(TucanoRuntime* rt) {
+  return rt ? rt->overlayFlags : 0u;
+}
+
+TUCANO_API void tucano_overlay_set_drop_hint(TucanoRuntime* rt, const char* text) {
+  if (!rt) return;
+  rt->dropHint = (text && *text) ? text : std::string();
+}
+
+// ── Reflected parameter blocks ───────────────────────
+
+namespace {
+
+/// One editable block: a display name, the type description, and where the live instance lives.
+/// The instance is resolved per call rather than cached, because the renderer can be recreated
+/// after a device loss and a stale pointer would be written into freed memory.
+struct ReflectedBlock {
+  const char* name;
+  const tucano::reflect::TypeDesc& (*describe)();
+  void* (*instance)(TucanoRuntime*);
+};
+
+const ReflectedBlock& reflectedBlocks(uint32_t index, uint32_t* outCount) {
+  static const ReflectedBlock kBlocks[] = {
+      {"Water",
+       []() -> const tucano::reflect::TypeDesc& { return tucano::reflect::describe<tucano::WaterParams>(); },
+       [](TucanoRuntime* rt) -> void* { return rt && rt->renderer ? &rt->renderer->water() : nullptr; }},
+      {"Fog",
+       []() -> const tucano::reflect::TypeDesc& { return tucano::reflect::describe<tucano::FogParams>(); },
+       [](TucanoRuntime* rt) -> void* { return rt && rt->renderer ? &rt->renderer->fog() : nullptr; }},
+  };
+  if (outCount) *outCount = uint32_t(sizeof(kBlocks) / sizeof(kBlocks[0]));
+  static const ReflectedBlock kNull{"", nullptr, nullptr};
+  const uint32_t count = uint32_t(sizeof(kBlocks) / sizeof(kBlocks[0]));
+  return index < count ? kBlocks[index] : kNull;
+}
+
+} // namespace
+
+TUCANO_API uint32_t tucano_reflect_block_count(TucanoRuntime* rt) {
+  if (!rt) return 0;
+  uint32_t count = 0;
+  reflectedBlocks(0, &count);
+  return count;
+}
+
+TUCANO_API const char* tucano_reflect_block_name(TucanoRuntime* rt, uint32_t block) {
+  if (!rt) return "";
+  return reflectedBlocks(block, nullptr).name;
+}
+
+TUCANO_API uint32_t tucano_reflect_field_count(TucanoRuntime* rt, uint32_t block) {
+  if (!rt) return 0;
+  const auto& b = reflectedBlocks(block, nullptr);
+  return b.describe ? b.describe().fieldCount : 0;
+}
+
+TUCANO_API bool tucano_reflect_field_info(TucanoRuntime* rt, uint32_t block, uint32_t field,
+                                          TucanoFieldInfo* out) {
+  if (!rt || !out) return false;
+  const auto& b = reflectedBlocks(block, nullptr);
+  if (!b.describe) return false;
+  const auto& type = b.describe();
+  if (field >= type.fieldCount) return false;
+
+  const auto& f = type.fields[field];
+  out->name = f.name;
+  out->label = f.label;
+  out->tooltip = f.tooltip;
+  out->type = uint32_t(f.type);
+  out->components = tucano::reflect::componentCount(f.type);
+  out->minValue = f.minValue;
+  out->maxValue = f.maxValue;
+  out->step = f.step;
+  return true;
+}
+
+TUCANO_API float tucano_reflect_get(TucanoRuntime* rt, uint32_t block, uint32_t field,
+                                    uint32_t component) {
+  if (!rt) return 0.0f;
+  const auto& b = reflectedBlocks(block, nullptr);
+  if (!b.describe || !b.instance) return 0.0f;
+  return tucano::reflect::getScalar(b.describe(), field, b.instance(rt), component);
+}
+
+TUCANO_API void tucano_reflect_set(TucanoRuntime* rt, uint32_t block, uint32_t field,
+                                   uint32_t component, float value) {
+  if (!rt) return;
+  const auto& b = reflectedBlocks(block, nullptr);
+  if (!b.describe || !b.instance) return;
+  tucano::reflect::setScalar(b.describe(), field, b.instance(rt), value, component);
+}
+
 TUCANO_API void tucano_env_get(TucanoRuntime* rt, TucanoEnvironment* out) {
   if (!rt || !rt->renderer || !out) return;
   const auto& s = rt->renderer->settings();
@@ -2723,6 +3125,25 @@ TUCANO_API void tucano_env_get(TucanoRuntime* rt, TucanoEnvironment* out) {
   out->purkinjeStrength = s.purkinjeStrength;
   out->latitudeDeg = s.latitudeDeg;
   out->dayOfYear = s.dayOfYear;
+
+  const auto& f = rt->renderer->fog();
+  out->enableFog = f.enabled ? 1 : 0;
+  out->volumetricFog = f.volumetric ? 1 : 0;
+  out->fogDensityVol = f.density;
+  out->fogBaseHeight = f.baseHeight;
+  out->fogHeightFalloff = f.heightFalloff;
+  out->fogAlbedo = f.albedo;
+  out->fogAnisotropy = f.anisotropy;
+  out->fogScatterR = f.scatteringColor.r;
+  out->fogScatterG = f.scatteringColor.g;
+  out->fogScatterB = f.scatteringColor.b;
+  out->fogSunIntensity = f.sunIntensity;
+  out->fogAmbientIntensity = f.ambientIntensity;
+  out->fogShadowStrength = f.shadowStrength;
+  out->fogNoiseStrength = f.noiseStrength;
+  out->fogNoiseScale = f.noiseScale;
+  out->fogNoiseSpeed = f.noiseSpeed;
+  out->fogMaxDistance = f.maxDistance;
 }
 
 TUCANO_API void tucano_env_set(TucanoRuntime* rt, const TucanoEnvironment* env) {
@@ -2787,6 +3208,25 @@ TUCANO_API void tucano_env_set(TucanoRuntime* rt, const TucanoEnvironment* env) 
   s.dayOfYear = std::clamp(env->dayOfYear, 0.0f, 366.0f);
   // shadowMapSize is a resource dimension — changing it mid-flight would need a realloc, so it is
   // deliberately read-only here.
+
+  auto& f = rt->renderer->fog();
+  f.enabled = env->enableFog != 0;
+  f.volumetric = env->volumetricFog != 0;
+  f.density = std::clamp(env->fogDensityVol, 0.0f, 1.0f);
+  f.baseHeight = env->fogBaseHeight;
+  f.heightFalloff = std::max(env->fogHeightFalloff, 0.1f);
+  f.albedo = std::clamp(env->fogAlbedo, 0.0f, 1.0f);
+  f.anisotropy = std::clamp(env->fogAnisotropy, -0.95f, 0.95f);
+  f.scatteringColor = {std::clamp(env->fogScatterR, 0.0f, 4.0f),
+                       std::clamp(env->fogScatterG, 0.0f, 4.0f),
+                       std::clamp(env->fogScatterB, 0.0f, 4.0f)};
+  f.sunIntensity = std::clamp(env->fogSunIntensity, 0.0f, 20.0f);
+  f.ambientIntensity = std::clamp(env->fogAmbientIntensity, 0.0f, 20.0f);
+  f.shadowStrength = std::clamp(env->fogShadowStrength, 0.0f, 1.0f);
+  f.noiseStrength = std::clamp(env->fogNoiseStrength, 0.0f, 1.0f);
+  f.noiseScale = std::max(env->fogNoiseScale, 1.0f);
+  f.noiseSpeed = std::clamp(env->fogNoiseSpeed, 0.0f, 50.0f);
+  f.maxDistance = std::clamp(env->fogMaxDistance, 10.0f, 5000.0f);
 }
 
 TUCANO_API void tucano_rain_get(TucanoRuntime* rt, TucanoRain* out) {
@@ -3470,7 +3910,7 @@ TUCANO_API void tucano_world_stream_reload_cell(TucanoRuntime* rt, int32_t x, in
 
 TUCANO_API int tucano_asset_import(const char* path, const char* outputDir) {
   if (!path || !outputDir) return 0;
-  return tucano::importGLTFAsTuasset(path, outputDir);
+  return tucano::importModelAsTuasset(path, outputDir);
 }
 
 TUCANO_API void tucano_asset_import_async(TucanoRuntime* rt, const char* path, const char* outputDir) {
@@ -3491,7 +3931,7 @@ TUCANO_API void tucano_asset_import_async(TucanoRuntime* rt, const char* path, c
       std::lock_guard<std::mutex> lock(rt->importMutex);
       rt->importStatus = "Converting...";
     }
-    int count = tucano::importGLTFAsTuasset(p, o);
+    int count = tucano::importModelAsTuasset(p, o);
     rt->importProgress.store(1.0f);
     rt->importCount.store(count);
     {

@@ -44,6 +44,9 @@ struct LightingCB {
   glm::vec4 worldToEq0;
   glm::vec4 worldToEq1;
   glm::vec4 worldToEq2;
+  glm::vec4 fogVolumeParams;  // froxelX, froxelY, froxelZ, depthPower
+  glm::vec4 fogVolumeExtra;   // maxDistance, enable, _, _
+  glm::uvec4 fogVolumeIds;    // integratedVolume, _, _, _
 };
 
 } // namespace
@@ -104,6 +107,10 @@ void executeLightingPass(LightingPassContext& ctx) {
     else if (r == 1) lcb.worldToEq1 = row;
     else lcb.worldToEq2 = row;
   }
+
+  lcb.fogVolumeParams = ctx.fogVolumeParams;
+  lcb.fogVolumeExtra = ctx.fogVolumeExtra;
+  lcb.fogVolumeIds = {ctx.fogVolumeId, 0u, 0u, 0u};
 
   updateCB(ctx.frameCB, &lcb, sizeof(lcb));
 

@@ -317,7 +317,94 @@ internal static class Program
                   back.EnableMoon == 1);
         }
 
+        CheckProjects();
+
         Console.WriteLine($"\n=== failures: {_failures} ===");
         return _failures == 0 ? 0 : 1;
+    }
+
+    /// Projects, exercised in a temp folder that is deliberately outside the engine tree — the whole
+    /// point of the project concept is that content no longer has to live inside the engine, and a
+    /// test run from within it would pass even if that were still true.
+    private static void CheckProjects()
+    {
+        Console.WriteLine("\n── Projects ──");
+
+        var api = RuntimeHost.ApiVersion;
+        Check($"engine reports an ABI version (v{api})", api > 0);
+
+        var sandbox = Path.Combine(Path.GetTempPath(), "tucano_project_smoke");
+        if (Directory.Exists(sandbox)) Directory.Delete(sandbox, recursive: true);
+        Directory.CreateDirectory(sandbox);
+
+        try
+        {
+            var project = TucanoProject.Create(sandbox, "Smoke Project", api);
+
+            Check("project file written", File.Exists(project.FilePath));
+            Check("content folders created",
+                  Directory.Exists(project.AssetsDirectory) &&
+                  Directory.Exists(project.MaterialsDirectory) &&
+                  Directory.Exists(project.ScenesDirectory) &&
+                  Directory.Exists(project.ImportedDirectory));
+
+            var engineRoot = EngineLocation.RootDirectory;
+            Check($"project lives outside the engine tree ({project.RootDirectory})",
+                  engineRoot is not null &&
+                  !project.RootDirectory.StartsWith(engineRoot, StringComparison.OrdinalIgnoreCase));
+
+            // Reopening has to reconstruct everything the editor relies on. This is the check that
+            // would have caught a project file that writes fields it cannot read back.
+            var reopened = TucanoProject.Open(project.FilePath);
+            Check($"round-trips (name='{reopened.Name}', api=v{reopened.EngineApiVersion}, format=v{reopened.FormatVersion})",
+                  reopened.Name == "Smoke Project" &&
+                  reopened.EngineApiVersion == api &&
+                  reopened.FormatVersion == TucanoProject.CurrentFormatVersion);
+
+            Check("opening by folder finds the project file",
+                  TucanoProject.Open(sandbox).FilePath == project.FilePath);
+
+            // Ownership is what keeps the editor from writing into engine-shipped content.
+            var inside = Path.Combine(project.AssetsDirectory, "Meshes", "tree.tuasset");
+            Check("owns paths beneath its root", project.OwnsPath(inside));
+            Check("does not own engine content",
+                  engineRoot is null || !project.OwnsPath(Path.Combine(engineRoot, "EngineAssets")));
+
+            var relative = project.ToProjectRelative(inside);
+            Check($"relative paths are portable ('{relative}')",
+                  relative == "Assets/Meshes/tree.tuasset" &&
+                  string.Equals(Path.GetFullPath(project.ToAbsolute(relative)), Path.GetFullPath(inside),
+                                StringComparison.OrdinalIgnoreCase));
+
+            // An outside path must survive unchanged rather than being rewritten into nonsense.
+            var outside = Path.Combine(Path.GetTempPath(), "elsewhere.png");
+            Check("paths outside the project are left absolute",
+                  project.ToProjectRelative(outside) == outside);
+
+            Check("compatibility matches the running engine",
+                  reopened.CompatibilityWith(api) == TucanoProject.Compatibility.Match);
+            Check("a newer project is reported as newer",
+                  new[] { reopened }.All(p => { p.EngineApiVersion = api + 1; return true; }) &&
+                  reopened.CompatibilityWith(api) == TucanoProject.Compatibility.ProjectNewer);
+
+            // Creating over an existing project must fail: silently overwriting is how someone
+            // loses a project folder.
+            var refused = false;
+            try { TucanoProject.Create(sandbox, "Smoke Project", api); }
+            catch (IOException) { refused = true; }
+            Check("refuses to overwrite an existing project", refused);
+
+            // A file from a future editor must be refused rather than half-read.
+            var future = Path.Combine(sandbox, "future" + TucanoProject.Extension);
+            File.WriteAllText(future, $"{{ \"formatVersion\": {TucanoProject.CurrentFormatVersion + 1}, \"name\": \"Future\" }}");
+            var rejected = false;
+            try { TucanoProject.Open(future); }
+            catch (NotSupportedException) { rejected = true; }
+            Check("refuses a newer project format", rejected);
+        }
+        finally
+        {
+            try { Directory.Delete(sandbox, recursive: true); } catch { /* temp cleanup only */ }
+        }
     }
 }

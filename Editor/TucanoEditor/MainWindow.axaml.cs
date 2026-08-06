@@ -9,8 +9,10 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Interactivity;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Platform.Storage;
 using Avalonia.Threading;
+using Avalonia.VisualTree;
 using EditorCore;
 using EditorCore.Interop;
 using EditorCore.Testing;
@@ -31,6 +33,9 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<SceneNode> _folderRoots = new();
     private readonly List<AssetItem> _allAssets = new();
     private MaterialLibrary? _materials;
+    /// The open project. Every content path the editor reads or writes comes from here, so the
+    /// editor no longer assumes it is running from inside the engine's own source tree.
+    private TucanoProject? _project;
     /// Object index → assigned .tmat path (editor-side; runtime only stores flat PBR values).
     private readonly Dictionary<int, string> _objectMaterialAssets = new();
     private string _outlinerFilter = "";
@@ -75,7 +80,10 @@ public partial class MainWindow : Window
     {
         try
         {
-            _runtime = new RuntimeHost(enableDebug: true);
+            // --vsync restores the pre-fix presentation mode; it exists only so the FPS test can
+            // measure the two against each other.
+            var forceVsync = Environment.GetCommandLineArgs().Contains("--vsync");
+            _runtime = new RuntimeHost(enableDebug: true, vsync: forceVsync);
 
             // Audio (Phase I-2). If the engine has audio devices, init now.
             try { _runtime.AudioInit(); } catch { /* silent fallback */ }
@@ -84,6 +92,8 @@ public partial class MainWindow : Window
             // so the editor's status bar is the single FPS readout.
             _runtime.CameraNavigation = true;
             _runtime.OverlayVisible = false;
+            // Engine-drawn viewport widgets. Labels start off: in a dense scene they overlap.
+            _runtime.Overlay = RuntimeHost.OverlayFlags.Hud | RuntimeHost.OverlayFlags.GizmoReadout;
 
             RegisterExtensions();
 
@@ -91,12 +101,12 @@ public partial class MainWindow : Window
             FolderTree.ItemsSource = _folderRoots;
             AssetList.ItemsSource = _assets;
             ConsoleList.ItemsSource = _console;
-            _materials = new MaterialLibrary(Path.Combine(ProjectRoot, "Assets", "Materials"));
+            OpenResolvedProject();
             RescanAssets();
             RefreshOutliner();
             UpdatePlayUi();
 
-            Title = $"TUCANO EDITOR — Engine v{_runtime.Version}";
+            UpdateProjectTitle();
             StatusFPS.Text = $"Engine v{_runtime.Version} | Embedding viewport...";
 
             // Keep the runtime swapchain in sync with the embedded viewport size.
@@ -123,7 +133,103 @@ public partial class MainWindow : Window
             _renderLoopRunning = true;
             QueueRenderPass();
 
-            if (Environment.GetCommandLineArgs().Contains("--selftest")) RunSelfTest();
+            var args = Environment.GetCommandLineArgs();
+            var prioArg = Array.IndexOf(args, "--renderprio");
+            if (prioArg >= 0 && prioArg + 1 < args.Length)
+            {
+                _renderPriority = args[prioArg + 1].ToLowerInvariant() switch
+                {
+                    "input" => DispatcherPriority.Input,
+                    "loaded" => DispatcherPriority.Loaded,
+                    "render" => DispatcherPriority.Render,
+                    _ => DispatcherPriority.Background,
+                };
+            }
+            // Isolation switches for the FPS test: they narrow a slow frame down to a subsystem.
+            var capArg = Array.IndexOf(args, "--fpscap");
+            if (capArg >= 0 && capArg + 1 < args.Length &&
+                double.TryParse(args[capArg + 1], out var cap) && cap > 0)
+            {
+                ActiveTargetFps = cap;
+            }
+            if (args.Contains("--noveg")) _runtime.SetVegetationEnabled(false);
+            if (args.Contains("--noclouds")) _runtime.EnableClouds = false;
+            if (args.Contains("--noatmosphere")) _runtime.EnableAtmosphere = false;
+            if (args.Contains("--nobloom")) _runtime.EnableBloom = false;
+            if (args.Contains("--noao")) _runtime.EnableAO = false;
+            var shotArg = Array.IndexOf(args, "--uishot");
+            if (shotArg >= 0 && shotArg + 1 < args.Length) CaptureUi(args[shotArg + 1]);
+            // Captures the engine's own backbuffer, which is the only way to see the in-viewport
+            // overlay: an Avalonia render target never contains the native child window.
+            var vpShot = Array.IndexOf(args, "--viewportshot");
+            if (vpShot >= 0 && vpShot + 1 < args.Length)
+            {
+                var target = args[vpShot + 1];
+                var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3.0) };
+                t.Tick += (_, _) =>
+                {
+                    t.Stop();
+                    _runtime!.Overlay = RuntimeHost.OverlayFlags.Hud |
+                                        RuntimeHost.OverlayFlags.Labels |
+                                        RuntimeHost.OverlayFlags.GizmoReadout;
+                    _runtime.SetDropHint("Sponza.gltf");
+                    if (_runtime.ObjectCount > 0) SelectObject(0);
+                    var t2 = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.0) };
+                    t2.Tick += (_, _) =>
+                    {
+                        t2.Stop();
+                        Console.WriteLine(_runtime.Screenshot(target)
+                            ? $"viewportshot: wrote {target}"
+                            : "viewportshot: FAILED");
+                        Close();
+                    };
+                    t2.Start();
+                };
+                t.Start();
+            }
+
+            var panelShot = Array.IndexOf(args, "--panelshot");
+            if (panelShot >= 0 && panelShot + 1 < args.Length)
+            {
+                var target = args[panelShot + 1];
+                var t = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.0) };
+                t.Tick += (_, _) =>
+                {
+                    t.Stop();
+                    OpenPanel("reflected-params");
+                    var t2 = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
+                    t2.Tick += (_, _) =>
+                    {
+                        t2.Stop();
+                        if (_openPanels.TryGetValue("reflected-params", out var w))
+                        {
+                            try
+                            {
+                                var size = new Size(w.Bounds.Width, w.Bounds.Height);
+                                var px = new PixelSize((int)size.Width, (int)size.Height);
+                                using var bmp = new RenderTargetBitmap(px, new Vector(96, 96));
+                                w.Measure(size);
+                                w.Arrange(new Rect(size));
+                                bmp.Render(w);
+                                using var fs = File.Create(target);
+                                bmp.Save(fs);
+                                Console.WriteLine($"panelshot: wrote {target} ({px.Width}x{px.Height})");
+                            }
+                            catch (Exception ex) { Console.WriteLine($"panelshot: FAILED - {ex.Message}"); }
+                        }
+                        Close();
+                    };
+                    t2.Start();
+                };
+                t.Start();
+            }
+            if (args.Contains("--selftest")) RunSelfTest();
+            var fpsArg = Array.IndexOf(args, "--fpstest");
+            if (fpsArg >= 0)
+            {
+                var seconds = fpsArg + 1 < args.Length && double.TryParse(args[fpsArg + 1], out var s) ? s : 6.0;
+                RunFpsTest(seconds);
+            }
         }
         catch (Exception ex)
         {
@@ -136,7 +242,9 @@ public partial class MainWindow : Window
     /// clicked from a script, and "it builds" is not evidence that a window opens without hanging.
     private void RunSelfTest()
     {
-        var deadline = DateTime.UtcNow.AddSeconds(40);
+        // 1.2 s per step; keep headroom above the number of steps or the deadline fires after a
+        // run that already passed.
+        var deadline = DateTime.UtcNow.AddSeconds(90);
         var step = 0;
         var logPath = Path.Combine(Path.GetTempPath(), "tucano_selftest.log");
         File.WriteAllText(logPath, $"selftest started {DateTime.Now:HH:mm:ss}{Environment.NewLine}");
@@ -391,6 +499,275 @@ public partial class MainWindow : Window
                         break;
 
                     case 18:
+                    {
+                        // Dropping an asset on the viewport: the hit-test has to report a hit
+                        // inside the native control host, and the drop has to add an object.
+                        var vpOrigin = Viewport.TranslatePoint(new Point(0, 0), this);
+                        var centre = vpOrigin is null
+                            ? new Point(-1, -1)
+                            : new Point(vpOrigin.Value.X + Viewport.Bounds.Width / 2,
+                                        vpOrigin.Value.Y + Viewport.Bounds.Height / 2);
+                        // An earlier step left the docked material editor open, which hides the
+                        // native viewport. A hidden viewport must not accept drops — check that
+                        // first, then restore it and check the normal case.
+                        var hiddenRejects = !Viewport.IsVisible && !IsOverViewport(centre);
+                        SetMaterialMode(false);
+                        Viewport.SetNativeVisible(true);
+
+                        var insideHits = IsOverViewport(centre);
+                        var outsideMisses = !IsOverViewport(new Point(2, 2)); // over the outliner
+                        Record(insideHits && outsideMisses && hiddenRejects
+                            ? "selftest: viewport drop hit-test ok (inside hits, outliner misses, " +
+                              "hidden viewport rejects)"
+                            : $"selftest: FAILED - viewport hit-test wrong (inside={insideHits}, " +
+                              $"outsideMisses={outsideMisses}, hiddenRejects={hiddenRejects})");
+                        break;
+                    }
+
+                    case 19:
+                    {
+                        var meshAsset = _allAssets.FirstOrDefault(a => a.Kind == AssetKind.Mesh);
+                        if (meshAsset is null)
+                        {
+                            Record("selftest: skipped - no mesh asset in the browser to drop");
+                            break;
+                        }
+                        var countBeforeDrop = _runtime!.ObjectCount;
+                        DropAssetIntoScene(meshAsset);
+                        Record(_runtime.ObjectCount > countBeforeDrop
+                            ? $"selftest: dropped '{meshAsset.Name}' into the scene " +
+                              $"(+{_runtime.ObjectCount - countBeforeDrop} objects)"
+                            : "selftest: FAILED - dropping a mesh added no object");
+                        break;
+                    }
+
+                    case 20:
+                    {
+                        // The render loop throttles on Win32 foreground, not Window.IsActive:
+                        // focus moves into the engine's child HWND the moment the viewport is
+                        // clicked, and IsActive goes false while the editor is plainly in use.
+                        Activate();
+                        Record($"selftest: foreground={IsEditorForeground()} IsActive={IsActive} " +
+                               $"({StatusFPS.Text})");
+                        break;
+                    }
+
+                    case 21:
+                    {
+                        // Deleting an object frees its GPU buffers and textures. With frames in
+                        // flight those can still be referenced by a command list the GPU has not
+                        // finished, which faults inside the driver. Imported meshes are the case
+                        // that matters: unlike primitives they own unique buffers and bindless
+                        // texture descriptors.
+                        for (var k = 0; k < 12; ++k)
+                        {
+                            _runtime!.SpawnPrimitive(TucanoPrimitive.Cube, k * 1.5f, 0.5f, 0f, 1f);
+                        }
+                        while (_runtime!.ObjectCount > 0)
+                        {
+                            _runtime.RemoveObject(_runtime.ObjectCount - 1);
+                        }
+                        Record($"selftest: primitive spawn/delete churn survived");
+
+                        // Import here and delete on the NEXT step. Deleting in the same tick frees
+                        // buffers no frame ever referenced; the crash needs an object the GPU has
+                        // actually drawn and may still be drawing.
+                        var dropMesh = _allAssets.FirstOrDefault(a => a.Kind == AssetKind.Mesh);
+                        _churnBaseline = _runtime.ObjectCount;
+                        if (dropMesh is not null) DropAssetIntoScene(dropMesh);
+                        var addedByDrop = _runtime.ObjectCount - _churnBaseline;
+                        Record($"selftest: imported '{dropMesh?.Name ?? "(none)"}' " +
+                               $"(+{addedByDrop}), deleting next step");
+
+                        // Sponza is a building: at file scale it swallows the camera. The import
+                        // has to bring anything oversized down to a viewable size.
+                        if (addedByDrop > 0)
+                        {
+                            var t = _runtime.GetObjectTransform(_churnBaseline);
+                            Record(t.scale.X < 0.999f
+                                ? $"selftest: oversized import fitted (scale {t.scale.X:F3})"
+                                : $"selftest: FAILED - import not fitted (scale {t.scale.X:F3})");
+                        }
+                        RefreshOutliner();
+                        break;
+                    }
+
+                    case 22:
+                        while (_runtime!.ObjectCount > _churnBaseline)
+                        {
+                            _runtime.RemoveObject(_runtime.ObjectCount - 1);
+                        }
+                        RefreshOutliner();
+                        Record("selftest: deleted a mesh the GPU had been drawing");
+                        break;
+
+                    case 23:
+                        if (_environmentWindow is { IsVisible: true })
+                        {
+                            Record("selftest: " + _environmentWindow.ApplyFogSettingsForTest(0.045f, 0.4f, true));
+                        }
+                        else
+                        {
+                            Record("selftest: FAILED - environment window closed, cannot test fog");
+                        }
+                        break;
+
+                    case 24:
+                    {
+                        // Reflection: the editor must learn the fields from the engine, and a write
+                        // through the generic path must reach the real parameter struct.
+                        var blocks = _runtime!.ReflectedBlockCount;
+                        var names = new List<string>();
+                        var totalFields = 0;
+                        for (uint b2 = 0; b2 < blocks; ++b2)
+                        {
+                            names.Add(_runtime.ReflectedBlockName(b2));
+                            totalFields += _runtime.ReflectedFields(b2).Count;
+                        }
+                        Record(blocks >= 2 && totalFields > 30
+                            ? $"selftest: reflection exposes {blocks} blocks [{string.Join(", ", names)}], " +
+                              $"{totalFields} fields"
+                            : $"selftest: FAILED - reflection thin ({blocks} blocks, {totalFields} fields)");
+
+                        // Round-trip a float through reflection and confirm the typed API agrees.
+                        var fogBlock = uint.MaxValue;
+                        for (uint b2 = 0; b2 < blocks; ++b2)
+                            if (_runtime.ReflectedBlockName(b2) == "Fog") fogBlock = b2;
+
+                        if (fogBlock == uint.MaxValue)
+                        {
+                            Record("selftest: FAILED - no Fog block reflected");
+                            break;
+                        }
+                        var fields = _runtime.ReflectedFields(fogBlock);
+                        var densityIdx = fields.FindIndex(f => f.Name == "density");
+                        if (densityIdx < 0)
+                        {
+                            Record("selftest: FAILED - Fog has no reflected 'density' field");
+                            break;
+                        }
+                        _runtime.ReflectedSet(fogBlock, (uint)densityIdx, 0.0731f);
+                        var readBack = _runtime.ReflectedGet(fogBlock, (uint)densityIdx);
+                        var viaTypedApi = _runtime.GetEnvironment().FogDensityVol;
+                        Record(Math.Abs(readBack - 0.0731f) < 1e-4f && Math.Abs(viaTypedApi - 0.0731f) < 1e-4f
+                            ? $"selftest: reflected write reached the engine (read {readBack:F4}, " +
+                              $"typed API {viaTypedApi:F4})"
+                            : $"selftest: FAILED - reflected write lost (read {readBack:F4}, " +
+                              $"typed API {viaTypedApi:F4})");
+                        break;
+                    }
+
+                    case 25:
+                    {
+                        // The generated window must build without per-field code.
+                        OpenPanel("reflected-params");
+                        Record(_openPanels.ContainsKey("reflected-params")
+                            ? "selftest: generated parameter window opened"
+                            : "selftest: FAILED - generated parameter window did not open");
+                        break;
+                    }
+
+                    case 26:
+                    {
+                        // Overlay: the engine owns the state, so the round-trip proves the flags
+                        // reach it and the drop hint does not throw with a null.
+                        _runtime!.Overlay = RuntimeHost.OverlayFlags.Hud |
+                                            RuntimeHost.OverlayFlags.Labels |
+                                            RuntimeHost.OverlayFlags.GizmoReadout;
+                        var all = _runtime.Overlay;
+                        _runtime.Overlay = RuntimeHost.OverlayFlags.None;
+                        var none = _runtime.Overlay;
+                        _runtime.Overlay = RuntimeHost.OverlayFlags.Hud;
+                        var one = _runtime.Overlay;
+
+                        _runtime.SetDropHint("selftest asset");
+                        _runtime.SetDropHint(null);
+
+                        Record(all == (RuntimeHost.OverlayFlags.Hud | RuntimeHost.OverlayFlags.Labels |
+                                       RuntimeHost.OverlayFlags.GizmoReadout) &&
+                               none == RuntimeHost.OverlayFlags.None &&
+                               one == RuntimeHost.OverlayFlags.Hud
+                            ? $"selftest: overlay flags round-trip ok (all={all}, one={one})"
+                            : $"selftest: FAILED - overlay flags lost (all={all}, none={none}, one={one})");
+
+                        // Labels on, and something selected, so the label path actually executes a
+                        // world-to-screen projection this frame rather than being skipped.
+                        _runtime.Overlay = RuntimeHost.OverlayFlags.Hud |
+                                           RuntimeHost.OverlayFlags.Labels |
+                                           RuntimeHost.OverlayFlags.GizmoReadout;
+                        if (_runtime.ObjectCount > 0) SelectObject(0);
+                        break;
+                    }
+
+                    case 27:
+                        Record(_runtime is { IsAlive: true }
+                            ? $"selftest: survived a frame with every overlay drawn, {StatusFPS.Text}"
+                            : "selftest: FAILED - runtime died with overlays enabled");
+                        break;
+
+                    case 28:
+                    {
+                        // A project must be open, and every content path must resolve through it
+                        // rather than through the engine tree — that separation is the whole point.
+                        if (_project is null)
+                        {
+                            Record("selftest: FAILED - no project open");
+                            break;
+                        }
+                        var p = _project;
+                        var materialsUnderProject = p.OwnsPath(p.MaterialsDirectory);
+                        var importsUnderProject = p.OwnsPath(p.ImportedDirectory);
+                        var libMatchesProject = _materials is not null &&
+                            string.Equals(Path.GetFullPath(_materials.RootDirectory).TrimEnd('\\'),
+                                          Path.GetFullPath(p.MaterialsDirectory).TrimEnd('\\'),
+                                          StringComparison.OrdinalIgnoreCase);
+                        Record(materialsUnderProject && importsUnderProject && libMatchesProject
+                            ? $"selftest: project '{p.Name}' owns its content paths ({p.RootDirectory})"
+                            : $"selftest: FAILED - project paths wrong (materials={materialsUnderProject}, " +
+                              $"imports={importsUnderProject}, library={libMatchesProject})");
+                        break;
+                    }
+
+                    case 29:
+                    {
+                        // The project file must round-trip, and the engine ABI must be reported and
+                        // recorded — a project that can't say which engine wrote it can't warn later.
+                        var api = RuntimeHost.ApiVersion;
+                        if (_project is null || api <= 0)
+                        {
+                            Record($"selftest: FAILED - no project or bad API version ({api})");
+                            break;
+                        }
+                        var reopened = TucanoProject.Open(_project.FilePath);
+                        var roundTripped = reopened.Name == _project.Name &&
+                                           reopened.EngineApiVersion == api &&
+                                           reopened.FormatVersion == TucanoProject.CurrentFormatVersion;
+                        var compatible = reopened.CompatibilityWith(api) == TucanoProject.Compatibility.Match;
+                        Record(roundTripped && compatible
+                            ? $"selftest: project round-tripped (format v{reopened.FormatVersion}, engine API v{api})"
+                            : $"selftest: FAILED - project round-trip lost data (name={reopened.Name}, " +
+                              $"api={reopened.EngineApiVersion}, format={reopened.FormatVersion})");
+                        break;
+                    }
+
+                    case 30:
+                    {
+                        // Engine-owned content must resolve independently of the project, or an
+                        // installed engine would have nowhere to find its own assets.
+                        var engineRoot = EngineLocation.RootDirectory;
+                        var engineAssets = EngineLocation.AssetsDirectory;
+                        var separate = engineRoot is not null && engineAssets is not null &&
+                                       _project is not null &&
+                                       !string.Equals(Path.GetFullPath(engineAssets).TrimEnd('\\'),
+                                                      Path.GetFullPath(_project.AssetsDirectory).TrimEnd('\\'),
+                                                      StringComparison.OrdinalIgnoreCase);
+                        Record(separate
+                            ? $"selftest: engine content separate from project ({engineAssets})"
+                            : $"selftest: FAILED - engine location unresolved (root={engineRoot}, assets={engineAssets})");
+                        break;
+                    }
+
+                    case 31:
                         Record($"selftest: still alive, {StatusFPS.Text}");
                         break;
 
@@ -418,13 +795,73 @@ public partial class MainWindow : Window
         timer.Start();
     }
 
-    // Render() pumps the Win32 message queue (glfwPollEvents), so the dispatcher can re-enter this
-    // handler mid-frame. Re-entering D3D12 command recording corrupts the device, so drop the tick.
+    // Render() pumps the Win32 message queue, so the dispatcher can re-enter this handler
+    // mid-frame. Re-entering D3D12 command recording corrupts the device, so drop the tick.
     private bool _rendering;
     private bool _renderLoopRunning;
 
+    // Frame pacing. The runtime presents without vsync (see RuntimeHost), so nothing else limits
+    // the loop: uncapped it would spend every spare cycle redrawing a static scene, starving the
+    // UI and spinning up the fans. A deadline gives an even cadence instead of the sawtooth that
+    // a vsync-blocked present produced, and the background cap keeps an unfocused editor cheap.
+    // Overridable so the pacing cap can be ruled in or out as the frame-time limiter.
+    private static double ActiveTargetFps = 120.0;
+    private const double InactiveTargetFps = 30.0;
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
+
+    private const uint GA_ROOT = 2;
+
+    /// True while this editor is the window the user is working in.
+    ///
+    /// Window.IsActive is the wrong signal here: clicking into the viewport moves focus to the
+    /// engine's own child HWND, Avalonia stops considering its window active, and the render loop
+    /// dropped to the background cap — so the editor throttled itself exactly when it was being
+    /// used. Ask Win32 instead, and walk up to the root window so a focused child still counts.
+    private bool IsEditorForeground()
+    {
+        // Either signal alone has a blind spot: IsActive goes false when focus moves into the
+        // engine's child window, and the Win32 foreground check goes false for a window that was
+        // never brought to the front (a scripted run). Throttle only when both say idle.
+        if (IsActive) return true;
+
+        var fg = GetForegroundWindow();
+        if (fg == IntPtr.Zero) return false;
+        var root = GetAncestor(fg, GA_ROOT);
+        if (root == IntPtr.Zero) root = fg;
+
+        var handle = TryGetPlatformHandle()?.Handle ?? IntPtr.Zero;
+        if (handle != IntPtr.Zero && root == handle) return true;
+
+        // Tool windows (Environment, Terrain, Outliner) are separate top-levels of the same app.
+        foreach (var w in (Application.Current?.ApplicationLifetime
+                     as Avalonia.Controls.ApplicationLifetimes.IClassicDesktopStyleApplicationLifetime)
+                     ?.Windows ?? new List<Window>())
+        {
+            if ((w.TryGetPlatformHandle()?.Handle ?? IntPtr.Zero) == root) return true;
+        }
+        return false;
+    }
+    private readonly System.Diagnostics.Stopwatch _frameClock = System.Diagnostics.Stopwatch.StartNew();
+    private double _nextFrameDueMs;
+
+    // Frame-time samples for --fpstest. Kept only while that flag is on.
+    // _frameSamples is the wall-clock interval between frames; _renderCallSamples is how long the
+    // blocking Render() call itself took. The gap between them is dispatcher and UI overhead, and
+    // separating the two is the only way to tell "the engine is slow" from "the loop is slow".
+    private List<double>? _frameSamples;
+    private List<double>? _renderCallSamples;
+    private List<(float Sim, float Veg, float GpuWait, float Record, float Ui, float Present)>? _phaseSamples;
+    private double _lastFrameStartMs;
+
+    private DispatcherPriority _renderPriority = DispatcherPriority.Background;
+
     private void QueueRenderPass() =>
-        Dispatcher.UIThread.Post(OnRenderTick, DispatcherPriority.Background);
+        Dispatcher.UIThread.Post(OnRenderTick, _renderPriority);
 
     private void OnRenderTick()
     {
@@ -436,11 +873,48 @@ public partial class MainWindow : Window
             return;
         }
 
+        var nowMs = _frameClock.Elapsed.TotalMilliseconds;
+        if (nowMs < _nextFrameDueMs)
+        {
+            // Ahead of schedule. Re-post rather than sleeping: this handler runs on the UI
+            // thread, so blocking here would freeze the editor rather than idle it.
+            QueueRenderPass();
+            return;
+        }
+
+        var targetFps = (IsEditorForeground() || _frameSamples is not null)
+            ? ActiveTargetFps
+            : InactiveTargetFps;
+        var frameBudgetMs = 1000.0 / targetFps;
+        // Advance from now, not from the old deadline: catching up after a long stall (a modal
+        // dialog, a scene load) would otherwise fire a burst of back-to-back frames.
+        _nextFrameDueMs = nowMs + frameBudgetMs;
+
         _rendering = true;
         try
         {
-            _runtime.Render();
+            // False means the presentation engine was busy and nothing was drawn, not an error.
+            // Counting those ticks would report a frame rate the viewport never showed.
+            var drew = _runtime.Render();
+            if (!drew)
+            {
+                // Presentation engine was busy: nothing was drawn. Come straight back rather
+                // than holding the tick to the pacing deadline.
+                _nextFrameDueMs = 0.0;
+                _rendering = false;
+                QueueRenderPass();
+                return;
+            }
             _frameCount++;
+
+            if (_frameSamples is not null)
+            {
+                var start = _lastFrameStartMs;
+                _lastFrameStartMs = nowMs;
+                if (start > 0.0) _frameSamples.Add(nowMs - start);
+                _renderCallSamples!.Add(_frameClock.Elapsed.TotalMilliseconds - nowMs);
+                _phaseSamples!.Add(_runtime.FrameBreakdown);
+            }
 
             // A viewport click can change the selection at any time.
             SyncSelectionFromRuntime();
@@ -450,9 +924,19 @@ public partial class MainWindow : Window
             if (elapsed >= 0.5)
             {
                 var fps = (int)(_frameCount / elapsed);
-                var ms = _runtime.LastFrameMs;
                 var dc = _runtime.DrawCalls;
-                StatusFPS.Text = $"{fps} FPS | {ms:F1}ms | {dc} draw calls";
+                var (sim, veg, gpuWait, record, ui, present) = _runtime.FrameBreakdown;
+                // Label the throttled case: a background editor showing 30 FPS is correct
+                // behaviour, and without saying so it reads as a performance bug.
+                StatusFPS.Text = IsEditorForeground() ? $"{fps} FPS" : $"{fps} FPS · idle";
+                // Where the frame actually went. Without this a slow editor is a guessing game;
+                // with it the expensive phase names itself.
+                StatusBreakdown.Text =
+                    $"sim {sim:F1} · veg {veg:F1} · wait {gpuWait:F1} · record {record:F1} · " +
+                    $"ui {ui:F1} · present {present:F1} ms   |   {dc} draws";
+                StatusSelection.Text = _lastSelected >= 0
+                    ? $"{_runtime.ObjectCount} objects · #{_lastSelected} selected"
+                    : $"{_runtime.ObjectCount} objects · nothing selected";
                 _frameCount = 0;
                 _lastFpsUpdate = now;
 
@@ -473,6 +957,128 @@ public partial class MainWindow : Window
         }
 
         QueueRenderPass();
+    }
+
+    /// Renders the editor chrome to a PNG and exits. The viewport itself is a native child window
+    /// and never appears in an Avalonia render target, so this captures the layout, not the 3D
+    /// image — which is exactly what is being reviewed here.
+    private void CaptureUi(string path)
+    {
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            try
+            {
+                var size = new Size(Bounds.Width, Bounds.Height);
+                if (size.Width < 1 || size.Height < 1) { Close(); return; }
+                var pixel = new PixelSize((int)size.Width, (int)size.Height);
+                using var bmp = new RenderTargetBitmap(pixel, new Vector(96, 96));
+                Measure(size);
+                Arrange(new Rect(size));
+                bmp.Render(this);
+                using var fs = File.Create(path);
+                bmp.Save(fs);
+                Console.WriteLine($"uishot: wrote {path} ({pixel.Width}x{pixel.Height})");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"uishot: FAILED - {ex.Message}");
+            }
+            Close();
+        };
+        timer.Start();
+    }
+
+    /// Renders for `seconds`, then writes frame-time statistics and exits. Exists because "the
+    /// editor feels smoother" is not a measurement: the numbers that matter are the median frame
+    /// time and how far the slow tail sits from it, which is what shows up as FPS oscillation.
+    private void RunFpsTest(double seconds)
+    {
+        _frameSamples = new List<double>(capacity: 20000);
+        _renderCallSamples = new List<double>(capacity: 20000);
+        _phaseSamples = new List<(float, float, float, float, float, float)>(capacity: 20000);
+        var logPath = Path.Combine(Path.GetTempPath(), "tucano_fpstest.log");
+
+        var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            _renderLoopRunning = false;
+
+            var samples = _frameSamples ?? new List<double>();
+            var lines = new List<string>();
+            if (samples.Count < 10)
+            {
+                lines.Add($"fpstest: FAILED - only {samples.Count} frames in {seconds}s");
+            }
+            else
+            {
+                var sorted = samples.ToArray();
+                Array.Sort(sorted);
+                double Pct(double p) => sorted[Math.Clamp((int)(p * sorted.Length), 0, sorted.Length - 1)];
+                var mean = samples.Average();
+                var median = Pct(0.50);
+                var p95 = Pct(0.95);
+                var p99 = Pct(0.99);
+                // Jitter as the spread between a typical frame and a slow one. This is what the
+                // eye reads as "the FPS keeps jumping around".
+                var jitter = p95 - median;
+
+                lines.Add($"fpstest: frames={samples.Count} over {seconds:F1}s");
+                lines.Add($"fpstest: mean={mean:F2}ms ({1000.0 / mean:F0} FPS)");
+                lines.Add($"fpstest: median={median:F2}ms ({1000.0 / median:F0} FPS)");
+                lines.Add($"fpstest: p95={p95:F2}ms  p99={p99:F2}ms  min={sorted[0]:F2}ms  max={sorted[^1]:F2}ms");
+                lines.Add($"fpstest: jitter(p95-median)={jitter:F2}ms");
+
+                var calls = _renderCallSamples!.ToArray();
+                Array.Sort(calls);
+                var callMedian = calls[calls.Length / 2];
+                lines.Add($"fpstest: Render() call median={callMedian:F2}ms  p95=" +
+                          $"{calls[Math.Clamp((int)(0.95 * calls.Length), 0, calls.Length - 1)]:F2}ms");
+                lines.Add($"fpstest: loop overhead (frame - Render) median={median - callMedian:F2}ms");
+                var phases = _phaseSamples!;
+                if (phases.Count > 0)
+                {
+                    static float Med(IEnumerable<float> xs)
+                    {
+                        var a = xs.ToArray();
+                        Array.Sort(a);
+                        return a[a.Length / 2];
+                    }
+                    static float P95(IEnumerable<float> xs)
+                    {
+                        var a2 = xs.ToArray();
+                        Array.Sort(a2);
+                        return a2[Math.Clamp((int)(0.95 * a2.Length), 0, a2.Length - 1)];
+                    }
+                    // Which phase owns the slow tail. Medians alone cannot say.
+                    lines.Add($"fpstest: phase p95      sim={P95(phases.Select(p => p.Sim)):F2}ms  " +
+                              $"veg={P95(phases.Select(p => p.Veg)):F2}ms  " +
+                              $"gpuWait={P95(phases.Select(p => p.GpuWait)):F2}ms  " +
+                              $"record={P95(phases.Select(p => p.Record)):F2}ms  " +
+                              $"ui={P95(phases.Select(p => p.Ui)):F2}ms  " +
+                              $"present={P95(phases.Select(p => p.Present)):F2}ms");
+                    lines.Add($"fpstest: phase medians  sim={Med(phases.Select(p => p.Sim)):F2}ms  " +
+                              $"veg={Med(phases.Select(p => p.Veg)):F2}ms  " +
+                              $"gpuWait={Med(phases.Select(p => p.GpuWait)):F2}ms  " +
+                              $"record={Med(phases.Select(p => p.Record)):F2}ms  " +
+                              $"ui={Med(phases.Select(p => p.Ui)):F2}ms  " +
+                              $"present={Med(phases.Select(p => p.Present)):F2}ms");
+                }
+            }
+
+            // Which project produced a timing matters: two runs are only comparable when they
+            // rendered the same content, and the project decides what that content is.
+            lines.Insert(0, $"fpstest: project '{_project?.Name ?? "(none)"}' " +
+                            $"@ {_project?.RootDirectory ?? "-"}");
+
+            foreach (var l in lines) Log(l);
+            File.WriteAllLines(logPath, lines);
+            Console.WriteLine(string.Join(Environment.NewLine, lines));
+            Close();
+        };
+        timer.Start();
     }
 
     // ── Keyboard shortcuts ────────────────────────────
@@ -745,23 +1351,130 @@ public partial class MainWindow : Window
         }
     }
 
+    // ── Project ───────────────────────────────────────
+
+    /// Opens whichever project ProjectService picks: an explicit --project, the last one used, or
+    /// the project bundled with the engine tree.
+    private void OpenResolvedProject()
+    {
+        var args = Environment.GetCommandLineArgs();
+        var project = ProjectService.Resolve(args, RuntimeHost.ApiVersion, out var note);
+        Log(note);
+
+        if (project is null)
+        {
+            // The editor stays usable with no project — the browser is empty and saving is refused
+            // — rather than failing to start and leaving no way to open a different one.
+            UpdateProjectTitle();
+            return;
+        }
+
+        ApplyProject(project);
+    }
+
+    /// Points the editor at a project: material library, asset browser and title all follow from
+    /// this one call, so opening a different project later goes through the same path as startup.
+    private void ApplyProject(TucanoProject project)
+    {
+        _project = project;
+        _materials = new MaterialLibrary(project.MaterialsDirectory);
+
+        switch (project.CompatibilityWith(RuntimeHost.ApiVersion))
+        {
+            case TucanoProject.Compatibility.ProjectNewer:
+                Log($"Warning: '{project.Name}' was authored against engine API v{project.EngineApiVersion}, " +
+                    $"this engine is v{RuntimeHost.ApiVersion}. Some content may not load.");
+                break;
+            case TucanoProject.Compatibility.ProjectOlder:
+                Log($"'{project.Name}' was authored against engine API v{project.EngineApiVersion}; " +
+                    $"upgrading its record to v{RuntimeHost.ApiVersion}.");
+                break;
+        }
+
+        // Record the engine the project has actually been opened with, so the next mismatch is
+        // measured against reality rather than against whatever created the file.
+        if (project.EngineApiVersion != RuntimeHost.ApiVersion)
+        {
+            project.EngineApiVersion = RuntimeHost.ApiVersion;
+            try { project.Save(); }
+            catch (Exception ex) { Log($"Could not update project file: {ex.Message}"); }
+        }
+
+        UpdateProjectTitle();
+    }
+
+    private void UpdateProjectTitle()
+    {
+        var engine = _runtime is null ? "" : $" — Engine v{_runtime.Version}";
+        Title = _project is null
+            ? $"TUCANO EDITOR — no project{engine}"
+            : $"TUCANO EDITOR — {_project.Name}{engine}";
+    }
+
+    /// Switches to another project, closing the current scene first: scene contents belong to the
+    /// project that was open, and carrying them across would write one project's objects into
+    /// another's files.
+    private void SwitchProject(TucanoProject project)
+    {
+        _runtime?.ClearScene();
+        _scenePath = null;
+        _objectMaterialAssets.Clear();
+        _undo.Clear();
+
+        ApplyProject(project);
+        ProjectService.Remember(project);
+        RescanAssets();
+        RefreshOutliner();
+        Log($"Project: {project.Name} ({project.RootDirectory})");
+    }
+
+    private async void OnProjectOpen(object? sender, RoutedEventArgs e)
+    {
+        var picked = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Open Tucano project",
+            AllowMultiple = false,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Tucano project") { Patterns = new[] { "*" + TucanoProject.Extension } },
+            },
+        });
+
+        var path = picked.FirstOrDefault()?.TryGetLocalPath();
+        if (path is null) return;
+
+        try { SwitchProject(TucanoProject.Open(path)); }
+        catch (Exception ex) { Log($"Could not open project: {ex.Message}"); }
+    }
+
+    private async void OnProjectNew(object? sender, RoutedEventArgs e)
+    {
+        var picked = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions
+        {
+            Title = "Choose an empty folder for the new project",
+            AllowMultiple = false,
+        });
+
+        var dir = picked.FirstOrDefault()?.TryGetLocalPath();
+        if (dir is null) return;
+
+        try
+        {
+            var name = Path.GetFileName(dir.TrimEnd(Path.DirectorySeparatorChar));
+            SwitchProject(TucanoProject.Create(dir, string.IsNullOrWhiteSpace(name) ? "Untitled" : name,
+                                               RuntimeHost.ApiVersion));
+        }
+        catch (Exception ex) { Log($"Could not create project: {ex.Message}"); }
+    }
+
     // ── Assets ────────────────────────────────────────
 
     private void OnRescanAssets(object? sender, RoutedEventArgs e) => RescanAssets();
 
-    /// Repo root, derived from the running binary. Locates Assets/ without needing a project file.
-    private static string ProjectRoot
-    {
-        get
-        {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir is not null && !Directory.Exists(Path.Combine(dir.FullName, "Assets")))
-            {
-                dir = dir.Parent;
-            }
-            return dir?.FullName ?? AppContext.BaseDirectory;
-        }
-    }
+    /// Content roots for the asset browser: the open project first, then the engine's own assets.
+    /// Empty until a project is open — the browser showing nothing is the correct state then.
+    private IReadOnlyList<string> ContentRoots =>
+        _project is null ? Array.Empty<string>() : _project.ContentRoots.ToList();
 
     /// Walks the asset folders for meshes, textures, scenes and materials, rebuilding both the
     /// folder tree and the tile grid.
@@ -770,11 +1483,7 @@ public partial class MainWindow : Window
         _allAssets.Clear();
         _materials?.Reload();
 
-        var roots = new[]
-        {
-            Path.Combine(ProjectRoot, "Assets"),
-            Path.Combine(ProjectRoot, "EngineAssets"),
-        }.Where(Directory.Exists).Distinct().ToList();
+        var roots = ContentRoots.Where(Directory.Exists).Distinct().ToList();
 
         foreach (var root in roots)
         {
@@ -956,11 +1665,6 @@ public partial class MainWindow : Window
         switch (asset.Kind)
         {
             case AssetKind.Mesh:
-                if (asset.Path.EndsWith(".tuasset", StringComparison.OrdinalIgnoreCase))
-                {
-                    Log($".tuasset instantiation not yet implemented — use Import as Assets to generate them");
-                    return;
-                }
                 ImportMeshAt(asset.Path);
                 break;
             case AssetKind.Material:
@@ -1030,7 +1734,7 @@ public partial class MainWindow : Window
                 Viewport.SetNativeVisible(true);
                 Log("Viewport");
             },
-            assetsRoot: Path.Combine(ProjectRoot, "Assets"));
+            assetsRoot: _project?.AssetsDirectory);
 
         Log($"Editing material '{asset.Name}'");
     }
@@ -1183,53 +1887,161 @@ public partial class MainWindow : Window
         if (item is not null) OpenMaterialEditor(item);
     }
 
+    // ── Dragging assets out of the browser ──
+    //
+    // This is pointer-capture dragging, not OLE. The viewport is a native child window, so an
+    // OLE drop never reaches it: Avalonia has no drop target there and the OS routes the drag to
+    // whatever the child window does with it, which is nothing. Capturing the pointer on the
+    // asset card keeps the move and release events coming to us wherever the cursor goes, which
+    // makes the viewport a target we can hit-test ourselves.
+
+    /// True while a drag is in flight and the cursor is over the 3D viewport.
+    private bool _dragOverViewport;
+    private uint _churnBaseline;
+
+    /// Largest dimension, in metres, an imported model is scaled down to. Models smaller than
+    /// this keep their authored scale.
+    private const float ImportFitMetres = 6.0f;
+
     private void OnAssetCardPressed(object? sender, PointerPressedEventArgs e)
     {
         if (sender is not Control card || card.DataContext is not AssetItem item) return;
         if (!e.GetCurrentPoint(card).Properties.IsLeftButtonPressed) return;
-        if (item.Kind != AssetKind.Material) return; // only materials drag to the slot for now
+        if (item.Kind is not (AssetKind.Mesh or AssetKind.Material)) return;
         _pendingAssetDrag = item;
         _pendingAssetDragStart = e.GetPosition(this);
         _assetDragStarted = false;
         e.Pointer.Capture(card);
     }
 
-    private async void OnAssetCardMoved(object? sender, PointerEventArgs e)
+    private void OnAssetCardMoved(object? sender, PointerEventArgs e)
     {
-        if (_pendingAssetDrag is null || _assetDragStarted) return;
+        if (_pendingAssetDrag is null) return;
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed) return;
-        var pos = e.GetPosition(this);
-        if (Math.Abs(pos.X - _pendingAssetDragStart.X) < AssetDragThreshold &&
-            Math.Abs(pos.Y - _pendingAssetDragStart.Y) < AssetDragThreshold)
-            return;
 
-        _assetDragStarted = true;
+        var pos = e.GetPosition(this);
+        if (!_assetDragStarted)
+        {
+            if (Math.Abs(pos.X - _pendingAssetDragStart.X) < AssetDragThreshold &&
+                Math.Abs(pos.Y - _pendingAssetDragStart.Y) < AssetDragThreshold)
+                return;
+            _assetDragStarted = true;
+        }
+
         var item = _pendingAssetDrag;
-        var data = new DataObject();
-        data.Set("tucano/material-path", item.Path);
-        data.Set("tucano/material-name", item.Name);
-        data.Set(DataFormats.Text, item.Path);
-        try
+        var overViewport = IsOverViewport(pos);
+        if (overViewport != _dragOverViewport || ViewportDropHint.IsVisible == false)
         {
-            await DragDrop.DoDragDrop(e, data, DragDropEffects.Copy);
+            _dragOverViewport = overViewport;
+            ViewportDropHint.IsVisible = overViewport;
+            GizmoBar.IsVisible = !overViewport;
+            if (overViewport)
+            {
+                ViewportDropText.Text = item.Kind == AssetKind.Mesh
+                    ? $"Release to place  {item.Name}  in the scene"
+                    : $"Release to apply  {item.Name}  to the selection";
+            }
+            // The engine draws the badge that follows the cursor. Avalonia cannot paint over the
+            // native viewport, so without this the drag feedback vanished the moment it mattered.
+            _runtime?.SetDropHint(overViewport ? item.Name : null);
         }
-        finally
-        {
-            _pendingAssetDrag = null;
-            _assetDragStarted = false;
-        }
+
+        // Material slot highlight, for the drag that ends on the inspector rather than the scene.
+        var overSlot = item.Kind == AssetKind.Material && IsOverControl(MatSlot, pos);
+        MatSlot.BorderBrush = new SolidColorBrush(Color.Parse(overSlot ? "#5FBF66" : "#3A3A45"));
+
+        StatusHint.Text = overViewport
+            ? "Release over the viewport to drop"
+            : $"Dragging {item.Name} — drop on the viewport, or on the inspector's material slot";
     }
 
     private void OnAssetCardReleased(object? sender, PointerReleasedEventArgs e)
     {
-        _pendingAssetDrag = null;
-        _assetDragStarted = false;
+        var item = _pendingAssetDrag;
+        var dragged = _assetDragStarted;
+        var dropPos = e.GetPosition(this);
+
+        ClearAssetDrag();
         e.Pointer.Capture(null);
+
+        MatSlot.BorderBrush = new SolidColorBrush(Color.Parse("#3A3A45"));
+
+        if (!dragged || item is null) return;
+
+        if (IsOverViewport(dropPos))
+        {
+            DropAssetIntoScene(item);
+        }
+        else if (item.Kind == AssetKind.Material && IsOverControl(MatSlot, dropPos))
+        {
+            ApplyMaterial(item);
+        }
     }
 
     private void OnAssetCardCaptureLost(object? sender, PointerCaptureLostEventArgs e)
     {
-        if (!_assetDragStarted) _pendingAssetDrag = null;
+        ClearAssetDrag();
+    }
+
+    /// Viewport overlay toggles. The state lives in the engine, so the checkbox reads it back
+    /// rather than keeping its own copy.
+    private void OnOverlayToggleChanged(object? sender, RoutedEventArgs e)
+    {
+        if (_runtime is not { IsAlive: true } || _syncingUi) return;
+        var flags = RuntimeHost.OverlayFlags.None;
+        if (OverlayHud.IsChecked == true) flags |= RuntimeHost.OverlayFlags.Hud;
+        if (OverlayLabels.IsChecked == true) flags |= RuntimeHost.OverlayFlags.Labels;
+        if (OverlayGizmo.IsChecked == true) flags |= RuntimeHost.OverlayFlags.GizmoReadout;
+        _runtime.Overlay = flags;
+    }
+
+    private void ClearAssetDrag()
+    {
+        _runtime?.SetDropHint(null);
+        _pendingAssetDrag = null;
+        _assetDragStarted = false;
+        _dragOverViewport = false;
+        ViewportDropHint.IsVisible = false;
+        GizmoBar.IsVisible = true;
+    }
+
+    /// Hit-tests a window-space point against the 3D viewport. Uses the control's bounds
+    /// translated into window space rather than Avalonia hit-testing, which stops at the native
+    /// control host and would never report a hit inside it.
+    private bool IsOverViewport(Point windowPoint) => IsOverControl(Viewport, windowPoint);
+
+    private static bool IsOverControl(Visual? control, Point windowPoint)
+    {
+        if (control is null || !control.IsVisible) return false;
+        var root = control.GetVisualRoot();
+        if (root is null) return false;
+        var origin = control.TranslatePoint(new Point(0, 0), (Visual)root);
+        if (origin is null) return false;
+        return new Rect(origin.Value, control.Bounds.Size).Contains(windowPoint);
+    }
+
+    /// Acts on an asset dropped onto the viewport. Meshes are placed in front of the camera;
+    /// materials are assigned to whatever is selected, since there is no picking under the
+    /// cursor for a drop that never reaches the engine window.
+    private void DropAssetIntoScene(AssetItem item)
+    {
+        if (_runtime is not { IsAlive: true }) return;
+
+        if (item.Kind == AssetKind.Mesh)
+        {
+            ImportMeshAt(item.Path);
+            return;
+        }
+
+        if (item.Kind == AssetKind.Material)
+        {
+            if (SelectedObjectIndex < 0)
+            {
+                Log($"Select an object first — {item.Name} needs a target to be applied to");
+                return;
+            }
+            ApplyMaterial(item);
+        }
     }
 
     // ── Content browser: folders and asset context menu ──
@@ -1237,7 +2049,7 @@ public partial class MainWindow : Window
     /// Folder currently selected in the browser tree, or the materials folder as a sane default.
     private string CurrentAssetFolder =>
         FolderTree.SelectedItem is SceneNode { Detail.Length: > 0 } n ? n.Detail
-        : _materials?.RootDirectory ?? Path.Combine(ProjectRoot, "Assets");
+        : _materials?.RootDirectory ?? _project?.AssetsDirectory ?? AppContext.BaseDirectory;
 
     private void OnAssetNewFolder(object? sender, RoutedEventArgs e)
     {
@@ -1456,7 +2268,9 @@ public partial class MainWindow : Window
         });
         if (files.Count == 0 || _runtime is not { IsAlive: true }) return;
 
-        var outputDir = Path.Combine(ProjectRoot, "Assets", "Imported");
+        // Imports always land in the project, never in the engine's own asset folder.
+        if (_project is null) { Log("Import needs an open project."); return; }
+        var outputDir = _project.ImportedDirectory;
         Directory.CreateDirectory(outputDir);
 
         var paths = files.Select(f => f.TryGetLocalPath()).Where(p => p is not null).ToList();
@@ -1514,6 +2328,12 @@ public partial class MainWindow : Window
 
         // An import can add several objects; undo removes them from the tail inwards.
         var added = _runtime.ObjectCount - before;
+
+        // glTF and FBX carry real-world scale, so a building-sized model arrives building-sized
+        // and swallows the camera. Fit it to something the viewport can show; anything already
+        // smaller is left at its authored scale.
+        var fit = _runtime.FitObjects(before, added, ImportFitMetres,
+            eye.X + fwd.X * distance, eye.Y + fwd.Y * distance, eye.Z + fwd.Z * distance);
         var rt = _runtime;
         _undo.Push(new UndoAction($"Import {Path.GetFileName(path)}",
             undo: () => { for (uint k = 0; k < added; ++k) rt.RemoveObject(rt.ObjectCount - 1); },
@@ -1525,9 +2345,10 @@ public partial class MainWindow : Window
 
         var bones = _runtime.GetBoneCount(index);
         var clips = bones > 0 ? _runtime.GetClipCount(index) : 0;
+        var fitNote = fit < 0.999f ? $", scaled to {fit:P0} to fit {ImportFitMetres:F0} m" : "";
         Log(bones > 0
-            ? $"Imported {Path.GetFileName(path)} — {added} object(s), {bones} bones, {clips} clip(s)"
-            : $"Imported {Path.GetFileName(path)} — {added} object(s)");
+            ? $"Imported {Path.GetFileName(path)} — {added} object(s), {bones} bones, {clips} clip(s){fitNote}"
+            : $"Imported {Path.GetFileName(path)} — {added} object(s){fitNote}");
     }
 
     // ── Lights ────────────────────────────────────────
@@ -1887,6 +2708,7 @@ public partial class MainWindow : Window
         _extensions.AddPanel(new EnvironmentPanel());
         _extensions.AddPanel(new TerrainPanel());
         _extensions.AddPanel(new WorldOutlinerPanel());
+        _extensions.AddPanel(new ReflectedPanel());
 
         BuildToolsMenu();
     }

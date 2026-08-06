@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using EditorCore.Interop;
@@ -15,7 +16,8 @@ public sealed class RuntimeHost : IDisposable
     public IntPtr Scene => _scene;
     public bool IsAlive => _handle != IntPtr.Zero && TucanoApi.tucano_runtime_alive(_handle);
 
-    public RuntimeHost(string? assetsDir = null, string? shaderDir = null, bool enableDebug = true)
+    public RuntimeHost(string? assetsDir = null, string? shaderDir = null, bool enableDebug = true,
+                       bool vsync = false)
     {
         var desc = new TucanoInitDesc
         {
@@ -23,7 +25,13 @@ public sealed class RuntimeHost : IDisposable
             Height = 720,
             Title = Marshal.StringToHGlobalAnsi("Tucano Engine"),
             EnableDebugLayer = enableDebug,
-            Borderless = true
+            Borderless = true,
+            // Off by design: Render() runs on the Avalonia UI thread, and a vsynced Present
+            // parks that thread until the next vblank. That capped the editor at the refresh
+            // rate and, whenever a frame slipped past the deadline, halved it — which is the
+            // oscillation between ~60 and ~30 FPS the viewport used to show. The parameter exists
+            // so the old behaviour can be measured against the new one, not to be turned on.
+            VSync = vsync
         };
 
         if (assetsDir != null)
@@ -57,6 +65,17 @@ public sealed class RuntimeHost : IDisposable
         }
     }
 
+    /// Native ABI version of the loaded engine. Static because it describes the DLL, not a runtime
+    /// instance — a project's compatibility has to be checkable before anything is initialised.
+    public static int ApiVersion
+    {
+        get
+        {
+            try { return TucanoApi.tucano_api_version(); }
+            catch (EntryPointNotFoundException) { return 0; } // engine predates the version export
+        }
+    }
+
     public IntPtr NativeWindowHandle =>
         _handle != IntPtr.Zero ? TucanoApi.tucano_runtime_native_window(_handle) : IntPtr.Zero;
 
@@ -73,6 +92,106 @@ public sealed class RuntimeHost : IDisposable
     {
         if (_handle == IntPtr.Zero) return false;
         return TucanoApi.tucano_runtime_render(_handle);
+    }
+
+    /// Milliseconds spent in each phase of the last frame: simulation, waiting on the GPU or the
+    /// presentation engine, recording commands, and presenting.
+    public (float Sim, float Veg, float GpuWait, float Record, float Ui, float Present) FrameBreakdown
+    {
+        get
+        {
+            if (_handle == IntPtr.Zero) return (0f, 0f, 0f, 0f, 0f, 0f);
+            TucanoApi.tucano_runtime_frame_breakdown(_handle, out var sim, out var veg,
+                out var wait, out var record, out var ui, out var present);
+            return (sim, veg, wait, record, ui, present);
+        }
+    }
+
+    /// Scales a freshly imported range of objects down to `maxSize` metres, anchored at the drop
+    /// point. Returns the factor applied; 1 means the model already fitted.
+    public float FitObjects(uint firstIndex, uint count, float maxSize, float x, float y, float z)
+    {
+        if (_scene == IntPtr.Zero) return 1f;
+        return TucanoApi.tucano_scene_fit_objects(_scene, firstIndex, count, maxSize,
+            new TucanoVec3(x, y, z));
+    }
+
+    /// Vegetation subsystem master switch. Used to isolate its cost when profiling.
+    public void SetVegetationEnabled(bool enabled)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_veg_set_enabled(_handle, enabled);
+    }
+
+    // ── Viewport overlay ──
+    //
+    // Widgets the engine draws inside the viewport. Avalonia cannot paint over the runtime's native
+    // child window, so anything that must appear on the 3D image comes from here.
+
+    [Flags]
+    public enum OverlayFlags : uint
+    {
+        None = 0,
+        Hud = 1,           // camera and selection readout
+        Labels = 2,        // object names pinned in world space
+        GizmoReadout = 4,  // live transform values beside the gizmo
+    }
+
+    public OverlayFlags Overlay
+    {
+        get => _handle != IntPtr.Zero ? (OverlayFlags)TucanoApi.tucano_overlay_get_flags(_handle)
+                                      : OverlayFlags.None;
+        set { if (_handle != IntPtr.Zero) TucanoApi.tucano_overlay_set_flags(_handle, (uint)value); }
+    }
+
+    /// Badge that follows the cursor inside the viewport during a drag. Null clears it.
+    public void SetDropHint(string? text)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_overlay_set_drop_hint(_handle, text);
+    }
+
+    // ── Reflected parameter blocks ──
+
+    /// One editable field, as the engine describes it.
+    public sealed record ReflectedField(
+        string Name, string Label, string Tooltip,
+        TucanoFieldType Type, uint Components,
+        float MinValue, float MaxValue, float Step);
+
+    /// Number of reflected parameter blocks the engine exposes.
+    public uint ReflectedBlockCount =>
+        _handle != IntPtr.Zero ? TucanoApi.tucano_reflect_block_count(_handle) : 0;
+
+    public string ReflectedBlockName(uint block)
+    {
+        if (_handle == IntPtr.Zero) return string.Empty;
+        return Marshal.PtrToStringAnsi(TucanoApi.tucano_reflect_block_name(_handle, block)) ?? string.Empty;
+    }
+
+    /// Field descriptions for a block, in display order.
+    public List<ReflectedField> ReflectedFields(uint block)
+    {
+        var result = new List<ReflectedField>();
+        if (_handle == IntPtr.Zero) return result;
+        var count = TucanoApi.tucano_reflect_field_count(_handle, block);
+        for (uint i = 0; i < count; ++i)
+        {
+            if (!TucanoApi.tucano_reflect_field_info(_handle, block, i, out var info)) continue;
+            result.Add(new ReflectedField(
+                Marshal.PtrToStringAnsi(info.Name) ?? string.Empty,
+                Marshal.PtrToStringAnsi(info.Label) ?? string.Empty,
+                Marshal.PtrToStringAnsi(info.Tooltip) ?? string.Empty,
+                (TucanoFieldType)info.Type, info.Components,
+                info.MinValue, info.MaxValue, info.Step));
+        }
+        return result;
+    }
+
+    public float ReflectedGet(uint block, uint field, uint component = 0) =>
+        _handle != IntPtr.Zero ? TucanoApi.tucano_reflect_get(_handle, block, field, component) : 0f;
+
+    public void ReflectedSet(uint block, uint field, float value, uint component = 0)
+    {
+        if (_handle != IntPtr.Zero) TucanoApi.tucano_reflect_set(_handle, block, field, component, value);
     }
 
     public float LastFrameMs =>

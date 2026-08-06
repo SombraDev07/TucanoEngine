@@ -31,6 +31,7 @@ DX12SwapChain::~DX12SwapChain() {
 }
 
 void DX12SwapChain::setupFrameLatency() {
+  m_frameAcquired = false; // the handle below is a fresh object; any prior signal is gone
   if (FAILED(m_swapChain.As(&m_swapChain2)) || !m_swapChain2) {
     return;
   }
@@ -39,9 +40,21 @@ void DX12SwapChain::setupFrameLatency() {
 }
 
 void DX12SwapChain::waitForFrameLatency() {
+  if (m_frameAcquired) {
+    m_frameAcquired = false; // already consumed by tryAcquireFrame()
+    return;
+  }
   if (m_frameLatencyEvent) {
     WaitForSingleObjectEx(m_frameLatencyEvent, INFINITE, TRUE);
   }
+}
+
+bool DX12SwapChain::tryAcquireFrame() {
+  if (m_frameAcquired) return true;
+  if (!m_frameLatencyEvent) return true; // no waitable object: never throttled
+  const DWORD r = WaitForSingleObjectEx(m_frameLatencyEvent, 0, FALSE);
+  m_frameAcquired = (r == WAIT_OBJECT_0);
+  return m_frameAcquired;
 }
 
 void DX12SwapChain::createBuffers() {

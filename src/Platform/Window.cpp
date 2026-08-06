@@ -1,5 +1,12 @@
 #include "Platform/Window.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 #include <GLFW/glfw3.h>
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
@@ -23,6 +30,20 @@ Window::Window(const WindowDesc& desc) : m_width(desc.width), m_height(desc.heig
   if (!m_window) {
     glfwTerminate();
     throw std::runtime_error("glfwCreateWindow failed");
+  }
+
+  // The requested size is a request: GLFW shrinks the window to fit the work area (a 1080p request
+  // on a 1080p desktop lands at ~1061 once the title bar is accounted for). Everything downstream —
+  // swapchain extent, renderer resolution, ImGui's DisplaySize — has to agree on the real client
+  // size, and the framebuffer-size callback does not fire for the initial size, so read it here.
+  // Before this, ImGui rendered in framebuffer space while the swapchain used the requested size,
+  // which pushed the top rows of the UI outside the presented image.
+  int fbWidth = 0;
+  int fbHeight = 0;
+  glfwGetFramebufferSize(m_window, &fbWidth, &fbHeight);
+  if (fbWidth > 0 && fbHeight > 0) {
+    m_width = static_cast<uint32_t>(fbWidth);
+    m_height = static_cast<uint32_t>(fbHeight);
   }
 
   glfwSetWindowUserPointer(m_window, this);
@@ -50,6 +71,26 @@ Window::~Window() {
 bool Window::shouldClose() const { return glfwWindowShouldClose(m_window) != 0; }
 
 void Window::pollEvents() { glfwPollEvents(); }
+
+void Window::pollEventsEmbedded() {
+#ifdef _WIN32
+  HWND hwnd = glfwGetWin32Window(m_window);
+  if (!hwnd) {
+    glfwPollEvents();
+    return;
+  }
+  // PeekMessage with a window handle only returns messages for that window and its children, so
+  // the host's messages stay queued for the host's own loop. DispatchMessage still routes each
+  // one through GLFW's WndProc, which is what keeps GLFW's input state current.
+  MSG msg;
+  while (PeekMessageW(&msg, hwnd, 0, 0, PM_REMOVE)) {
+    TranslateMessage(&msg);
+    DispatchMessageW(&msg);
+  }
+#else
+  glfwPollEvents();
+#endif
+}
 
 void Window::setTitle(const std::string& title) { glfwSetWindowTitle(m_window, title.c_str()); }
 

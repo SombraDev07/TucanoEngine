@@ -160,6 +160,17 @@ public:
   virtual uint32_t width() const = 0;
   virtual uint32_t height() const = 0;
   virtual void present() = 0;
+
+  /// Non-blocking check for "the presentation engine will accept another frame now".
+  ///
+  /// backBuffer() otherwise waits indefinitely for this, which is fine when the render loop owns
+  /// its thread. It is not fine when the loop shares a thread with a host UI: the wait parks that
+  /// thread for most of a refresh interval every frame, and the UI only gets to run in whatever
+  /// is left. Hosts should poll this and skip the tick when it returns false.
+  ///
+  /// Consumes the readiness signal when it returns true, exactly as the blocking wait does, so a
+  /// true result must be followed by a rendered frame.
+  virtual bool tryAcquireFrame() { return true; }
 };
 
 class CommandList {

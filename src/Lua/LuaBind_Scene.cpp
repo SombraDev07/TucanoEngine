@@ -162,4 +162,8 @@ void registerRendererSettings(lua_State* L) {
 	lua_setglobal(L, "renderer");
 }
 
+void releaseCachedResources() {
+	s_cachedCubeMesh.reset();
+}
+
 } // namespace tucano::LuaBindings

@@ -1,7 +1,23 @@
 {
   "name": "Material_1",
-  "baseColor": [1, 1, 1],
+  "baseColor": [0.510589, 0.100134, 0.074437],
   "emissive": [0, 0, 0],
   "metallic": 0,
-  "roughness": 0.72
+  "roughness": 0.72,
+  "graph": {
+    "nodes": [
+      {"id":"output","type":"MaterialOutput","name":"Material Output","x":600,"y":160},
+      {"id":"basecolor","type":"Constant3","name":"Base Color","x":100,"y":80,"props":{"value":"1,1,1"}},
+      {"id":"roughness","type":"Constant1","name":"Roughness","x":100,"y":200,"props":{"value":"0.72"}},
+      {"id":"metallic","type":"Constant1","name":"Metallic","x":100,"y":280,"props":{"value":"0"}},
+      {"id":"emissive","type":"Constant3","name":"Emissive","x":100,"y":360,"props":{"value":"0,0,0"}},
+      {"id":"4b1651dd","type":"TextureSample","name":"11474523244911310074","x":393.5714285714286,"y":379.28571428571433,"props":{"path":"C:\\TucanoEngine\\Assets\\Sponza\\11474523244911310074.jpg"}}
+    ],
+    "connections": [
+      {"from":"roughness.out","to":"output.roughness"},
+      {"from":"metallic.out","to":"output.metallic"},
+      {"from":"emissive.out","to":"output.emissive"},
+      {"from":"4b1651dd.out","to":"output.albedo"}
+    ]
+  }
 }

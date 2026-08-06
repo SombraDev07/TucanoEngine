@@ -15,6 +15,8 @@ add_library(TucanoRuntime STATIC
   RHI/DX12/GpuCrashRecovery.cpp
   RHI/DX12/SplitTransitionTracker.cpp
   RHI/DX12/DX12ReadBack.cpp
+  RHI/Null/NullDevice.cpp
+  Editor/EditorShell.cpp
   Renderer/Camera.cpp
   Renderer/Mesh.cpp
   AssetPipeline/GLTFAnimation.cpp
@@ -44,6 +46,8 @@ add_library(TucanoRuntime STATIC
   Renderer/Weather/RainSystem.cpp
   Renderer/Weather/CloudSystem.cpp
   Renderer/Weather/CloudNoise.cpp
+  Renderer/Weather/WaterSystem.cpp
+  Renderer/Weather/FogSystem.cpp
   Renderer/RenderGraph/RenderGraph.cpp
   Renderer/Renderer.cpp
   AssetPipeline/GLTFLoader.cpp
@@ -56,6 +60,7 @@ add_library(TucanoRuntime STATIC
   AssetPipeline/AssetRegistry.cpp
   AssetPipeline/DracoMesh.cpp
   AssetPipeline/FBXLoader.cpp
+  AssetPipeline/AssetImport.cpp
   Runtime/Screenshot.cpp
   Runtime/DebugUI.cpp
   Runtime/StbImpl.cpp

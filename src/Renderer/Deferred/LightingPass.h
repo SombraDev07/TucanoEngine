@@ -63,6 +63,14 @@ struct LightingPassContext {
   glm::vec4 moonDiscParams{0.0045f, 1.0f, 1.0f, 0.0f};   ///< angRadius, illum, discBrightness, enable
   glm::vec4 starParams{0.0f, 0.006f, 0.0009f, 0.35f};    ///< intensity, procDensity, sigma, twinkle
   glm::vec4 celestialParams{0.001f, 0.0f, 0.0f, 256.0f}; ///< pixelAngle, time, starFade, dataWidth
+  /// Froxel volumetric fog. `fogVolumeParams` is (froxelX, froxelY, froxelZ, depthPower) and
+  /// `fogVolumeId` the bindless index of the integrated volume; 0 disables the lookup and the
+  /// pass falls back to the analytic height fog in atmParams.
+  glm::vec4 fogVolumeParams{0.0f};
+  glm::vec4 fogVolumeExtra{0.0f}; ///< x = maxDistance, y = enable, z/w unused
+  uint32_t fogVolumeId = 0;
+  rhi::Texture* fogVolume = nullptr;
+
   rhi::Texture* starCellTex = nullptr;
   rhi::Texture* starDataTex = nullptr;
   uint32_t catalogStarCount = 0;

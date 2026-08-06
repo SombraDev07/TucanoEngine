@@ -50,6 +50,20 @@ public partial class EnvironmentWindow : Window
             EnvFogDensity.Value = e.FogDensity;
             EnvFogHeight.Value = e.FogHeight;
 
+            EnvFogEnabled.IsChecked = e.EnableFog != 0;
+            EnvFogVolumetric.IsChecked = e.VolumetricFog != 0;
+            EnvFogDensityVol.Value = e.FogDensityVol;
+            EnvFogBaseHeight.Value = e.FogBaseHeight;
+            EnvFogHeightFalloff.Value = e.FogHeightFalloff;
+            EnvFogAnisotropy.Value = e.FogAnisotropy;
+            EnvFogAlbedo.Value = e.FogAlbedo;
+            EnvFogSunIntensity.Value = e.FogSunIntensity;
+            EnvFogAmbient.Value = e.FogAmbientIntensity;
+            EnvFogShadow.Value = e.FogShadowStrength;
+            EnvFogNoise.Value = e.FogNoiseStrength;
+            EnvFogNoiseScale.Value = e.FogNoiseScale;
+            EnvFogMaxDistance.Value = e.FogMaxDistance;
+
             EnvClouds.IsChecked = e.EnableClouds != 0;
             EnvCloudShadows.IsChecked = e.EnableCloudShadows != 0;
             EnvCloudGodRays.IsChecked = e.EnableCloudGodRays != 0;
@@ -128,6 +142,25 @@ public partial class EnvironmentWindow : Window
         e.Turbidity = (float)EnvTurbidity.Value;
         e.FogDensity = (float)EnvFogDensity.Value;
         e.FogHeight = (float)EnvFogHeight.Value;
+
+        e.EnableFog = B(EnvFogEnabled);
+        e.VolumetricFog = B(EnvFogVolumetric);
+        e.FogDensityVol = (float)EnvFogDensityVol.Value;
+        e.FogBaseHeight = (float)EnvFogBaseHeight.Value;
+        e.FogHeightFalloff = (float)EnvFogHeightFalloff.Value;
+        e.FogAnisotropy = (float)EnvFogAnisotropy.Value;
+        e.FogAlbedo = (float)EnvFogAlbedo.Value;
+        e.FogSunIntensity = (float)EnvFogSunIntensity.Value;
+        e.FogAmbientIntensity = (float)EnvFogAmbient.Value;
+        e.FogShadowStrength = (float)EnvFogShadow.Value;
+        e.FogNoiseStrength = (float)EnvFogNoise.Value;
+        e.FogNoiseScale = (float)EnvFogNoiseScale.Value;
+        e.FogMaxDistance = (float)EnvFogMaxDistance.Value;
+        // Scattering tint is white unless something drives it; no UI for it yet.
+        e.FogScatterR = 1.0f;
+        e.FogScatterG = 1.0f;
+        e.FogScatterB = 1.0f;
+        e.FogNoiseSpeed = 1.5f;
 
         e.EnableClouds = B(EnvClouds);
         e.EnableCloudShadows = B(EnvCloudShadows);
@@ -286,6 +319,29 @@ public partial class EnvironmentWindow : Window
 
     /// Hook for the editor's --selftest run; exercises the same path as the Storm button.
     public void ApplyStormPresetForTest() => OnPresetStorm(this, new RoutedEventArgs());
+
+    /// Drives the volumetric fog controls and reports what the runtime read back, so the selftest
+    /// can prove the sliders actually reach the renderer rather than just moving.
+    public string ApplyFogSettingsForTest(float density, float anisotropy, bool volumetric)
+    {
+        EnvFogEnabled.IsChecked = true;
+        EnvFogVolumetric.IsChecked = volumetric;
+        EnvFogDensityVol.Value = density;
+        EnvFogAnisotropy.Value = anisotropy;
+        ApplyEnvironment();
+
+        if (_runtime is not { IsAlive: true }) return "FAILED - no runtime";
+        var e = _runtime.GetEnvironment();
+        var ok = e.EnableFog != 0 &&
+                 (e.VolumetricFog != 0) == volumetric &&
+                 Math.Abs(e.FogDensityVol - density) < 1e-3f &&
+                 Math.Abs(e.FogAnisotropy - anisotropy) < 1e-3f;
+        return ok
+            ? $"fog round-trip ok (density {e.FogDensityVol:F3}, g {e.FogAnisotropy:F2}, " +
+              $"volumetric {e.VolumetricFog != 0})"
+            : $"FAILED - fog round-trip mismatch (density {e.FogDensityVol:F3} want {density:F3}, " +
+              $"g {e.FogAnisotropy:F2} want {anisotropy:F2}, vol {e.VolumetricFog != 0} want {volumetric})";
+    }
 
     private void OnPresetStorm(object? sender, RoutedEventArgs e) =>
         ApplyPreset(tod: 0.40f, turbidity: 6.5f, coverage: 0.95f, density: 2.2f, storm: 0.9f,

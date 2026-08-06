@@ -127,11 +127,71 @@
                     <StackPanel Spacing="2">
                         <TextBlock Text="FOG" Classes="section" />
 
+                        <CheckBox Name="EnvFogEnabled" Content="Fog" IsChecked="True"
+                                  Margin="0,4,0,0" IsCheckedChanged="OnEnvChanged" />
+                        <CheckBox Name="EnvFogVolumetric" Content="Volumetric (shadowed, light shafts)"
+                                  IsChecked="True" IsCheckedChanged="OnEnvChanged"
+                                  ToolTip.Tip="Off falls back to the cheap analytic height fog" />
+
                         <TextBlock Text="Density" Classes="label" />
-                        <Slider Name="EnvFogDensity" Minimum="0" Maximum="0.1" Value="0.012"
+                        <Slider Name="EnvFogDensityVol" Minimum="0" Maximum="0.2" Value="0.02"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Extinction per metre at the base height" />
+
+                        <TextBlock Text="Base height (m)" Classes="label" />
+                        <Slider Name="EnvFogBaseHeight" Minimum="-200" Maximum="500" Value="0"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Height at which density starts falling off" />
+
+                        <TextBlock Text="Height falloff (m)" Classes="label" />
+                        <Slider Name="EnvFogHeightFalloff" Minimum="1" Maximum="500" Value="60"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Large values give a uniform medium instead of a ground layer" />
+
+                        <TextBlock Text="Anisotropy" Classes="label" />
+                        <Slider Name="EnvFogAnisotropy" Minimum="-0.9" Maximum="0.9" Value="0.6"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Positive scatters forward — this is what makes fog glow around the sun" />
+
+                        <TextBlock Text="Albedo" Classes="label" />
+                        <Slider Name="EnvFogAlbedo" Minimum="0" Maximum="1" Value="0.9"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Scattered vs absorbed. 1 = white fog, low = smoke" />
+
+                        <TextBlock Text="Sun scattering" Classes="label" />
+                        <Slider Name="EnvFogSunIntensity" Minimum="0" Maximum="6" Value="1"
                                 ValueChanged="OnEnvSliderChanged" />
 
-                        <TextBlock Text="Height (m)" Classes="label" />
+                        <TextBlock Text="Ambient" Classes="label" />
+                        <Slider Name="EnvFogAmbient" Minimum="0" Maximum="3" Value="0.35"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Keeps fog in shadow readable instead of black" />
+
+                        <TextBlock Text="Light shafts" Classes="label" />
+                        <Slider Name="EnvFogShadow" Minimum="0" Maximum="1" Value="1"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="How much the sun is shadowed inside the medium" />
+
+                        <TextBlock Text="Noise" Classes="label" />
+                        <Slider Name="EnvFogNoise" Minimum="0" Maximum="1" Value="0.35"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Breaks the medium up so it is not a uniform slab" />
+
+                        <TextBlock Text="Noise scale (m)" Classes="label" />
+                        <Slider Name="EnvFogNoiseScale" Minimum="5" Maximum="400" Value="80"
+                                ValueChanged="OnEnvSliderChanged" />
+
+                        <TextBlock Text="Max distance (m)" Classes="label" />
+                        <Slider Name="EnvFogMaxDistance" Minimum="50" Maximum="2000" Value="400"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Far edge of the froxel volume; beyond it the far-field value is held" />
+
+                        <TextBlock Text="Analytic fallback — density" Classes="label" Margin="0,8,0,0" />
+                        <Slider Name="EnvFogDensity" Minimum="0" Maximum="0.1" Value="0.012"
+                                ValueChanged="OnEnvSliderChanged"
+                                ToolTip.Tip="Used when Volumetric is off, and by the Bruneton path" />
+
+                        <TextBlock Text="Analytic fallback — height (m)" Classes="label" />
                         <Slider Name="EnvFogHeight" Minimum="0" Maximum="400" Value="40"
                                 ValueChanged="OnEnvSliderChanged" />
                     </StackPanel>

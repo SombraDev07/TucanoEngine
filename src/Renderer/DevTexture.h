@@ -30,5 +30,10 @@ std::shared_ptr<Texture> defaultAlbedo(rhi::Device& device);
 std::shared_ptr<Texture> defaultFloor(rhi::Device& device);
 std::shared_ptr<Texture> defaultNormal(rhi::Device& device);
 
+// Drops the cached textures above. Must run before the device they were created on is destroyed:
+// a GPU resource released after its device is a use-after-free in ~DX12Texture. The next
+// default*() call rebuilds them.
+void releaseDefaults();
+
 } // namespace devtex
 } // namespace tucano

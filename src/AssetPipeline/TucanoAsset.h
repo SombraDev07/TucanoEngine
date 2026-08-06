@@ -67,6 +67,8 @@ enum class AssetFlags : uint32_t {
 	HasLods    = 1u << 2,  // mesh has LOD chain
 	Cooked     = 1u << 3,  // shipping-ready, metadata stripped
 	DracoEnc   = 1u << 4,  // uses DRCV/DRCI chunks
+	HasNormals = 1u << 5,  // VERT chunk carries a normal array after the positions
+	HasUVs     = 1u << 6,  // VERT chunk carries a texcoord array after the normals
 };
 
 inline AssetFlags operator|(AssetFlags a, AssetFlags b) { return AssetFlags(uint32_t(a) | uint32_t(b)); }
@@ -122,13 +124,16 @@ static_assert(sizeof(ChunkEntry) == 24, "ChunkEntry must be 24 bytes");
 
 // ── Type-specific data layouts ───────────────────────
 
-// Mesh data stored after metadata in .tuasset
+// Header of the VERT (uncompressed) and DRCV (Draco) mesh chunks.
+//   VERT payload: [MeshAssetData][positions f32x3][normals f32x3?][uvs f32x2?]
+//                 — the optional arrays are present per AssetFlags::HasNormals / HasUVs.
+//   DRCV payload: [MeshAssetData][uint64 dracoByteCount][draco blob]
+//   INDX payload: [uint32 indices] (uncompressed layout only)
 struct MeshAssetData {
 	uint32_t vertexCount = 0;
 	uint32_t indexCount = 0;
 	uint32_t submeshCount = 0;
 	uint32_t meshletCount = 0;
-	// Followed by: [vertices] [indices] [submeshes] [meshlets]
 };
 
 // Texture data
@@ -165,6 +170,8 @@ public:
 
 	void addDependency(const AssetGuid& guid, AssetType type);
 	void setMetadata(const std::string& json);
+	/// ORs `flags` into the header's flag word (see AssetFlags).
+	void addFlags(uint32_t flags);
 	void addChunk(ChunkType type, const void* data, uint32_t size, bool compressZstd = false);
 
 	bool write(const std::string& filePath);
@@ -176,6 +183,7 @@ private:
 	std::vector<ChunkEntry> m_chunks;
 	std::vector<uint8_t> m_dataBuffer;
 	uint64_t m_dataOffset = 0;
+	int m_metaChunkIndex = -1; // index into m_chunks of the Meta entry, -1 when absent
 };
 
 class TucanoAssetReader {

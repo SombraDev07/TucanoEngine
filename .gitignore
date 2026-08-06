@@ -17,17 +17,18 @@ CMakeUserPresets.json
 
 # Third-party engine trees (reference only — never ship)
 /DagorEngine/
+/Esoterica-main/
+/B3DFramework-master/
 /-CRYENGINE-Community-Edition--main/
 /-CRYENGINE*/
 /CRYENGINE*/
 
-# Dagor / CryEngine documentation (local reference)
-/docs/DAGOR_PARITY.md
-/ROADMAP-old.md
-**/*DAGOR*.md
-**/*Dagor*.md
-**/*CRYENGINE*.md
-**/*CryEngine*.md
+# Roadmap files (local planning — not shipped)
+/ROADMAP*.md
+/LandscapeRoadmap.md
+/roadmapIso.md
+/docs/MASTER_ROADMAP.md
+/docs/ROADMAP_VEGETACAO.md
 
 # Proprietary / large SDKs in 3thirdy (keep READMEs + scripts)
 /3thirdy/nsight-aftermath/**
@@ -54,6 +55,24 @@ CMakeUserPresets.json
 
 /captures/*.txt
 /captures/*.dot
+
+# Editor / generated files
+**/bin/
+**/obj/
+/Editor/cache/
+/Editor/imgui.ini
+/imgui.ini
+/lua_log.txt
+/NodeEditor.json
+/NUL.obj
+
+# Screenshots / debug images (root only)
+/*.png
+/editor_stream_world/
+/world_lab/
+
+# Dagor reference docs (local)
+/docs/DAGOR_PARITY.md
 
 # Local vcpkg clone
 /Tools/vcpkg/

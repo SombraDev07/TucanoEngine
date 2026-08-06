@@ -31,6 +31,12 @@ typedef struct {
   const char* shaderDir;
   bool enableDebugLayer;
   bool borderless;
+  /// Present with a sync interval. Leave false when the runtime window is embedded in a host UI
+  /// (the editor): a vsynced Present blocks the calling thread for a full refresh interval, and
+  /// when that thread is also the host's UI thread the whole editor is stalled by it. The host
+  /// compositor already paces the final image to the display.
+  /// Appended at the end of the struct so the C# blittable layout stays compatible.
+  bool vsync;
 } TucanoInitDesc;
 
 typedef struct {
@@ -38,6 +44,17 @@ typedef struct {
 } TucanoVec3;
 
 // ── Lifecycle ────────────────────────────────────────
+
+/// Version of this C ABI, incremented whenever an existing entry point changes shape or meaning.
+/// Appending new functions does not bump it.
+///
+/// A project records the value it was last opened with so an editor and an engine that disagree
+/// can say so, instead of failing somewhere further in with a corrupt-looking scene. Distinct from
+/// tucano_runtime_version(), which is the human-facing release string and carries no compatibility
+/// promise.
+#define TUCANO_API_VERSION 1
+
+TUCANO_API int tucano_api_version(void);
 
 TUCANO_API const char* tucano_runtime_version(void);
 
@@ -74,6 +91,14 @@ TUCANO_API bool tucano_runtime_get_camera_navigation(TucanoRuntime* rt);
 
 // The runtime's own ImGui perf overlay. Off makes sense inside the editor, which has its own
 // status bar (otherwise two different FPS counters show up).
+/// Breakdown of the last rendered frame, in milliseconds. Any pointer may be null.
+/// simMs: input/scripts/animation/physics/streaming. vegMs: vegetation instance upload and cull
+/// dispatch. gpuWaitMs: blocked waiting for the GPU or the presentation engine. recordMs: building
+/// the scene command list. uiMs: ImGui overlay. presentMs: submit + Present.
+TUCANO_API void tucano_runtime_frame_breakdown(TucanoRuntime* rt, float* simMs, float* vegMs,
+                                               float* gpuWaitMs, float* recordMs, float* uiMs,
+                                               float* presentMs);
+
 TUCANO_API void tucano_runtime_set_overlay_visible(TucanoRuntime* rt, bool visible);
 TUCANO_API bool tucano_runtime_get_overlay_visible(TucanoRuntime* rt);
 
@@ -304,6 +329,16 @@ typedef enum {
 } TucanoPhysicsKind;
 
 // Collider assignment is per object and is saved with the scene.
+/// Uniformly scales objects [firstIndex, firstIndex+count) so their combined world bounds fit
+/// inside `maxSize` metres on the largest axis, pivoting about `anchor` and resting the result on
+/// it. Models already smaller than maxSize are left untouched. Returns the factor applied (1 =
+/// nothing changed).
+///
+/// Exists because glTF carries real-world scale: dropping a building-sized model into the
+/// viewport at file scale engulfs the camera and looks like the import is broken.
+TUCANO_API float tucano_scene_fit_objects(TucanoScene* scene, uint32_t firstIndex, uint32_t count,
+                                          float maxSize, TucanoVec3 anchor);
+
 TUCANO_API void tucano_scene_set_object_physics(TucanoScene* scene, uint32_t index,
                                                 TucanoPhysicsKind kind, float mass);
 TUCANO_API TucanoPhysicsKind tucano_scene_get_object_physics(TucanoScene* scene, uint32_t index);
@@ -462,6 +497,23 @@ typedef struct {
   float purkinjeStrength;      // night-vision desaturation in the tonemapper
   float latitudeDeg;           // observer position: decides which constellations are up
   float dayOfYear;             // 0..365; with latitude it sets the sidereal rotation
+
+  // Volumetric fog. Appended at the end, same rule as above.
+  int32_t enableFog;           // master switch for both the volumetric and analytic paths
+  int32_t volumetricFog;       // off falls back to the cheap analytic height fog
+  float fogDensityVol;         // extinction at the base height, per metre
+  float fogBaseHeight;
+  float fogHeightFalloff;      // e-folding distance of the vertical falloff
+  float fogAlbedo;             // scattered vs absorbed fraction
+  float fogAnisotropy;         // Henyey-Greenstein g: >0 glows toward the sun
+  float fogScatterR, fogScatterG, fogScatterB;
+  float fogSunIntensity;
+  float fogAmbientIntensity;
+  float fogShadowStrength;     // 0 = unshadowed medium, 1 = full light shafts
+  float fogNoiseStrength;
+  float fogNoiseScale;
+  float fogNoiseSpeed;
+  float fogMaxDistance;        // far edge of the froxel volume
 } TucanoEnvironment;
 
 typedef struct {
@@ -489,6 +541,61 @@ typedef struct {
   TucanoVec3 color;
   TucanoVec3 wind;
 } TucanoRain;
+
+// ── Viewport overlay ─────────────────────────────────
+//
+// Widgets the engine draws inside the viewport, because a host UI toolkit cannot paint over the
+// runtime's native child window. Toggled as a bitmask; the drop hint is set per-drag.
+
+#define TUCANO_OVERLAY_HUD           1u  // camera and selection readout, bottom-left
+#define TUCANO_OVERLAY_LABELS        2u  // object name pinned above each object's bounds
+#define TUCANO_OVERLAY_GIZMO_READOUT 4u  // live transform values beside the gizmo handles
+
+TUCANO_API void tucano_overlay_set_flags(TucanoRuntime* rt, uint32_t flags);
+TUCANO_API uint32_t tucano_overlay_get_flags(TucanoRuntime* rt);
+
+/// Text of the badge that follows the cursor inside the viewport during a drag. Null or empty
+/// clears it.
+TUCANO_API void tucano_overlay_set_drop_hint(TucanoRuntime* rt, const char* text);
+
+// ── Reflected parameter blocks ───────────────────────
+//
+// A generic view over the engine's parameter structs, so a host can build an editing UI without
+// knowing what the fields are. The host asks which blocks exist, asks each one for its fields, and
+// then reads and writes values by index. Adding a field to a reflected struct makes it appear in
+// any such UI with no host-side change.
+
+typedef struct {
+  const char* name;      // stable identifier
+  const char* label;     // human-facing
+  const char* tooltip;
+  uint32_t type;         // 0 bool, 1 float, 2 int, 3 vec2, 4 vec3, 5 color
+  uint32_t components;   // 1, 2 or 3
+  float minValue;
+  float maxValue;
+  float step;            // suggested increment; 0 means the host picks
+} TucanoFieldInfo;
+
+/// Number of reflected parameter blocks.
+TUCANO_API uint32_t tucano_reflect_block_count(TucanoRuntime* rt);
+
+/// Display name of a block ("Water", "Fog"), or "" when out of range.
+TUCANO_API const char* tucano_reflect_block_name(TucanoRuntime* rt, uint32_t block);
+
+/// Number of fields in a block.
+TUCANO_API uint32_t tucano_reflect_field_count(TucanoRuntime* rt, uint32_t block);
+
+/// Describes one field. Returns false when either index is out of range.
+TUCANO_API bool tucano_reflect_field_info(TucanoRuntime* rt, uint32_t block, uint32_t field,
+                                         TucanoFieldInfo* out);
+
+/// Reads one component of one field. Bools come back as 0 or 1.
+TUCANO_API float tucano_reflect_get(TucanoRuntime* rt, uint32_t block, uint32_t field,
+                                    uint32_t component);
+
+/// Writes one component of one field. Out-of-range indices are ignored.
+TUCANO_API void tucano_reflect_set(TucanoRuntime* rt, uint32_t block, uint32_t field,
+                                   uint32_t component, float value);
 
 TUCANO_API void tucano_env_get(TucanoRuntime* rt, TucanoEnvironment* out);
 TUCANO_API void tucano_env_set(TucanoRuntime* rt, const TucanoEnvironment* env);
@@ -635,6 +742,11 @@ TUCANO_API uint32_t tucano_veg_register_type(TucanoRuntime* rt, const char* name
                                               float cullDist);
 TUCANO_API uint32_t tucano_veg_register_mesh_type(TucanoRuntime* rt, const char* name,
                                                    const char* meshPath);
+/// Turns the whole vegetation subsystem off for this runtime: no instance upload, no GPU cull, and
+/// no instance-cloud draws. Exists so its cost can be isolated when profiling a frame.
+TUCANO_API void tucano_veg_set_enabled(TucanoRuntime* rt, bool enabled);
+TUCANO_API bool tucano_veg_get_enabled(TucanoRuntime* rt);
+
 TUCANO_API void tucano_veg_set_paint(TucanoRuntime* rt, bool enabled, int mode, int typeId,
                                       float radius, float strength);
 TUCANO_API void tucano_veg_set_wind(TucanoRuntime* rt, float strength, float speed);

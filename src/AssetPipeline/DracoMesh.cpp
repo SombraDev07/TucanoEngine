@@ -21,14 +21,27 @@ bool DracoMesh::encode(
 {
 	if (!positions || vertexCount == 0) return false;
 
+	// Indices must be validated before they reach draco: an out-of-range face index walks off the
+	// end of the attribute buffers inside the encoder.
+	if (indices && indexCount > 0) {
+		for (uint32_t i = 0; i < indexCount; ++i) {
+			if (indices[i] >= vertexCount) return false;
+		}
+	}
+
 	draco::Mesh mesh;
 	mesh.set_num_points(vertexCount);
+
+	// `identity_mapping = true`: attribute value i belongs to point i, which is exactly how the
+	// arrays below are laid out. Passing false asks draco for an explicit point->value map that
+	// this code never fills in, leaving the map uninitialised — that is what crashed the encoder.
+	constexpr bool kIdentityMapping = true;
 
 	// Position attribute (required)
 	draco::GeometryAttribute posAttr;
 	posAttr.Init(draco::GeometryAttribute::POSITION, nullptr, 3, draco::DT_FLOAT32, false,
 	             sizeof(float) * 3, 0);
-	int posAttId = mesh.AddAttribute(posAttr, false, vertexCount);
+	int posAttId = mesh.AddAttribute(posAttr, kIdentityMapping, vertexCount);
 	if (posAttId < 0) return false;
 	for (uint32_t i = 0; i < vertexCount; ++i)
 		mesh.attribute(posAttId)->SetAttributeValue(
@@ -40,7 +53,7 @@ bool DracoMesh::encode(
 		draco::GeometryAttribute nrmAttr;
 		nrmAttr.Init(draco::GeometryAttribute::NORMAL, nullptr, 3, draco::DT_FLOAT32, false,
 		             sizeof(float) * 3, 0);
-		nrmAttId = mesh.AddAttribute(nrmAttr, false, vertexCount);
+		nrmAttId = mesh.AddAttribute(nrmAttr, kIdentityMapping, vertexCount);
 		if (nrmAttId < 0) return false;
 		for (uint32_t i = 0; i < vertexCount; ++i)
 			mesh.attribute(nrmAttId)->SetAttributeValue(
@@ -53,7 +66,7 @@ bool DracoMesh::encode(
 		draco::GeometryAttribute uvAttr;
 		uvAttr.Init(draco::GeometryAttribute::TEX_COORD, nullptr, 2, draco::DT_FLOAT32, false,
 		            sizeof(float) * 2, 0);
-		uvAttId = mesh.AddAttribute(uvAttr, false, vertexCount);
+		uvAttId = mesh.AddAttribute(uvAttr, kIdentityMapping, vertexCount);
 		if (uvAttId < 0) return false;
 		for (uint32_t i = 0; i < vertexCount; ++i)
 			mesh.attribute(uvAttId)->SetAttributeValue(

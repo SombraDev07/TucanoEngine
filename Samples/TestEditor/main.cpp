@@ -9,6 +9,8 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <chrono>
+#include <vector>
 #include <array>
 #include <iostream>
 #include <memory>
@@ -104,11 +106,14 @@ void drawSkyQuickBar(RendererSettings& settings) {
 
 int main(int argc, char** argv) {
   std::string screenshotPath;
+  double fpsTestSeconds = 0.0;
   int maxFrames = -1;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--screenshot" && i + 1 < argc) {
       screenshotPath = argv[++i];
+    } else if (a == "--fpstest" && i + 1 < argc) {
+      fpsTestSeconds = std::stod(argv[++i]);
     } else if (a == "--frames" && i + 1 < argc) {
       maxFrames = std::stoi(argv[++i]);
     }
@@ -154,7 +159,16 @@ int main(int argc, char** argv) {
 
     int frame = 0;
     bool shotDone = screenshotPath.empty();
+    // --fpstest: same statistics the editor reports, so the two hosts can be compared directly.
+    std::vector<double> frameSamples;
+    std::chrono::steady_clock::time_point lastFrameStart{};
     while (!window.shouldClose()) {
+      const auto frameStart = std::chrono::steady_clock::now();
+      if (fpsTestSeconds > 0.0 && lastFrameStart.time_since_epoch().count() != 0) {
+        frameSamples.push_back(
+            std::chrono::duration<double, std::milli>(frameStart - lastFrameStart).count());
+      }
+      lastFrameStart = frameStart;
       window.pollEvents();
       input.beginFrame();
       ui.beginFrame();
@@ -226,6 +240,32 @@ int main(int argc, char** argv) {
       if (maxFrames >= 0 && frame >= maxFrames) {
         break;
       }
+      if (fpsTestSeconds > 0.0 && frameSamples.size() > 8) {
+        double total = 0.0;
+        for (double v : frameSamples) total += v;
+        if (total >= fpsTestSeconds * 1000.0) break;
+      }
+    }
+
+    if (fpsTestSeconds > 0.0 && frameSamples.size() > 8) {
+      std::sort(frameSamples.begin(), frameSamples.end());
+      auto pct = [&](double p) {
+        const size_t i = std::min(frameSamples.size() - 1,
+                                  size_t(p * double(frameSamples.size())));
+        return frameSamples[i];
+      };
+      const double median = pct(0.50);
+      const double p95 = pct(0.95);
+      double mean = 0.0;
+      for (double v : frameSamples) mean += v;
+      mean /= double(frameSamples.size());
+      std::cout << "fpstest: frames=" << frameSamples.size() << std::endl
+                << "fpstest: mean=" << mean << "ms (" << (1000.0 / mean) << " FPS)" << std::endl
+                << "fpstest: median=" << median << "ms (" << (1000.0 / median) << " FPS)" << std::endl
+                << "fpstest: p95=" << p95 << "ms  min=" << frameSamples.front()
+                << "ms  max=" << frameSamples.back() << "ms" << std::endl
+                << "fpstest: jitter(p95-median)=" << (p95 - median) << "ms" << std::endl
+                << "fpstest: engine lastFrameMs=" << renderer->lastFrameMs() << "ms" << std::endl;
     }
 
     device->waitIdle();

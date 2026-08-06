@@ -242,6 +242,9 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   cb.size = 512ull * 16ull;
   cb.debugName = "CloudCB";
   m_cloudCB = m_device.createBuffer(cb, nullptr);
+  cb.size = 512ull;
+  cb.debugName = "WaterCB";
+  m_waterCB = m_device.createBuffer(cb, nullptr);
   cb.size = 256;
   cb.debugName = "MeshletCullCB";
   m_meshletCullCB = m_device.createBuffer(cb, nullptr);
@@ -271,6 +274,10 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
   m_rain.params().enabled = false;
   m_clouds.init(m_device);
   m_clouds.resize(m_device, m_width, m_height);
+  m_water.init(m_device, m_rootFS);
+  // Needs the compute root signature, which createPhase3Pipelines() sets up.
+  m_fog.init(m_device, m_rootCS);
+  m_water.resize(m_width, m_height);
 
   m_rtScene.init(m_device);
   if (m_device.supportsRaytracing()) {
@@ -439,6 +446,8 @@ bool Renderer::reloadIBL(const std::string& hdriPath) {
 void Renderer::recreateAfterDeviceLost() {
   const RendererSettings settings = m_settings;
   const RainParams rainParams = m_rain.params();
+  const WaterParams waterParams = m_water.params();
+  const FogParams fogParams = m_fog.params();
   const uint32_t w = m_width;
   const uint32_t h = m_height;
   rhi::Device& device = m_device;
@@ -446,6 +455,8 @@ void Renderer::recreateAfterDeviceLost() {
   new (this) Renderer(device, w, h);
   m_settings = settings;
   m_rain.params() = rainParams;
+  m_water.params() = waterParams;
+  m_fog.params() = fogParams;
 }
 
 void Renderer::createDefaultTextures() {
@@ -905,6 +916,7 @@ void Renderer::resize(uint32_t width, uint32_t height) {
   createTargets();
   m_rain.resize(m_device, m_width, m_height);
   m_clouds.resize(m_device, m_width, m_height);
+  m_water.resize(m_width, m_height);
 }
 
 void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& scene) {
@@ -917,6 +929,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   std::function<void(rhi::CommandList&)> rgGBuffer;
   std::function<void(rhi::CommandList&)> rgAO;
   std::function<void(rhi::CommandList&)> rgLighting;
+  std::function<void(rhi::CommandList&)> rgWater;
   std::function<void(rhi::CommandList&)> rgClouds;
   std::function<void(rhi::CommandList&)> rgSSGI;
   std::function<void(rhi::CommandList&)> rgDDGI;
@@ -1011,6 +1024,20 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       [&](rhi::CommandList& c, RenderGraph&) {
         if (rgLighting) {
           rgLighting(c);
+        }
+      });
+  m_graph.addPass(
+      "Water",
+      [&](RGPassBuilder& b) {
+        b.read(hDepthColor);
+        b.read(hHdr);
+        b.write(hHdr, RGUsage::RenderTarget);
+        b.write(hCompose, RGUsage::RenderTarget);
+        b.enabled = m_water.params().enabled;
+      },
+      [&](rhi::CommandList& c, RenderGraph&) {
+        if (rgWater) {
+          rgWater(c);
         }
       });
   m_graph.addPass(
@@ -2402,6 +2429,33 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                                 glm::radians(m_settings.starSizeDeg), m_settings.starTwinkle);
     lctx.celestialParams =
         glm::vec4(pixelAngle, m_timeSeconds, starFade, float(m_starDataWidth));
+    // Volumetric fog: build the froxel volume just before it is consumed, so it sees this
+    // frame's shadow cascades. The compute passes bind the compute root signature, so this has
+    // to happen before the lighting pass sets up its own graphics state.
+    if (m_fog.active()) {
+      FogSystem::FrameContext fctx;
+      fctx.invViewProj = frame.invViewProj;
+      fctx.prevViewProj = m_hasPrevCamera ? m_prevViewProj : frame.viewProj;
+      fctx.view = frame.view;
+      fctx.cameraPos = eye;
+      fctx.timeSeconds = m_timeSeconds;
+      fctx.sunDir = glm::vec3(frame.sunDirectionIntensity);
+      fctx.sunIntensity = frame.sunDirectionIntensity.w;
+      fctx.sunColor = glm::vec3(frame.sunColor);
+      fctx.ambientColor = glm::vec3(frame.ambientColor);
+      fctx.wind = m_settings.wind;
+      for (int i = 0; i < 4; ++i) fctx.lightViewProj[i] = frame.lightViewProj[i];
+      fctx.cascadeSplits = lctx.cascadeSplits;
+      fctx.shadowBindless = m_settings.enableShadows && m_shadowMap ? bindlessOf(*m_shadowMap) : 0;
+      fctx.frameIndex = m_device.frameIndex();
+      m_fog.execute(m_device, *cmd, fctx);
+
+      lctx.fogVolumeParams = glm::vec4(m_fog.volumeDimensions(), m_fog.params().depthPower);
+      lctx.fogVolumeExtra = glm::vec4(m_fog.params().maxDistance, 1.0f, 0.0f, 0.0f);
+      lctx.fogVolumeId = m_fog.integratedBindless();
+      lctx.fogVolume = m_fog.integratedVolume();
+    }
+
     lctx.starCellTex = m_starCellTex.get();
     lctx.starDataTex = m_starDataTex.get();
     lctx.catalogStarCount = m_starCount;
@@ -2410,6 +2464,37 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     executeLightingPass(lctx);
   }
   }; // rgLighting
+
+  rgWater = [&](rhi::CommandList& c) {
+    cmd = &c;
+    cmd->setDescriptorHeap();
+    // Rain drives the water surface: impact ripples, extra microfacet roughness (which is what
+    // breaks the mirror in a downpour) and heavier foam. Opt out per-scene via rainDrivesWater
+    // when the water's wetness is scripted independently of the weather system.
+    if (m_water.params().rainDrivesWater) {
+      const auto& rp = m_rain.params();
+      m_water.params().rainIntensity = rp.enabled ? std::clamp(rp.amount, 0.0f, 1.0f) : 0.0f;
+    }
+    rhi::Texture* waterSrc = postHdr;
+    rhi::Texture* waterDst = (postHdr == m_hdr.get()) ? m_hdrCompose.get() : m_hdr.get();
+    rhi::Texture* rt = waterDst;
+    cmd->setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
+    cmd->setRootSignature(*m_rootFS);
+    cmd->setGraphicsRootSrvTable(3, 0);
+    cmd->setGraphicsRootSamplerTable(4, sampTable);
+    rhi::Texture* weather = m_settings.enableClouds ? m_clouds.weatherMap() : nullptr;
+    uint32_t depthIdx = bindlessOf(*m_depthColor);
+    uint32_t hdrIdx = bindlessOf(*waterSrc);
+    uint32_t weatherIdx = weather ? bindlessOf(*weather) : 0;
+    // Reflect the same prefiltered environment the IBL shades against, so the mirrored sky
+    // matches the sky the atmosphere pass actually drew.
+    const uint32_t prefilteredIdx = m_prefiltered ? bindlessOf(*m_prefiltered) : 0;
+    m_water.execute(*cmd, *waterSrc, *m_depthColor, weather, *m_waterCB, *m_samplerLinear, frame.invViewProj,
+                    frame.viewProj, frame.view, eye, sunDir, sunColor, m_settings.turbidity, m_timeSeconds,
+                    m_width, m_height, depthIdx, hdrIdx, weatherIdx, prefilteredIdx, float(m_iblMaxMip),
+                    m_iblExposure * m_skyLightScale);
+    postHdr = waterDst;
+  };
 
   rgClouds = [&](rhi::CommandList& c) {
     cmd = &c;

@@ -19,6 +19,7 @@ public:
   uint32_t width() const override { return m_width; }
   uint32_t height() const override { return m_height; }
   void present() override;
+  bool tryAcquireFrame() override;
   void waitForFrameLatency();
   uint32_t currentIndex() const { return m_frameIndex; }
 
@@ -36,6 +37,9 @@ private:
   bool m_vsync = true;
   HWND m_hwnd = nullptr;
   HANDLE m_frameLatencyEvent = nullptr;
+  // Set by a successful tryAcquireFrame(): the readiness signal has already been consumed, so
+  // the next backBuffer() must not wait for it a second time (that would stall a whole frame).
+  bool m_frameAcquired = false;
 };
 
 } // namespace tucano::rhi
