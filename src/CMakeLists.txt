@@ -72,6 +72,9 @@ add_library(TucanoRuntime STATIC
   Core/Json.cpp
   Audio/Audio.cpp
   Core/TaskScheduler.cpp
+  Animation/Graph/GraphNode.cpp
+  Animation/Graph/GraphInstance.cpp
+  Animation/AnimationGraphComponent.cpp
   World/WorldGrid.cpp
   World/StreamingBudget.cpp
   World/StreamingScheduler.cpp
