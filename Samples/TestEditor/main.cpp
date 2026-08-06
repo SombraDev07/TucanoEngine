@@ -1,4 +1,13 @@
 #include "Common/SkyScene.h"
+#include "Editor/EditorShell.h"
+#include "Editor/EditorContext.h"
+#include "Editor/OutlinerPanel.h"
+#include "Editor/InspectorPanel.h"
+#include "Editor/ContentBrowser.h"
+#include "Editor/ConsolePanel.h"
+#include "Editor/EnvironmentPanel.h"
+#include "Editor/ToolsPanel.h"
+#include "Editor/StatsPanel.h"
 #include "Platform/Input.h"
 #include "Platform/Window.h"
 #include "Renderer/Renderer.h"
@@ -8,10 +17,7 @@
 #include <GLFW/glfw3.h>
 #include <imgui.h>
 
-#include <algorithm>
 #include <chrono>
-#include <vector>
-#include <array>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -20,259 +26,210 @@ using namespace tucano;
 
 namespace {
 
-struct CamBookmark {
-  const char* name;
-  glm::vec3 pos;
-  glm::vec3 look;
-};
-
-const CamBookmark kBookmarks[] = {
-    {"Horizon wide", {0.0f, 6.0f, 28.0f}, {0.0f, 8.0f, 0.0f}},
-    {"Low ground", {0.0f, 1.6f, 12.0f}, {0.0f, 4.0f, -20.0f}},
-    {"Up into clouds", {0.0f, 40.0f, 10.0f}, {0.0f, 80.0f, -40.0f}},
-    {"Golden look", {-20.0f, 5.0f, 8.0f}, {10.0f, 12.0f, -30.0f}},
-};
-
-void drawCameraEditor(Scene& scene, float aspect) {
-  ImGui::SetNextWindowSize(ImVec2(340, 280), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Camera Editor")) {
-    ImGui::End();
-    return;
-  }
-  glm::vec3 pos = scene.camera.position();
-  if (ImGui::DragFloat3("Position", &pos.x, 0.1f)) {
-    scene.camera.setPosition(pos);
-  }
-  static float fovDeg = 65.0f;
-  static float nearP = 0.2f;
-  static float farP = 4000.0f;
-  bool projDirty = false;
-  projDirty |= ImGui::SliderFloat("FOV", &fovDeg, 30.0f, 110.0f);
-  projDirty |= ImGui::DragFloat("Near", &nearP, 0.05f, 0.05f, 10.0f);
-  projDirty |= ImGui::DragFloat("Far", &farP, 10.0f, 100.0f, 8000.0f);
-  if (projDirty) {
-    scene.camera.setPerspective(glm::radians(fovDeg), aspect, nearP, farP);
-  }
-  ImGui::Separator();
-  ImGui::TextUnformatted("Bookmarks");
-  for (const auto& b : kBookmarks) {
-    if (ImGui::Button(b.name)) {
-      scene.camera.setPosition(b.pos);
-      scene.camera.lookAt(b.look);
-    }
-  }
-  ImGui::Separator();
-  if (ImGui::Button("Reset default view")) {
-    scene.camera.setPosition({0.0f, 4.0f, 18.0f});
-    scene.camera.lookAt({0.0f, 3.0f, 0.0f});
-    fovDeg = 65.0f;
-    nearP = 0.2f;
-    farP = 4000.0f;
-    scene.camera.setPerspective(glm::radians(fovDeg), aspect, nearP, farP);
-  }
-  ImGui::End();
-}
-
-void drawSkyQuickBar(RendererSettings& settings) {
-  ImGui::SetNextWindowPos(ImVec2(12, 90), ImGuiCond_FirstUseEver);
-  ImGui::SetNextWindowBgAlpha(0.7f);
-  if (ImGui::Begin("Sky Quick", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::Checkbox("Atmosphere", &settings.enableAtmosphere);
-    ImGui::Checkbox("Clouds", &settings.enableClouds);
-    ImGui::Checkbox("Cloud shadows", &settings.enableCloudShadows);
-    ImGui::Checkbox("God rays", &settings.enableCloudGodRays);
-    ImGui::SliderFloat("Time of day", &settings.timeOfDay, 0.0f, 1.0f);
-    ImGui::SliderFloat("Coverage", &settings.cloudCoverage, 0.0f, 1.0f);
-    ImGui::SliderFloat("Storminess", &settings.cloudStorminess, 0.0f, 1.0f);
-    if (ImGui::Button("Noon clear")) {
-      settings.timeOfDay = 0.5f;
-      settings.cloudCoverage = 0.2f;
-      settings.cloudStorminess = 0.05f;
-      settings.turbidity = 2.0f;
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Storm")) {
-      settings.timeOfDay = 0.4f;
-      settings.cloudCoverage = 0.92f;
-      settings.cloudStorminess = 0.9f;
-      settings.turbidity = 6.0f;
-      settings.fogDensity = 0.03f;
-    }
-  }
-  ImGui::End();
-}
-
-} // namespace
-
 int main(int argc, char** argv) {
-  std::string screenshotPath;
-  double fpsTestSeconds = 0.0;
-  int maxFrames = -1;
-  for (int i = 1; i < argc; ++i) {
-    const std::string a = argv[i];
-    if (a == "--screenshot" && i + 1 < argc) {
-      screenshotPath = argv[++i];
-    } else if (a == "--fpstest" && i + 1 < argc) {
-      fpsTestSeconds = std::stod(argv[++i]);
-    } else if (a == "--frames" && i + 1 < argc) {
-      maxFrames = std::stoi(argv[++i]);
-    }
-  }
+	std::string screenshotPath;
+	double fpsTestSeconds = 0.0;
+	int maxFrames = -1;
+	bool forceVsync = true;
+	for (int i = 1; i < argc; ++i) {
+		const std::string a = argv[i];
+		if (a == "--screenshot" && i + 1 < argc) screenshotPath = argv[++i];
+		else if (a == "--fpstest" && i + 1 < argc) fpsTestSeconds = std::stod(argv[++i]);
+		else if (a == "--frames" && i + 1 < argc) maxFrames = std::stoi(argv[++i]);
+		else if (a == "--novsync") forceVsync = false;
+	}
 
-  try {
-    Window window({1920, 1080, "Tucano — Test Editor (sky / clouds / camera)"});
-    auto device = rhi::Device::create(true);
-    auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
-    auto renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
-    skylab::configureCleanRenderer(*renderer);
+	try {
+		Window window({1920, 1080, "Tucano Editor"});
+		auto device = rhi::Device::create(true);
+		auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), forceVsync);
+		auto renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
+		skylab::configureCleanRenderer(*renderer);
 
-    Input input(window.handle());
-    DebugUI ui;
-    ui.init(window, *device);
+		Input input(window.handle());
+		DebugUI ui;
+		ui.init(window, *device);
 
-    Scene scene;
-    skylab::buildCleanScene(*device, scene);
-    scene.camera.setPerspective(glm::radians(65.0f), window.aspect(), 0.2f, 4000.0f);
+		Scene scene;
+		skylab::buildCleanScene(*device, scene);
+		scene.camera.setPerspective(glm::radians(65.0f), window.aspect(), 0.2f, 4000.0f);
 
-    device->setDeviceLostCallback([&]() {
-      const Camera cam = scene.camera;
-      const RendererSettings settings = renderer->settings();
-      ui.shutdown();
-      renderer.reset();
-      swapChain.reset();
-      swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
-      renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
-      renderer->settings() = settings;
-      skylab::buildCleanScene(*device, scene);
-      scene.camera = cam;
-      ui.init(window, *device);
-    });
+		// ── Editor ──
+		editor::EditorShell shell;
+		editor::EditorContext ctx;
+		ctx.scene = &scene;
+		ctx.renderer = renderer.get();
+		ctx.settings = &renderer->settings();
+		ctx.camera = &scene.camera;
+		ctx.logInfo("Tucano Editor started.");
+		ctx.logInfo("Renderer: Direct3D 12, " + std::to_string(window.width()) + "x" + std::to_string(window.height()));
 
-    window.setResizeCallback([&](uint32_t w, uint32_t h) {
-      if (!swapChain || !renderer) {
-        return;
-      }
-      swapChain->resize(w, h);
-      renderer->resize(w, h);
-      scene.camera.setPerspective(glm::radians(65.0f), window.aspect(), 0.2f, 4000.0f);
-    });
+		editor::OutlinerPanel outliner;
+		editor::InspectorPanel inspector;
+		editor::ContentBrowser contentBrowser;
+		editor::ConsolePanel console;
+		editor::EnvironmentPanel environment;
+		editor::ToolsPanel tools;
+		editor::StatsPanel stats;
 
-    int frame = 0;
-    bool shotDone = screenshotPath.empty();
-    // --fpstest: same statistics the editor reports, so the two hosts can be compared directly.
-    std::vector<double> frameSamples;
-    std::chrono::steady_clock::time_point lastFrameStart{};
-    while (!window.shouldClose()) {
-      const auto frameStart = std::chrono::steady_clock::now();
-      if (fpsTestSeconds > 0.0 && lastFrameStart.time_since_epoch().count() != 0) {
-        frameSamples.push_back(
-            std::chrono::duration<double, std::milli>(frameStart - lastFrameStart).count());
-      }
-      lastFrameStart = frameStart;
-      window.pollEvents();
-      input.beginFrame();
-      ui.beginFrame();
-      ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
-      ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
-      drawSkyQuickBar(renderer->settings());
-      drawCameraEditor(scene, window.aspect());
+		shell.onNewScene = [&]() { ctx.logInfo("New Scene (not implemented)."); };
+		shell.onOpenScene = [&]() { ctx.logInfo("Open Scene (not implemented)."); };
+		shell.onSaveScene = [&]() { ctx.logInfo("Save Scene (not implemented)."); };
+		shell.onImportAsset = [&]() { ctx.logInfo("Import Asset (not implemented)."); };
 
-      if (!ui.wantCaptureKeyboard() && input.keyPressed(GLFW_KEY_F12) && screenshotPath.empty()) {
-        screenshotPath = "test_editor_capture.png";
-        shotDone = false;
-      }
+		// ── TDR recovery ──
+		device->setDeviceLostCallback([&]() {
+			const Camera cam = scene.camera;
+			const RendererSettings settings = renderer->settings();
+			ui.shutdown();
+			renderer.reset();
+			swapChain.reset();
+			swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), forceVsync);
+			renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
+			renderer->settings() = settings;
+			skylab::buildCleanScene(*device, scene);
+			scene.camera = cam;
+			ctx.renderer = renderer.get();
+			ctx.settings = &renderer->settings();
+			ui.init(window, *device);
+			ctx.logWarn("Device lost — recovered.");
+		});
 
-      float dx = 0, dy = 0;
-      input.mouseDelta(dx, dy);
-      glm::vec3 move(0);
-      if (!ui.wantCaptureKeyboard()) {
-        if (input.keyDown(GLFW_KEY_W)) {
-          move.z += 1;
-        }
-        if (input.keyDown(GLFW_KEY_S)) {
-          move.z -= 1;
-        }
-        if (input.keyDown(GLFW_KEY_A)) {
-          move.x -= 1;
-        }
-        if (input.keyDown(GLFW_KEY_D)) {
-          move.x += 1;
-        }
-        if (input.keyDown(GLFW_KEY_E)) {
-          move.y += 1;
-        }
-        if (input.keyDown(GLFW_KEY_Q)) {
-          move.y -= 1;
-        }
-      }
-      const float speed = input.keyDown(GLFW_KEY_LEFT_SHIFT) ? 40.0f : 12.0f;
-      const bool look = input.mouseDown(GLFW_MOUSE_BUTTON_RIGHT) && !ui.wantCaptureMouse();
-      scene.camera.fly(1.0f / 60.0f, move * speed, look ? dx * 0.0025f : 0.0f, look ? -dy * 0.0025f : 0.0f);
+		window.setResizeCallback([&](uint32_t w, uint32_t h) {
+			if (!swapChain || !renderer) return;
+			swapChain->resize(w, h);
+			renderer->resize(w, h);
+			ctx.viewportW = w;
+			ctx.viewportH = h;
+			scene.camera.setPerspective(glm::radians(65.0f), window.aspect(), 0.2f, 4000.0f);
+		});
 
-      if (frame % 60 == 0) {
-        const float fps = 1000.0f / std::max(1.0f, renderer->lastFrameMs());
-        window.setTitle("Tucano TestEditor | " + std::to_string(int(fps)) +
-                        " FPS | sky editor | WASD+RMB | F12");
-      }
-      input.endFrame();
+		shell.init("EditorLayout.ini");
 
-      auto* cmd = device->beginFrame();
-      auto& bb = swapChain->backBuffer();
-      renderer->render(cmd, bb, scene);
-      ui.endFrame(*cmd, bb);
+		int frame = 0;
+		bool shotDone = screenshotPath.empty();
+		std::vector<double> frameSamples;
+		std::chrono::steady_clock::time_point lastFrameStart{};
 
-      ScreenshotPending shot;
-      if (!shotDone && frame >= 5) {
-        shot = beginScreenshot(*device, *cmd, bb);
-      }
-      cmd->transition(bb, rhi::ResourceState::Present);
-      device->endFrame(*swapChain);
-      if (shot.impl) {
-        device->waitIdle();
-        finalizeScreenshot(shot, screenshotPath);
-        shotDone = true;
-        std::cout << "Saved " << screenshotPath << "\n";
-        if (maxFrames < 0) {
-          maxFrames = frame + 1;
-        }
-      }
-      ++frame;
-      if (maxFrames >= 0 && frame >= maxFrames) {
-        break;
-      }
-      if (fpsTestSeconds > 0.0 && frameSamples.size() > 8) {
-        double total = 0.0;
-        for (double v : frameSamples) total += v;
-        if (total >= fpsTestSeconds * 1000.0) break;
-      }
-    }
+		while (!window.shouldClose() && !shell.quitRequested()) {
+			const auto frameStart = std::chrono::steady_clock::now();
+			if (fpsTestSeconds > 0.0 && lastFrameStart.time_since_epoch().count() != 0) {
+				frameSamples.push_back(std::chrono::duration<double, std::milli>(frameStart - lastFrameStart).count());
+			}
+			lastFrameStart = frameStart;
 
-    if (fpsTestSeconds > 0.0 && frameSamples.size() > 8) {
-      std::sort(frameSamples.begin(), frameSamples.end());
-      auto pct = [&](double p) {
-        const size_t i = std::min(frameSamples.size() - 1,
-                                  size_t(p * double(frameSamples.size())));
-        return frameSamples[i];
-      };
-      const double median = pct(0.50);
-      const double p95 = pct(0.95);
-      double mean = 0.0;
-      for (double v : frameSamples) mean += v;
-      mean /= double(frameSamples.size());
-      std::cout << "fpstest: frames=" << frameSamples.size() << std::endl
-                << "fpstest: mean=" << mean << "ms (" << (1000.0 / mean) << " FPS)" << std::endl
-                << "fpstest: median=" << median << "ms (" << (1000.0 / median) << " FPS)" << std::endl
-                << "fpstest: p95=" << p95 << "ms  min=" << frameSamples.front()
-                << "ms  max=" << frameSamples.back() << "ms" << std::endl
-                << "fpstest: jitter(p95-median)=" << (p95 - median) << "ms" << std::endl
-                << "fpstest: engine lastFrameMs=" << renderer->lastFrameMs() << "ms" << std::endl;
-    }
+			window.pollEvents();
+			input.beginFrame();
+			ui.beginFrame();
 
-    device->waitIdle();
-    ui.shutdown();
-    return 0;
-  } catch (const std::exception& ex) {
-    std::cerr << "Fatal: " << ex.what() << "\n";
-    return 1;
-  }
+			// ── Editor UI ──
+			shell.beginFrame();
+
+			if (shell.isVisible(editor::Panel::Outliner)) {
+				shell.panel(editor::Panel::Outliner, [&]() { outliner.draw(ctx); });
+			}
+			if (shell.isVisible(editor::Panel::Inspector)) {
+				shell.panel(editor::Panel::Inspector, [&]() { inspector.draw(ctx); });
+			}
+			if (shell.isVisible(editor::Panel::ContentBrowser)) {
+				shell.panel(editor::Panel::ContentBrowser, [&]() { contentBrowser.draw(ctx); });
+			}
+			if (shell.isVisible(editor::Panel::Console)) {
+				shell.panel(editor::Panel::Console, [&]() { console.draw(ctx); });
+			}
+			if (shell.isVisible(editor::Panel::Environment)) {
+				shell.panel(editor::Panel::Environment, [&]() { environment.draw(ctx); });
+			}
+			if (shell.isVisible(editor::Panel::Tools)) {
+				shell.panel(editor::Panel::Tools, [&]() { tools.draw(ctx); });
+			}
+			if (shell.isVisible(editor::Panel::Stats)) {
+				shell.panel(editor::Panel::Stats, [&]() { stats.draw(ctx); });
+			}
+
+			shell.endFrame();
+
+			// Status bar
+			{
+				const float fps = renderer->lastFrameMs() > 0 ? 1000.0f / renderer->lastFrameMs() : 0;
+				char buf[128];
+				snprintf(buf, sizeof(buf), "%.0f FPS | %u draws | %ux%u",
+				         fps, renderer->drawCalls(), ctx.viewportW, ctx.viewportH);
+				shell.setStatus(buf);
+			}
+
+			// ── 3D viewport controls ──
+			if (!ui.wantCaptureKeyboard()) {
+				float dx = 0, dy = 0;
+				input.mouseDelta(dx, dy);
+				glm::vec3 move(0);
+				if (input.keyDown(GLFW_KEY_W)) move.z += 1;
+				if (input.keyDown(GLFW_KEY_S)) move.z -= 1;
+				if (input.keyDown(GLFW_KEY_A)) move.x -= 1;
+				if (input.keyDown(GLFW_KEY_D)) move.x += 1;
+				if (input.keyDown(GLFW_KEY_E)) move.y += 1;
+				if (input.keyDown(GLFW_KEY_Q)) move.y -= 1;
+				const float speed = input.keyDown(GLFW_KEY_LEFT_SHIFT) ? 40.0f : 12.0f;
+				const bool look = input.mouseDown(GLFW_MOUSE_BUTTON_RIGHT) && !ui.wantCaptureMouse();
+				scene.camera.fly(1.0f / 60.0f, move * speed,
+				                 look ? dx * 0.0025f : 0.0f,
+				                 look ? -dy * 0.0025f : 0.0f);
+			}
+
+			if (!ui.wantCaptureKeyboard() && input.keyPressed(GLFW_KEY_F12)) {
+				screenshotPath = screenshotPath.empty() ? "editor_capture.png" : screenshotPath;
+				shotDone = false;
+				ctx.logInfo("Screenshot: " + screenshotPath);
+			}
+
+			input.endFrame();
+
+			// ── Render ──
+			auto* cmd = device->beginFrame();
+			auto& bb = swapChain->backBuffer();
+			renderer->render(cmd, bb, scene);
+			ui.endFrame(*cmd, bb);
+
+			// Screenshot
+			ScreenshotPending shot;
+			if (!shotDone && frame >= 5) {
+				shot = beginScreenshot(*device, *cmd, bb);
+			}
+			cmd->transition(bb, rhi::ResourceState::Present);
+			device->endFrame(*swapChain);
+			if (shot.impl) {
+				device->waitIdle();
+				finalizeScreenshot(shot, screenshotPath);
+				shotDone = true;
+				std::cout << "Saved " << screenshotPath << "\n";
+			}
+
+			++frame;
+			if (maxFrames >= 0 && frame >= maxFrames) break;
+			if (fpsTestSeconds > 0.0 && frameSamples.size() > 8) {
+				double total = 0.0;
+				for (double v : frameSamples) total += v;
+				if (total >= fpsTestSeconds * 1000.0) break;
+			}
+		}
+
+		if (fpsTestSeconds > 0.0 && !frameSamples.empty()) {
+			std::sort(frameSamples.begin(), frameSamples.end());
+			auto pct = [&](double p) { return frameSamples[std::min(frameSamples.size() - 1, size_t(p * frameSamples.size()))]; };
+			double mean = 0;
+			for (double v : frameSamples) mean += v;
+			mean /= frameSamples.size();
+			std::cout << "fpstest: frames=" << frameSamples.size() << " mean=" << mean
+			          << "ms (" << (1000.0 / mean) << " FPS) median=" << pct(0.50)
+			          << "ms p95=" << pct(0.95) << "ms\n";
+		}
+
+		device->waitIdle();
+		shell.shutdown();
+		ui.shutdown();
+		return 0;
+	} catch (const std::exception& ex) {
+		std::cerr << "Fatal: " << ex.what() << "\n";
+		return 1;
+	}
 }
