@@ -99,7 +99,7 @@ int main(int argc, char** argv) {
 	editor::EnvironmentPanel environment;
 	editor::ToolsPanel tools;
 	editor::StatsPanel stats;
-	editor::AnimationPanel animation;
+	// editor::AnimationPanel animation;  // FIXME: crash on startup
 
 		shell.onNewScene = [&]() { ctx.logInfo("New Scene (not implemented)."); };
 		shell.onOpenScene = [&]() { ctx.logInfo("Open Scene (not implemented)."); };
@@ -175,7 +175,8 @@ int main(int argc, char** argv) {
 			if (shell.isVisible(editor::Panel::Stats)) {
 				shell.panel(editor::Panel::Stats, [&]() { stats.draw(ctx); });
 			}
-			// Animation panel (custom window, not in dock by default)
+			// Animation panel (disabled - crash fix pending)
+			/*
 			{
 				ImGui::SetNextWindowSize(ImVec2(360, 400), ImGuiCond_FirstUseEver);
 				if (ImGui::Begin("Animation", nullptr)) {
@@ -183,6 +184,7 @@ int main(int argc, char** argv) {
 				}
 				ImGui::End();
 			}
+			*/
 
 			shell.endFrame();
 

@@ -1,4 +1,4 @@
-add_executable(TestEditor main.cpp "${CMAKE_SOURCE_DIR}/src/Core/MemoryOverride.cpp")
+add_executable(TestEditor main.cpp)
 target_include_directories(TestEditor PRIVATE "${CMAKE_SOURCE_DIR}/Samples")
 target_link_libraries(TestEditor PRIVATE TucanoRuntime lua libcurl rpmalloc)
 add_custom_command(TARGET TestEditor POST_BUILD
