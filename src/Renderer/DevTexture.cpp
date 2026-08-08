@@ -214,22 +214,35 @@ std::mutex g_defaultsMutex;
 std::shared_ptr<Texture> g_defaultAlbedo;
 std::shared_ptr<Texture> g_defaultFloor;
 std::shared_ptr<Texture> g_defaultNormal;
+// The device this cache was filled from, so the release hook is registered exactly once per
+// device — including a device recreated after a TDR, which needs its own registration.
+rhi::Device* g_defaultsDevice = nullptr;
+
+// Called with g_defaultsMutex held.
+void ensureReleaseRegistered(rhi::Device& device) {
+  if (g_defaultsDevice == &device) return;
+  g_defaultsDevice = &device;
+  device.onBeforeDestroy([] { releaseDefaults(); });
+}
 } // namespace
 
 std::shared_ptr<Texture> defaultAlbedo(rhi::Device& device) {
   std::lock_guard<std::mutex> lock(g_defaultsMutex);
+  ensureReleaseRegistered(device);
   if (!g_defaultAlbedo) g_defaultAlbedo = checkerAlbedo(device);
   return g_defaultAlbedo;
 }
 
 std::shared_ptr<Texture> defaultFloor(rhi::Device& device) {
   std::lock_guard<std::mutex> lock(g_defaultsMutex);
+  ensureReleaseRegistered(device);
   if (!g_defaultFloor) g_defaultFloor = floorAlbedo(device);
   return g_defaultFloor;
 }
 
 std::shared_ptr<Texture> defaultNormal(rhi::Device& device) {
   std::lock_guard<std::mutex> lock(g_defaultsMutex);
+  ensureReleaseRegistered(device);
   if (!g_defaultNormal) g_defaultNormal = checkerNormal(device);
   return g_defaultNormal;
 }
@@ -239,6 +252,7 @@ void releaseDefaults() {
   g_defaultAlbedo.reset();
   g_defaultFloor.reset();
   g_defaultNormal.reset();
+  g_defaultsDevice = nullptr;
 }
 
 } // namespace tucano::devtex

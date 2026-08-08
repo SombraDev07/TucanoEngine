@@ -17,6 +17,26 @@ add_library(TucanoRuntime STATIC
   RHI/DX12/DX12ReadBack.cpp
   RHI/Null/NullDevice.cpp
   Editor/EditorShell.cpp
+  Editor/EditorTool.cpp
+  Editor/ToolHost.cpp
+  Editor/UndoStack.cpp
+  Editor/DialogManager.cpp
+  Editor/SystemDialogs.cpp
+  Editor/WindowChrome.cpp
+  Editor/SceneTool.cpp
+  Editor/PropertyGrid.cpp
+  Editor/InspectorPanel.cpp
+  Editor/TypeEditingRules.cpp
+  Editor/EngineEditingRules.cpp
+  Editor/UI/Pickers.cpp
+  Editor/DemoTools.cpp
+  Editor/UI/Fonts.cpp
+  Editor/UI/Style.cpp
+  Editor/UI/Widgets.cpp
+  Editor/UI/Gallery.cpp
+  Editor/UI/Notifications.cpp
+  Editor/UI/TreeListView.cpp
+  Editor/UI/CurveEditor.cpp
   Renderer/Camera.cpp
   Renderer/Mesh.cpp
   AssetPipeline/GLTFAnimation.cpp
@@ -67,6 +87,8 @@ add_library(TucanoRuntime STATIC
   Physics/PhysicsWorld.cpp
   Core/JobSystem.cpp
   Core/Memory.cpp
+  Core/TypeSystem/TypeRegistry.cpp
+  Generated/Reflection.g.cpp
   AssetPipeline/TinyExrImpl.cpp
   Renderer/Sky/Celestial.cpp
   Core/Json.cpp

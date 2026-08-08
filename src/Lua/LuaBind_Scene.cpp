@@ -68,6 +68,10 @@ static std::shared_ptr<Mesh> getOrCreateCubeMesh(rhi::Device& device) {
 	sub.aabbMax = { s, s, s};
 
 	s_cachedCubeMesh = Mesh::create(device, verts, indices, {sub});
+	// The cache outlives the device unless it is told not to: a static shared_ptr<Mesh> is freed
+	// during static destruction, long after the device it was built from is gone. Registered here
+	// rather than at startup so a program that never creates a cube never registers anything.
+	device.onBeforeDestroy([] { releaseCachedResources(); });
 	return s_cachedCubeMesh;
 }
 

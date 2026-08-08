@@ -63,9 +63,10 @@ void BarrierBatcher::reset() {
   m_promoted = 0;
 }
 
-void BarrierBatcher::trackCpuState(ID3D12Resource* resource, ResourceState* cpuState) {
+void BarrierBatcher::trackCpuState(ID3D12Resource* resource, ResourceState* cpuState,
+                                   std::vector<ResourceState>* subresourceStates) {
   if (resource && cpuState) {
-    m_cpuStates[resource] = cpuState;
+    m_cpuStates[resource] = CpuStateRef{cpuState, subresourceStates};
   }
 }
 
@@ -195,8 +196,17 @@ void BarrierBatcher::decayTracked(ID3D12GraphicsCommandList* cmd) {
     state = next;
 
     auto it = m_cpuStates.find(res);
-    if (it != m_cpuStates.end() && it->second) {
-      *it->second = ResourceState::Common;
+    if (it != m_cpuStates.end()) {
+      if (it->second.summary) {
+        *it->second.summary = ResourceState::Common;
+      }
+      // The per-subresource array is what transition() reads. Leaving it stale here is what made
+      // the next frame skip the barrier and use the resource in COMMON.
+      if (it->second.subresources) {
+        for (ResourceState& s : *it->second.subresources) {
+          s = ResourceState::Common;
+        }
+      }
     }
   }
   flush(cmd);

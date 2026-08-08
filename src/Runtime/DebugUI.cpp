@@ -1,4 +1,6 @@
 #include "Runtime/DebugUI.h"
+#include "Editor/UI/Fonts.h"
+#include "Editor/UI/Style.h"
 #include "RHI/DX12/DX12Device.h"
 #include "RHI/DX12/DX12CommandList.h"
 #include "RHI/DX12/DX12Resource.h"
@@ -31,9 +33,14 @@ void DebugUI::init(Window& window, rhi::Device& device) {
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
-  ImGui::StyleColorsDark();
+  // Tucano palette in place of ImGui's stock dark theme.
+  editor::Style::apply();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+
+  // Before the renderer backend: it uploads whatever the atlas holds the first time it draws, so
+  // fonts added afterwards would never reach the GPU.
+  editor::buildFonts();
 
   ImGui_ImplGlfw_InitForOther(window.handle(), true);
 
@@ -53,7 +60,10 @@ void DebugUI::init(Window& window, rhi::Device& device) {
   ImGui_ImplDX12_InitInfo init{};
   init.Device = dx.device();
   init.CommandQueue = dx.queue();
-  init.NumFramesInFlight = static_cast<int>(rhi::kMaxFramesInFlight);
+  // Must cover every frame the CPU can be ahead by, not just the device's frame-slot count: the
+  // backend cycles one vertex/index buffer per value here, and reusing one the GPU is still reading
+  // corrupts that frame's geometry. kBackBufferCount is the real bound.
+  init.NumFramesInFlight = static_cast<int>(rhi::kBackBufferCount);
   init.RTVFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
   init.SrvDescriptorHeap = heap;
   init.LegacySingleSrvCpuDescriptor = heap->GetCPUDescriptorHandleForHeapStart();

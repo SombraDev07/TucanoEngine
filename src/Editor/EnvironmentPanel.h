@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/EditorContext.h"
+#include "Editor/UI/Pickers.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/Weather/RainParams.h"
 #include "Renderer/Weather/WaterParams.h"
@@ -112,6 +113,26 @@ public:
 		// ── GI ──
 		if (ImGui::CollapsingHeader("Global Illumination")) {
 			ImGui::Checkbox("IBL", &s.enableIBL);
+
+			// The HDRI driving image-based lighting was only changeable by editing the source or
+			// passing a flag. Picking one re-cooks the IBL immediately; reloadIBL keeps the previous
+			// environment when the file cannot be used, so a bad pick costs nothing.
+			m_hdriPicker.setRoot(TUCANO_ENGINE_ASSETS_DIR);
+			m_hdriPicker.setKind(ui::AssetPicker::Kind::Hdri);
+			if (m_hdriPicker.path() != s.hdriPath) m_hdriPicker.setPath(s.hdriPath);
+			ImGui::TextUnformatted("HDRI");
+			ImGui::SameLine();
+			if (m_hdriPicker.draw("##hdri")) {
+				const std::string previous = s.hdriPath;
+				if (ctx.renderer->reloadIBL(m_hdriPicker.path())) {
+					s.hdriPath = m_hdriPicker.path();
+					ctx.logInfo("IBL reloaded from " + s.hdriPath);
+				} else {
+					m_hdriPicker.setPath(previous);
+					ctx.logWarn("Could not load HDRI: " + m_hdriPicker.path());
+				}
+			}
+
 			ImGui::Checkbox("SSR", &s.enableSSR);
 			ImGui::Checkbox("Voxel GI", &s.enableVoxelGI);
 			ImGui::Checkbox("RT Reflections", &s.enableRTReflections);
@@ -129,6 +150,9 @@ public:
 			ImGui::SliderFloat("Purkinje", &s.purkinjeStrength, 0.0f, 1.0f);
 		}
 	}
+
+private:
+	ui::AssetPicker m_hdriPicker;
 };
 
 } // namespace tucano::editor

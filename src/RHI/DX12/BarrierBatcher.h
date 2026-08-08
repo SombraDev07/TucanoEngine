@@ -21,7 +21,13 @@ public:
   void decayTracked(ID3D12GraphicsCommandList* cmd);
 
   // Register CPU-side ResourceState for decay updates on close().
-  void trackCpuState(ID3D12Resource* resource, ResourceState* cpuState);
+  //
+  // `subresourceStates` is the per-subresource array a texture actually consults when deciding
+  // whether a barrier is needed. It MUST be passed for textures: updating only the summary `state`
+  // on decay leaves that array claiming the old state, so the next frame skips the barrier and the
+  // resource is used while the GPU has already decayed it to COMMON.
+  void trackCpuState(ID3D12Resource* resource, ResourceState* cpuState,
+                     std::vector<ResourceState>* subresourceStates = nullptr);
 
   uint32_t pendingCount() const { return static_cast<uint32_t>(m_barriers.size()); }
   uint32_t coalescedCount() const { return m_coalesced; }
@@ -42,7 +48,11 @@ private:
 
   std::vector<D3D12_RESOURCE_BARRIER> m_barriers;
   std::unordered_map<ID3D12Resource*, D3D12_RESOURCE_STATES> m_trackedDx;
-  std::unordered_map<ID3D12Resource*, ResourceState*> m_cpuStates;
+  struct CpuStateRef {
+    ResourceState* summary = nullptr;
+    std::vector<ResourceState>* subresources = nullptr; // null for buffers
+  };
+  std::unordered_map<ID3D12Resource*, CpuStateRef> m_cpuStates;
   uint32_t m_coalesced = 0;
   uint32_t m_erased = 0;
   uint32_t m_promoted = 0;

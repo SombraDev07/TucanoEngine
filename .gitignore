@@ -74,6 +74,10 @@ EditorLayout.ini
 # Local vcpkg clone
 /Tools/vcpkg/
 
+# Reflector compile arguments — generated at configure time from this machine's MSVC and Windows
+# SDK paths. The template (compile_args.txt.in) is what belongs in the repo.
+/Tools/Reflector/compile_args.txt
+
 # TestPlay deploy (keep README; ignore built binaries / shaders)
 /TestPlay/*.exe
 /TestPlay/*.dll

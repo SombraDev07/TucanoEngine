@@ -52,7 +52,7 @@ void DX12CommandList::transition(Texture& texture, ResourceState state) {
       continue;
     }
     any = true;
-    m_barriers.trackCpuState(tex.get(), &tex.state);
+    m_barriers.trackCpuState(tex.get(), &tex.state, &tex.subresourceStates);
     m_barriers.transition(tex.get(), toD3D(tex.subresourceStates[i]), afterDx, i);
     tex.subresourceStates[i] = state;
   }
@@ -60,7 +60,7 @@ void DX12CommandList::transition(Texture& texture, ResourceState state) {
     tex.state = state;
   } else if (tex.state != state) {
     // Fallback ALL_SUBRESOURCES if tracking empty mismatch
-    m_barriers.trackCpuState(tex.get(), &tex.state);
+    m_barriers.trackCpuState(tex.get(), &tex.state, &tex.subresourceStates);
     m_barriers.transition(tex.get(), toD3D(tex.state), afterDx);
     tex.state = state;
   }
@@ -78,7 +78,7 @@ void DX12CommandList::transition(Texture& texture, ResourceState state, uint32_t
   if (tex.subresourceStates[idx] == state) {
     return;
   }
-  m_barriers.trackCpuState(tex.get(), &tex.state);
+  m_barriers.trackCpuState(tex.get(), &tex.state, &tex.subresourceStates);
   m_barriers.transition(tex.get(), toD3D(tex.subresourceStates[idx]), toD3D(state), idx);
   tex.subresourceStates[idx] = state;
 }
@@ -149,6 +149,10 @@ void DX12CommandList::setRenderTargets(std::span<Texture*> rtvs, Texture* dsv) {
 
 void DX12CommandList::clearRenderTarget(Texture& rtv, const float color[4]) {
   auto& tex = static_cast<DX12Texture&>(rtv);
+  // A clear writes the resource, so it has to observe pending transitions just like a draw does.
+  // Barriers were only flushed on draw/dispatch, which silently recorded clears ahead of the
+  // barrier that made the target writable.
+  m_barriers.flush(m_cmd.Get());
   m_cmd->ClearRenderTargetView(tex.rtv, color, 0, nullptr);
 }
 
@@ -156,11 +160,13 @@ void DX12CommandList::clearRenderTargetRect(Texture& rtv, const float color[4], 
                                             uint32_t w, uint32_t h) {
   auto& tex = static_cast<DX12Texture&>(rtv);
   D3D12_RECT rect{LONG(x), LONG(y), LONG(x + w), LONG(y + h)};
+  m_barriers.flush(m_cmd.Get());
   m_cmd->ClearRenderTargetView(tex.rtv, color, 1, &rect);
 }
 
 void DX12CommandList::clearDepth(Texture& dsv, float depth) {
   auto& tex = static_cast<DX12Texture&>(dsv);
+  m_barriers.flush(m_cmd.Get());
   m_cmd->ClearDepthStencilView(tex.dsv, D3D12_CLEAR_FLAG_DEPTH, depth, 0, 0, nullptr);
 }
 

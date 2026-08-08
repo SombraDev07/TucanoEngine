@@ -70,7 +70,10 @@ target_include_directories(imgui_lib PUBLIC
   ${imgui_SOURCE_DIR}/backends
   ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo)
 target_link_libraries(imgui_lib PUBLIC glfw d3d12 dxgi)
-target_compile_definitions(imgui_lib PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
+# IMGUI_USE_WCHAR32 makes ImWchar 32-bit. The Material Design icon codepoints run past U+FFFF, and
+# with the default 16-bit index they are unreachable — icons render as nothing, silently. This must
+# stay PUBLIC: a mismatch between imgui_lib and its callers changes struct layouts.
+target_compile_definitions(imgui_lib PUBLIC IMGUI_DEFINE_MATH_OPERATORS IMGUI_USE_WCHAR32)
 
 # Tracy optional stub — keep header-only macros disabled by default
 add_library(tracy_stub INTERFACE)

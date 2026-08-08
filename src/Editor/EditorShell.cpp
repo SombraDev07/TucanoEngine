@@ -1,8 +1,15 @@
 #include "Editor/EditorShell.h"
+#include "Editor/EditorTool.h"
+#include "Editor/ToolHost.h"
+#include "Editor/UI/Icons.h"
+#include "Editor/UI/Widgets.h"
+#include "Editor/WindowChrome.h"
+#include "Editor/UI/Style.h"
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -99,6 +106,10 @@ void EditorShell::shutdown() {
 	if (!m_layoutPath.empty()) {
 		ImGui::SaveIniSettingsToDisk(m_layoutPath.c_str());
 	}
+	// Undo the window subclassing here, not in the destructor: restoring the frame makes Windows
+	// deliver messages synchronously, and by destructor time the objects those messages reach —
+	// the scene, the swapchain — may already be gone.
+	if (m_chrome != nullptr) m_chrome->shutdown();
 	m_ready = false;
 }
 
@@ -138,6 +149,7 @@ void EditorShell::beginFrame() {
 	ImGui::PopStyleVar(3);
 
 	const ImGuiID dockspaceId = ImGui::GetID(kDockSpaceName);
+	m_dockspaceId = static_cast<uint32_t>(dockspaceId);
 	if (m_rebuildLayout || ImGui::DockBuilderGetNode(dockspaceId) == nullptr) {
 		buildDefaultLayout(dockspaceId);
 		m_rebuildLayout = false;
@@ -177,6 +189,14 @@ void EditorShell::buildDefaultLayout(uint32_t dockspaceId) {
 void EditorShell::drawMenuBar() {
 	if (!ImGui::BeginMenuBar()) return;
 
+	// Brand on the left, ahead of the menus — where every borderless editor puts it, and the one
+	// place in a menu bar whose position is not fought over by SameLine offsets.
+	if (borderless()) {
+		ui::textColored(Style::kAccent0, TUCANO_ICON_BIRD "  Tucano");
+		ImGui::Spacing();
+		ImGui::SameLine();
+	}
+
 	// ── File ──
 	if (ImGui::BeginMenu("File")) {
 		if (ImGui::MenuItem("New Scene", "Ctrl+N")) {
@@ -201,8 +221,8 @@ void EditorShell::drawMenuBar() {
 
 	// ── Edit ──
 	if (ImGui::BeginMenu("Edit")) {
-		if (ImGui::MenuItem("Undo", "Ctrl+Z")) {}
-		if (ImGui::MenuItem("Redo", "Ctrl+Y")) {}
+		// Undo/Redo come from the focused tool's own stack, labelled with what they will undo.
+		m_toolHost->drawEditMenu();
 		ImGui::Separator();
 		if (ImGui::MenuItem("Duplicate", "Ctrl+D")) {}
 		if (ImGui::MenuItem("Delete", "Del")) {}
@@ -227,6 +247,8 @@ void EditorShell::drawMenuBar() {
 
 	// ── Tools ──
 	if (ImGui::BeginMenu("Tools")) {
+		m_toolHost->drawToolsMenu();
+		ImGui::Separator();
 		if (ImGui::MenuItem("Terrain Sculpt")) {}
 		if (ImGui::MenuItem("Vegetation Paint")) {}
 		if (ImGui::MenuItem("Material Editor")) {}
@@ -244,9 +266,23 @@ void EditorShell::drawMenuBar() {
 
 	// Status bar
 	if (!m_status.empty()) {
+		// Leave room for the window buttons when they are present, or the status text slides under
+		// them and the close button becomes unreadable.
+		const float buttonRoom = borderless() ? ImGui::GetFrameHeight() * 4.8f : 0.0f;
 		const float w = ImGui::CalcTextSize(m_status.c_str()).x;
-		ImGui::SameLine(ImGui::GetContentRegionMax().x - w - ImGui::GetStyle().FramePadding.x * 2.0f);
+		ImGui::SameLine(ImGui::GetContentRegionMax().x - w - buttonRoom -
+		                ImGui::GetStyle().FramePadding.x * 2.0f);
 		ImGui::TextUnformatted(m_status.c_str());
+	}
+
+	drawWindowButtons();
+
+	if (borderless()) {
+		// Windows needs both numbers to decide whether a click drags the window: how tall the bar we
+		// drew is, and whether the cursor is over something in it that should be clicked instead.
+		m_chrome->setTitleBarHeight(ImGui::GetFrameHeight());
+		m_chrome->setInteractiveHovered(ImGui::IsAnyItemHovered() ||
+		                                ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId));
 	}
 
 	ImGui::EndMenuBar();
@@ -267,11 +303,77 @@ void EditorShell::panel(Panel p, const std::function<void()>& body) {
 
 void EditorShell::endFrame() {
 	if (!m_ready) return;
+	// Once a tool is open it owns these panels as tool windows (P2-06). Drawing the shell's own
+	// copies too would put two "Outliner" windows on screen, one of them permanently empty.
+	if (!m_toolHost->tools().empty()) return;
 	for (size_t i = 0; i < kPanelCount; ++i) {
 		if (m_ownedThisFrame & (1u << i)) continue;
 		const auto p = static_cast<Panel>(i);
 		panel(p, [i]() { ImGui::TextDisabled("%s", kPlaceholder[i]); });
 	}
+}
+
+// ── Tools ───────────────────────────────────────────────────────────────────
+// Lifetime lives in ToolHost; the shell only supplies the dockspace they dock into.
+
+EditorShell::EditorShell() : m_toolHost(std::make_unique<ToolHost>()) {}
+EditorShell::~EditorShell() = default;
+
+EditorTool* EditorShell::addTool(std::unique_ptr<EditorTool> tool) {
+	return m_toolHost->open(std::move(tool));
+}
+
+void EditorShell::closeTool(EditorTool* tool) { m_toolHost->requestClose(tool); }
+
+const std::vector<std::unique_ptr<EditorTool>>& EditorShell::tools() const {
+	return m_toolHost->tools();
+}
+
+void EditorShell::drawTools(float deltaSeconds) {
+	if (!m_ready) return;
+	m_toolHost->draw(m_dockspaceId, deltaSeconds);
+}
+
+// ── Borderless chrome ───────────────────────────────────────────────────────
+
+bool EditorShell::enableBorderlessTitleBar(void* nativeWindowHandle) {
+	if (m_chrome == nullptr) m_chrome = std::make_unique<WindowChrome>();
+	return m_chrome->install(nativeWindowHandle);
+}
+
+bool EditorShell::borderless() const { return m_chrome != nullptr && m_chrome->installed(); }
+
+void EditorShell::drawWindowButtons() {
+	if (!borderless()) return;
+
+	const ImGuiStyle& style = ImGui::GetStyle();
+	const float buttonWidth = ImGui::GetFrameHeight() * 1.6f;
+	// Right-aligned, in the order Windows uses — muscle memory puts close in the corner.
+	const float total = buttonWidth * 3.0f;
+	ImGui::SameLine(ImGui::GetContentRegionMax().x - total - style.FramePadding.x);
+
+	ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0, 0, 0, 0));
+	ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.0f);
+
+	if (ImGui::Button(TUCANO_ICON_WINDOW_MINIMIZE, ImVec2(buttonWidth, 0.0f))) {
+		m_chrome->minimize();
+	}
+	ImGui::SameLine(0.0f, 0.0f);
+	if (ImGui::Button(m_chrome->isMaximized() ? TUCANO_ICON_WINDOW_RESTORE : TUCANO_ICON_WINDOW_MAXIMIZE,
+	                  ImVec2(buttonWidth, 0.0f))) {
+		m_chrome->toggleMaximize();
+	}
+	ImGui::SameLine(0.0f, 0.0f);
+	// Close gets the destructive hover colour, the way every window manager marks it.
+	ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.79f, 0.13f, 0.13f, 1.0f));
+	ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.60f, 0.10f, 0.10f, 1.0f));
+	if (ImGui::Button(TUCANO_ICON_CLOSE, ImVec2(buttonWidth, 0.0f))) {
+		m_chrome->requestClose();
+	}
+	ImGui::PopStyleColor(2);
+
+	ImGui::PopStyleVar();
+	ImGui::PopStyleColor();
 }
 
 } // namespace tucano::editor

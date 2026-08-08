@@ -32,6 +32,10 @@ DX12Device::DX12Device(bool enableDebugLayer) {
 }
 
 DX12Device::~DX12Device() {
+  // First, while everything below is still alive: let process-lifetime caches drop the GPU
+  // resources they hold. If they wait for static destruction they will be freeing them through a
+  // device that no longer exists.
+  runBeforeDestroyCallbacks();
   stopWorker();
   try {
     waitIdle();

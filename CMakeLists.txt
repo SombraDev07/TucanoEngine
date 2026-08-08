@@ -181,6 +181,8 @@ add_subdirectory(Tools/AnimationTest)
 add_subdirectory(Tools/WorldTest)
 add_subdirectory(Tools/WorldGpuTest)
 add_subdirectory(Tools/RHITest)
+add_subdirectory(Tools/UITest)
+add_subdirectory(Tools/Reflector)
 
 add_dependencies(TucanoRuntime TucanoShaders)
 add_dependencies(HelloTriangle TucanoShaders)

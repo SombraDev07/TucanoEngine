@@ -1,83 +1,43 @@
 #pragma once
 
-#include "Editor/EditorContext.h"
-#include "Renderer/Scene.h"
+#include "Editor/PropertyGrid.h"
 
-#include <imgui.h>
-#include <glm/glm.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <glm/gtc/quaternion.hpp>
+// InspectorPanel — the properties of whatever is selected in the Outliner.
+//
+// P4-05 of the roadmap. This panel used to be ~85 lines of hand-written ImGui: a DragFloat3 per
+// transform field, a fixed handful of material sliders, and a quaternion-to-Euler conversion done
+// inline. It is now two PropertyGrids over the reflection generated from the
+// annotations on Material and RenderObject themselves (P3-03), so
+// what it shows is decided by the structs rather than by this file.
+//
+// The practical difference: `aoFactor`, `reflectance`, `clearcoatRoughness`, `fuzzColor`,
+// `detailScale`, `alphaMask` and `alphaCutoff` were live material parameters the hand-written panel
+// never exposed. They appear now because they are declared, not because anyone wrote a row for
+// them — and the same will be true of the next field added to Material.
 
 namespace tucano::editor {
 
+struct EditorContext;
+class UndoStack;
+
 class InspectorPanel {
 public:
-	void draw(EditorContext& ctx) {
-		if (!ctx.scene) { ImGui::TextDisabled("No scene."); return; }
-		auto& objects = ctx.scene->objects;
-		if (ctx.selectedObject < 0 || static_cast<size_t>(ctx.selectedObject) >= objects.size()) {
-			ImGui::TextDisabled("Select an object in the Outliner.");
-			return;
-		}
+	void draw(EditorContext& context);
 
-		auto& obj = objects[ctx.selectedObject];
-		const char* name = obj.name.empty() ? "Unnamed" : obj.name.c_str();
+	// Edits become undo steps when a stack is bound. The loose-panel hosts have no undo stack, so
+	// this is optional rather than a constructor argument.
+	void setUndoStack(UndoStack* stack);
 
-		ImGui::TextUnformatted(name);
-		ImGui::Separator();
-
-		// ── Transform ──
-		if (ImGui::CollapsingHeader("Transform", ImGuiTreeNodeFlags_DefaultOpen)) {
-			glm::vec3 pos = obj.transform.translation;
-			if (ImGui::DragFloat3("Position", glm::value_ptr(pos), 0.1f)) {
-				obj.transform.translation = pos;
-			}
-
-			const float RAD2DEG = 180.0f / glm::pi<float>();
-			glm::vec3 euler = glm::eulerAngles(obj.transform.rotation) * RAD2DEG;
-			if (ImGui::DragFloat3("Rotation", glm::value_ptr(euler), 0.5f)) {
-				obj.transform.rotation = glm::quat(euler / RAD2DEG);
-			}
-
-			glm::vec3 scale = obj.transform.scale;
-			if (ImGui::DragFloat3("Scale", glm::value_ptr(scale), 0.01f, 0.01f, 100.0f)) {
-				obj.transform.scale = scale;
-			}
-
-			if (ImGui::Button("Reset")) {
-				obj.transform.translation = glm::vec3(0);
-				obj.transform.rotation = glm::quat(1, 0, 0, 0);
-				obj.transform.scale = glm::vec3(1);
-			}
-		}
-
-		// ── Material ──
-		if (ImGui::CollapsingHeader("Material", ImGuiTreeNodeFlags_DefaultOpen)) {
-			if (!obj.materials.empty() && obj.materials[0]) {
-				auto& mat = *obj.materials[0];
-				if (ImGui::ColorEdit3("Base Color", glm::value_ptr(mat.baseColorFactor))) {}
-				ImGui::SliderFloat("Metallic", &mat.metallicFactor, 0.0f, 1.0f);
-				ImGui::SliderFloat("Roughness", &mat.roughnessFactor, 0.0f, 1.0f, "%.3f");
-				ImGui::SliderFloat("Clearcoat", &mat.clearcoat, 0.0f, 1.0f);
-				ImGui::SliderFloat("Fuzz", &mat.fuzz, 0.0f, 1.0f);
-				if (mat.emissiveFactor.r > 0 || mat.emissiveFactor.g > 0 || mat.emissiveFactor.b > 0) {
-					ImGui::Text("Emissive: %.2f %.2f %.2f", mat.emissiveFactor.r, mat.emissiveFactor.g, mat.emissiveFactor.b);
-				}
-			} else {
-				ImGui::TextDisabled("No material.");
-			}
-		}
-
-		// ── Info ──
-		ImGui::Separator();
-		ImGui::Checkbox("Visible", &obj.visible);
-		if (obj.mesh) {
-			ImGui::TextDisabled("Mesh: %zu verts", obj.mesh->vertexCount());
-		}
-	}
+	// True when the last draw() changed something; the host decides what "dirty" means for it.
+	bool changed() const { return m_changed; }
 
 private:
-	glm::vec3 m_lastEuler{0};
+	// The object and its material are separate registered types reached through a shared_ptr, so
+	// they are two grids. Both are driven by the single filter box the panel draws.
+	PropertyGrid m_objectGrid;
+	PropertyGrid m_materialGrid;
+	int m_materialSlot = 0;
+	bool m_changed = false;
 };
 
 } // namespace tucano::editor

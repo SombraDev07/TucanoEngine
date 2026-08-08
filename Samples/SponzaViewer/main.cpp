@@ -1,5 +1,13 @@
 #include "AssetPipeline/GLTFLoader.h"
 #include "Editor/EditorShell.h"
+#include "Editor/DemoTools.h"
+#include "Editor/EditorTool.h"
+#include "Editor/EditorContext.h"
+#include "Editor/SceneTool.h"
+#include "Editor/SystemDialogs.h"
+#include "Editor/ToolHost.h"
+#include "Editor/UI/Gallery.h"
+#include "Editor/UI/Notifications.h"
 #include "Platform/Input.h"
 #include "Platform/Window.h"
 #include "Renderer/Renderer.h"
@@ -53,6 +61,14 @@ int main(int argc, char** argv) {
   int maxFrames = -1;
   int shotFrame = 5;
   bool editorMode = false;
+  bool uiGallery = false;
+  bool toolsDemo = false;
+  int closeDirtyAtFrame = -1;
+  bool borderless = false;
+  bool sceneTool = false;
+  // Selection normally comes from a click in the Outliner, which an unattended screenshot run has
+  // no way to make. -1 keeps the default "nothing selected".
+  int selectObject = -1;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--scene" && i + 1 < argc) {
@@ -67,6 +83,29 @@ int main(int argc, char** argv) {
       shotFrame = std::stoi(argv[++i]);
     } else if (a == "--editor") {
       editorMode = true;
+    } else if (a == "--tools-demo") {
+      // Implies --editor: shows two EditorTools side by side as tabs, each with its own layout.
+      editorMode = true;
+      toolsDemo = true;
+    } else if (a == "--scene-tool") {
+      // The real panels (P2-06) hosted by SceneTool, instead of the demo stand-ins.
+      editorMode = true;
+      sceneTool = true;
+    } else if (a == "--select" && i + 1 < argc) {
+      selectObject = std::stoi(argv[++i]);
+    } else if (a == "--borderless") {
+      editorMode = true;
+      borderless = true;
+    } else if (a == "--tools-demo-close" && i + 1 < argc) {
+      // Requests closing the dirty demo tool at a given frame, so the save prompt is on screen for a
+      // screenshot. Interactive verification would need a click, which a headless run cannot make.
+      editorMode = true;
+      toolsDemo = true;
+      closeDirtyAtFrame = std::stoi(argv[++i]);
+    } else if (a == "--ui-gallery") {
+      // Implies --editor: the gallery is part of the editor UI, not the viewer.
+      editorMode = true;
+      uiGallery = true;
     } else if (a == "--layout" && i + 1 < argc) {
       // Lets the layout gate use a throwaway ini instead of stomping the dev's own.
       layoutPath = argv[++i];
@@ -111,12 +150,62 @@ int main(int argc, char** argv) {
     // Editor mode (Track D0): docking shell over the live scene. Must init after DebugUI (it needs
     // the ImGui context) and before the first frame (so ImGui loads the layout ini).
     editor::EditorShell shell;
+    editor::EditorContext editorContext;
+    editor::EditorTool* dirtyDemoTool = nullptr;
     if (editorMode) {
       if (shell.init(layoutPath)) {
         window.setTitle("Tucano Editor");
         std::cout << "[SponzaViewer] Editor mode — layout: " << layoutPath << "\n";
       } else {
         std::cerr << "[SponzaViewer] Editor mode unavailable (no ImGui context)\n";
+      }
+      // File menu wired to the OS dialogs. People already know their own file picker; an in-engine
+      // browser is a worse copy that has to be maintained forever.
+      shell.onOpenScene = [] {
+        const std::string path =
+            editor::openFileDialog("Open Scene", {{"Scenes", "*.gltf;*.glb;*.scn"}});
+        if (path.empty()) {
+          editor::ui::notifyInfo("Open cancelled.");
+        } else {
+          editor::ui::notifySuccess("Selected: %s", path.c_str());
+        }
+      };
+      shell.onSaveScene = [] {
+        const std::string path =
+            editor::saveFileDialog("Save Scene", {{"Scenes", "*.scn"}}, "Untitled.scn");
+        if (!path.empty()) editor::ui::notifySuccess("Would save to: %s", path.c_str());
+      };
+      shell.onImportAsset = [] {
+        const std::vector<std::string> paths = editor::openFilesDialog(
+            "Import Assets", {{"Models", "*.gltf;*.glb;*.fbx"}, {"Textures", "*.png;*.dds;*.exr"}});
+        if (!paths.empty()) editor::ui::notifySuccess("%zu asset(s) selecionado(s)", paths.size());
+      };
+
+      if (borderless) {
+        if (shell.enableBorderlessTitleBar(window.nativeHandle())) {
+          std::cout << "[SponzaViewer] Borderless title bar ativo\n";
+        } else {
+          std::cerr << "[SponzaViewer] Nao foi possivel instalar o chrome sem borda\n";
+        }
+      }
+
+      if (sceneTool) {
+        auto tool = std::make_unique<editor::SceneTool>();
+        tool->setContext(&editorContext);
+        shell.addTool(std::move(tool));
+      }
+
+      if (toolsDemo) {
+        // Two tools with deliberately different layouts — the point of P2-01 is that each keeps its
+        // own arrangement instead of sharing one global dockspace.
+        shell.addTool(editor::makeSceneDemoTool());
+        editor::EditorTool* material =
+            shell.addTool(editor::makeMaterialDemoTool("Assets/Materials/Material_1.tmat"));
+        // Starts dirty so the unsaved marker and the close prompt are reachable in the demo without
+        // having to edit something first.
+        if (material != nullptr) material->markDirty();
+        dirtyDemoTool = material;
+        std::cout << "[SponzaViewer] Tools demo: " << shell.tools().size() << " ferramentas\n";
       }
     }
 
@@ -216,9 +305,36 @@ int main(int argc, char** argv) {
       } else {
         ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
       }
-      ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+      // The weather panel is a viewer control, not an editor tool; in the tools demo it would just
+      // float over the thing being demonstrated.
+      // The weather panel is a viewer control; with a tool open the Environment tool window covers
+      // the same ground and this would just float over it.
+      if (!toolsDemo && !sceneTool) {
+        ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+      }
+      if (closeDirtyAtFrame >= 0 && frame == closeDirtyAtFrame && dirtyDemoTool != nullptr) {
+        shell.toolHost().requestClose(dirtyDemoTool);
+      }
+      // The tool draws whatever the context points at; the host keeps it current.
+      editorContext.scene = &scene;
+      editorContext.renderer = renderer.get();
+      editorContext.settings = &renderer->settings();
+      editorContext.camera = &scene.camera;
+      editorContext.frameMs = renderer->lastFrameMs();
+      editorContext.drawCalls = renderer->drawCalls();
+      editorContext.viewportW = window.width();
+      editorContext.viewportH = window.height();
+      // Applied every frame rather than once: --select is there to hold a selection steady for an
+      // unattended screenshot, and the Outliner would otherwise be free to clear it.
+      if (selectObject >= 0) editorContext.selectedObject = selectObject;
+      shell.drawTools(1.0f / 60.0f);
+      if (uiGallery) {
+        editor::ui::drawGallery(nullptr);
+      }
       // Panels nobody owns yet get their placeholder — D2/D3/D4 replace these with real content.
       shell.endFrame();
+      // After the panels, so toasts stack above them.
+      editor::ui::drawNotifications();
 
       if (!ui.wantCaptureKeyboard()) {
         if (input.keyPressed(GLFW_KEY_0)) {
@@ -329,8 +445,11 @@ int main(int argc, char** argv) {
     }
 
     device->waitIdle();
+    std::cerr << "[trace] loop terminou\n";
     shell.shutdown(); // flushes the layout while the ImGui context is still alive
+    std::cerr << "[trace] shell.shutdown ok\n";
     ui.shutdown();
+    std::cerr << "[trace] ui.shutdown ok\n";
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "Fatal: " << ex.what() << "\n";

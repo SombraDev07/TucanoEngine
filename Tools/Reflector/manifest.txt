@@ -1,0 +1,9 @@
+# Headers the Reflector scans, relative to src/.
+#
+# An explicit list rather than a glob: scanning every header would parse the whole engine on every
+# build for the handful that carry annotations, and a glob makes it impossible to tell whether a
+# type is missing because it is unannotated or because nobody looked.
+Renderer/Material.h
+Renderer/Scene.h
+Renderer/Weather/WaterParams.h
+Renderer/Weather/FogParams.h

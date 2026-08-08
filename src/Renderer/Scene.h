@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Core/TypeSystem/ReflectionMacros.h"
 #include "Renderer/Camera.h"
 #include "Renderer/Material.h"
 #include "Renderer/Mesh.h"
@@ -15,21 +16,39 @@ namespace terrain {
 class ClipmapTerrain;
 }
 
-struct Transform {
+struct TUCANO_TYPE() Transform {
+  TUCANO_FIELD(.label = "Position", .tooltip = "Object origin in world space", .step = 0.1f)
   glm::vec3 translation{0};
+
+  TUCANO_FIELD(.label = "Rotation",
+               .tooltip = "Shown and edited as Euler degrees; stored as a quaternion", .step = 0.5f)
   glm::quat rotation{1, 0, 0, 0};
+
+  TUCANO_FIELD(.label = "Scale", .tooltip = "Per-axis scale; 1 is unscaled", .step = 0.01f)
   glm::vec3 scale{1};
+
   glm::mat4 matrix() const;
 };
 
-struct RenderObject {
+struct TUCANO_TYPE() RenderObject {
+  // Not annotated, deliberately: mesh and materials are shared_ptr resources that need the Pickers
+  // of P4-04 wired to a resource system before a row for them would mean anything, and worldMatrix
+  // is derived every frame — editing it does nothing.
   std::shared_ptr<Mesh> mesh;
   std::vector<std::shared_ptr<Material>> materials;
+
+  TUCANO_FIELD(.label = "Transform", .category = "Transform")
   Transform transform;
+
   glm::mat4 worldMatrix{1.0f};
+
+  TUCANO_FIELD(.label = "Name", .category = "Object")
   std::string name;
   // Editor visibility. Hidden objects are skipped by every pass — including shadows, ray tracing
   // and GI — so hiding one removes it from the image completely, not just from the g-buffer.
+  TUCANO_FIELD(.label = "Visible",
+               .tooltip = "Hidden objects are skipped by every pass, including shadows, ray tracing and GI",
+               .category = "Object")
   bool visible = true;
 
   // Skinning palette: one matrix per bone (world × inverseBindPose), produced by whatever drives

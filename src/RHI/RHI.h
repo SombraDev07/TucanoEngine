@@ -57,6 +57,40 @@ public:
 
   static std::unique_ptr<Device> create(bool enableDebugLayer = true);
 
+  /// Runs `release` at the very start of this device's destruction, while the device is still
+  /// usable.
+  ///
+  /// This exists because process-lifetime caches of GPU resources — the default checker textures,
+  /// a Lua-created mesh — are freed during *static* destruction, which happens after the device is
+  /// gone. `~DX12Texture` guards on `if (!device || !device->device())`, but by then `device` is a
+  /// dangling pointer rather than null, so the guard does not fire and the read faults. It is
+  /// intermittent: it only crashes when the freed page has already been decommitted.
+  ///
+  /// This was fixed once by calling the release functions from a runtime shutdown hook, and the
+  /// bug came back when that hook went away and the calls went with it. Registering here instead
+  /// means the owner of a cache states its own requirement, and no `main()` has to remember —
+  /// which is the part that failed. Registration is idempotent per callback owner by convention:
+  /// register on first cache fill.
+  void onBeforeDestroy(std::function<void()> release) {
+    m_releaseCallbacks.push_back(std::move(release));
+  }
+
+protected:
+  /// Call from the most-derived destructor, first thing. Not done in ~Device because by the time
+  /// the base destructor runs the derived device is already torn down.
+  void runBeforeDestroyCallbacks() {
+    // Reverse order: a cache registered later may hold something an earlier one handed it.
+    for (auto it = m_releaseCallbacks.rbegin(); it != m_releaseCallbacks.rend(); ++it) {
+      try {
+        (*it)();
+      } catch (...) {
+      }
+    }
+    m_releaseCallbacks.clear();
+  }
+
+public:
+
   virtual std::unique_ptr<SwapChain> createSwapChain(void* hwnd, uint32_t width, uint32_t height,
                                                      bool vsync = true) = 0;
   virtual std::shared_ptr<Buffer> createBuffer(const BufferDesc& desc, const void* initialData = nullptr) = 0;
@@ -135,6 +169,9 @@ public:
       *scratchSize = 0;
     }
   }
+
+private:
+  std::vector<std::function<void()>> m_releaseCallbacks;
 };
 
 struct BlasTriangleGeometry {
