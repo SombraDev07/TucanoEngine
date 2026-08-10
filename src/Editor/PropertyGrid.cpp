@@ -1,5 +1,6 @@
 #include "Editor/PropertyGrid.h"
 
+#include "Core/AssetGuid.h"
 #include "Core/TypeSystem/TypeInfo.h"
 #include "Core/TypeSystem/TypeRegistry.h"
 #include "Editor/TypeEditingRules.h"
@@ -14,6 +15,8 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <cstring>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -40,12 +43,93 @@ ui::AssetPicker::Kind assetKindFromName(const char* name) {
 	if (kind == "hdri") return ui::AssetPicker::Kind::Hdri;
 	if (kind == "scene") return ui::AssetPicker::Kind::Scene;
 	if (kind == "text") return ui::AssetPicker::Kind::Text;
+	if (kind == "material") return ui::AssetPicker::Kind::Material;
 	return ui::AssetPicker::Kind::Any;
 }
+
+// Undo for an inline char buffer. UndoStack::pushValue<T> needs the concrete type, and the grid
+// only ever has a void* plus a capacity — so the action carries the two strings and writes them
+// back through the same buffer.
+class FixedStringAction final : public UndoAction {
+public:
+	FixedStringAction(std::string name, char* target, size_t capacity, std::string before,
+	                  std::string after)
+	    : m_name(std::move(name)), m_target(target), m_capacity(capacity),
+	      m_before(std::move(before)), m_after(std::move(after)) {}
+
+	void undo() override { write(m_before); }
+	void redo() override { write(m_after); }
+	const std::string& name() const override { return m_name; }
+
+	bool mergeWith(const UndoAction& next) override {
+		// Typing is one gesture, not one step per keystroke.
+		const auto* other = dynamic_cast<const FixedStringAction*>(&next);
+		if (other == nullptr || other->m_target != m_target) return false;
+		m_after = other->m_after;
+		return true;
+	}
+
+private:
+	void write(const std::string& text) {
+		const size_t n = text.size() < m_capacity - 1 ? text.size() : m_capacity - 1;
+		std::memcpy(m_target, text.data(), n);
+		m_target[n] = 0;
+	}
+
+	std::string m_name;
+	char* m_target = nullptr;
+	size_t m_capacity = 0;
+	std::string m_before;
+	std::string m_after;
+};
+
+// Undo for an asset reference. `pushValue<T>` would work, but only if the grid knew the concrete
+// type at the call site — it has a void* and a CoreType, so the action carries the two ids.
+class AssetRefAction final : public UndoAction {
+public:
+	AssetRefAction(std::string name, asset::AssetGuid* target, asset::AssetGuid before,
+	               asset::AssetGuid after)
+	    : m_name(std::move(name)), m_target(target), m_before(before), m_after(after) {}
+
+	void undo() override { *m_target = m_before; }
+	void redo() override { *m_target = m_after; }
+	const std::string& name() const override { return m_name; }
+
+private:
+	std::string m_name;
+	asset::AssetGuid* m_target = nullptr;
+	asset::AssetGuid m_before;
+	asset::AssetGuid m_after;
+};
+
+// Undo for an enum. `pushValue<T>` needs the concrete type; the grid has a void* and a property
+// whose underlying integer may be 1, 2, 4 or 8 bytes wide. The action carries the property so the
+// write goes back through the same size-aware accessor that produced the value.
+class EnumAction final : public UndoAction {
+public:
+	EnumAction(std::string name, const PropertyInfo* property, void* instance, int64_t before,
+	           int64_t after)
+	    : m_name(std::move(name)), m_property(property), m_instance(instance), m_before(before),
+	      m_after(after) {}
+
+	void undo() override { m_property->setEnumValueIn(m_instance, m_before); }
+	void redo() override { m_property->setEnumValueIn(m_instance, m_after); }
+	const std::string& name() const override { return m_name; }
+
+private:
+	std::string m_name;
+	const PropertyInfo* m_property = nullptr;
+	void* m_instance = nullptr;
+	int64_t m_before = 0;
+	int64_t m_after = 0;
+};
 
 } // namespace
 
 bool PropertyGrid::visible(const PropertyInfo& property) const {
+	// Engineering keys stay out of the way until asked for. A filter overrides that: somebody who
+	// types "meshlet" is looking for the meshlet flags, and hiding them then would just look broken.
+	if (property.meta.advanced && !m_showAdvanced && m_filter.empty()) return false;
 	if (m_filter.empty()) return true;
 	// Matching the category too keeps a whole group reachable by typing its name.
 	return m_filter.matches(property.displayLabel()) || m_filter.matches(property.name) ||
@@ -54,7 +138,18 @@ bool PropertyGrid::visible(const PropertyInfo& property) const {
 
 bool PropertyGrid::drawFilterBox(float width) {
 	m_filter.setHint("Filter properties...");
-	return m_filter.draw("##propertyFilter", width);
+	const bool filterChanged = m_filter.draw("##propertyFilter", width);
+	if (!m_hasAdvanced) return filterChanged;
+
+	// Only offered when the type actually has advanced properties — a checkbox that reveals nothing
+	// is a promise the panel cannot keep. `m_hasAdvanced` is set by the last draw(), so the box
+	// appears on the second frame of a newly shown type. That is invisible in practice and beats
+	// having every caller declare up front what its type contains.
+	const bool toggled = ImGui::Checkbox("Advanced", &m_showAdvanced);
+	if (ImGui::IsItemHovered()) {
+		ImGui::SetTooltip("Engineering keys: pipeline paths and debug switches, not look settings");
+	}
+	return filterChanged || toggled;
 }
 
 // ── Value editors ───────────────────────────────────────────────────────────
@@ -151,6 +246,25 @@ bool PropertyGrid::drawScalar(const PropertyInfo& property, void* instance) {
 			}
 			break;
 		}
+		case CoreType::FixedString: {
+			// A field that names an asset gets the picker, exactly like a std::string one — the
+			// storage is an implementation detail of living inside an ECS component.
+			if (property.meta.assetKind != nullptr && property.meta.assetKind[0] != '\0') {
+				changed = drawAssetPath(property, instance);
+				break;
+			}
+			// Edited in place: the buffer *is* the storage, and ImGui already respects a capacity.
+			char* buffer = static_cast<char*>(property.addressIn(instance));
+			const std::string previous(buffer);
+			if (ImGui::InputText("##v", buffer, property.size)) {
+				if (m_undo != nullptr) {
+					m_undo->push(std::make_unique<FixedStringAction>(
+					    undoName(property), buffer, property.size, previous, std::string(buffer)));
+				}
+				changed = true;
+			}
+			break;
+		}
 		default:
 			ImGui::TextDisabled("unsupported");
 			break;
@@ -198,13 +312,38 @@ void PropertyGrid::setAssetRoot(std::string root) {
 	for (auto& entry : m_assetPickers) entry.second.setRoot(m_assetRoot);
 }
 
+void PropertyGrid::setAssetRegistry(const asset::AssetRegistry* registry) {
+	if (registry == m_assetRegistry) return;
+	m_assetRegistry = registry;
+	for (auto& entry : m_assetPickers) entry.second.setRegistry(registry);
+}
+
 bool PropertyGrid::drawAssetPath(const PropertyInfo& property, void* instance) {
-	std::string& value = property.valueIn<std::string>(instance);
+	// Works for both string storages: a std::string field and a FixedString buffer. The component
+	// types are FixedString because the ECS needs trivially copyable, and there is no reason for a
+	// picker to care which one it is looking at.
+	const bool inlineBuffer = property.coreType == CoreType::FixedString;
+	const auto read = [&]() -> std::string {
+		return inlineBuffer ? std::string(static_cast<const char*>(property.addressIn(instance)))
+		                    : property.valueIn<std::string>(instance);
+	};
+	const auto write = [&](const std::string& text) {
+		if (!inlineBuffer) {
+			property.valueIn<std::string>(instance) = text;
+			return;
+		}
+		char* buffer = static_cast<char*>(property.addressIn(instance));
+		const size_t n = text.size() < property.size - 1 ? text.size() : property.size - 1;
+		std::memcpy(buffer, text.data(), n);
+		buffer[n] = 0;
+	};
+	const std::string value = read();
 
 	auto found = m_assetPickers.find(&property);
 	if (found == m_assetPickers.end()) {
 		ui::AssetPicker picker;
 		picker.setRoot(m_assetRoot);
+		picker.setRegistry(m_assetRegistry);
 		picker.setKind(assetKindFromName(property.meta.assetKind));
 		found = m_assetPickers.emplace(&property, std::move(picker)).first;
 	}
@@ -217,11 +356,57 @@ bool PropertyGrid::drawAssetPath(const PropertyInfo& property, void* instance) {
 
 	if (!picker.draw("##asset")) return false;
 
-	const std::string before = value;
-	value = picker.path();
-	if (m_undo) {
-		m_undo->pushValue(undoName(property), &value, before, value);
+	const std::string after = picker.path();
+	write(after);
+	if (m_undo != nullptr) {
+		if (inlineBuffer) {
+			m_undo->push(std::make_unique<FixedStringAction>(
+			    undoName(property), static_cast<char*>(property.addressIn(instance)), property.size,
+			    value, after));
+		} else {
+			std::string& stored = property.valueIn<std::string>(instance);
+			m_undo->pushValue(undoName(property), &stored, value, after);
+		}
 		// Picking is a discrete act, not a drag: two picks in a row are two undo steps.
+		m_undo->breakMerge();
+	}
+	return true;
+}
+
+bool PropertyGrid::drawAssetRef(const PropertyInfo& property, void* instance) {
+	asset::AssetGuid& value = property.valueIn<asset::AssetGuid>(instance);
+
+	auto found = m_assetPickers.find(&property);
+	if (found == m_assetPickers.end()) {
+		ui::AssetPicker picker;
+		picker.setRoot(m_assetRoot);
+		picker.setRegistry(m_assetRegistry);
+		picker.setKind(assetKindFromName(property.meta.assetKind));
+		found = m_assetPickers.emplace(&property, std::move(picker)).first;
+	}
+
+	ui::AssetPicker& picker = found->second;
+	picker.setRegistry(m_assetRegistry);
+	// The picker follows the property, not the other way round: selecting another entity has to
+	// show that entity's reference.
+	if (picker.guid() != value) picker.setGuid(value);
+	picker.setDisabled(m_readOnly || property.meta.readOnly);
+
+	if (m_assetRegistry == nullptr) {
+		// Without an index there is nothing to resolve a GUID against, and a picker that can only
+		// clear the value would be a trap. Say so instead.
+		ImGui::TextDisabled(value.valid() ? "%s (no project index)" : "(none)",
+		                    value.toString().c_str());
+		return false;
+	}
+
+	if (!picker.draw("##assetRef")) return false;
+
+	const asset::AssetGuid before = value;
+	value = picker.guid();
+	if (m_undo != nullptr) {
+		m_undo->push(std::make_unique<AssetRefAction>(undoName(property), &value, before, value));
+		// Picking is a discrete act, not a drag: two picks are two undo steps.
 		m_undo->breakMerge();
 	}
 	return true;
@@ -279,14 +464,16 @@ bool PropertyGrid::drawQuat(const PropertyInfo& property, void* instance) {
 
 bool PropertyGrid::drawEnum(const PropertyInfo& property, void* instance) {
 	const TypeInfo* enumType = TypeRegistry::instance().find(property.typeId);
-	int32_t& value = property.valueIn<int32_t>(instance);
+	const int64_t value = property.enumValueIn(instance);
 
 	if (enumType == nullptr || !enumType->isEnum()) {
 		// Registered as an enum but the type is missing: show the number rather than pretending.
+		// Reachable when a header declares an enum field and nobody annotated the enum — the
+		// Reflector now refuses that, so this is the manual-registration path only.
 		ImGui::SetNextItemWidth(-1.0f);
-		const int32_t before = value;
-		if (ImGui::DragInt("##v", reinterpret_cast<int*>(&value))) {
-			if (m_undo) m_undo->pushValue(undoName(property), &value, before, value);
+		int raw = static_cast<int>(value);
+		if (ImGui::DragInt("##v", &raw)) {
+			property.setEnumValueIn(instance, raw);
 			return true;
 		}
 		return false;
@@ -302,10 +489,11 @@ bool PropertyGrid::drawEnum(const PropertyInfo& property, void* instance) {
 			const EnumConstant& constant = enumType->enumConstants[i];
 			const bool selected = constant.value == value;
 			if (ImGui::Selectable(constant.label, selected)) {
-				const int32_t before = value;
-				value = static_cast<int32_t>(constant.value);
+				property.setEnumValueIn(instance, constant.value);
 				if (m_undo) {
-					m_undo->pushValue(undoName(property), &value, before, value);
+					m_undo->push(std::make_unique<EnumAction>(undoName(property), &property, instance,
+					                                          value, constant.value));
+					// Picking from a combo is a whole gesture; nothing after it merges into it.
 					m_undo->breakMerge();
 				}
 				changed = true;
@@ -385,6 +573,8 @@ bool PropertyGrid::drawValue(const PropertyInfo& property, void* instance) {
 			return drawVector(property, instance, 4);
 		case CoreType::Quat:
 			return drawQuat(property, instance);
+		case CoreType::AssetRef:
+			return drawAssetRef(property, instance);
 		case CoreType::Color:
 			// Colours are stored as vec3 or vec4; the size tells which.
 			return drawVector(property, instance, property.size >= sizeof(float) * 4 ? 4 : 3);
@@ -480,6 +670,16 @@ bool PropertyGrid::draw(const TypeInfo& type, void* instance) {
 	if (instance == nullptr || type.propertyCount == 0) {
 		ImGui::TextDisabled("Nothing to edit.");
 		return false;
+	}
+
+	// Whether the "Advanced" toggle is worth offering at all, recomputed each draw so a grid reused
+	// for a different type does not keep the previous answer.
+	m_hasAdvanced = false;
+	for (size_t i = 0; i < type.propertyCount; ++i) {
+		if (type.properties[i].meta.advanced) {
+			m_hasAdvanced = true;
+			break;
+		}
 	}
 
 	// Categories in declaration order, not alphabetical: the author grouped them in the order they

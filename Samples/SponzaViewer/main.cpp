@@ -3,7 +3,15 @@
 #include "Editor/DemoTools.h"
 #include "Editor/EditorTool.h"
 #include "Editor/EditorContext.h"
+#include "AssetPipeline/AssetRegistry.h"
+#include "AssetPipeline/AssetResolver.h"
+#include "ECS/RenderSync.h"
+#include "Editor/PlayMode.h"
 #include "Editor/SceneTool.h"
+#include "ECS/AuthoringComponents.h"
+#include "ECS/Components.h"
+#include "ECS/PhysicsSync.h"
+#include "ECS/World.h"
 #include "Editor/SystemDialogs.h"
 #include "Editor/ToolHost.h"
 #include "Editor/UI/Gallery.h"
@@ -69,6 +77,9 @@ int main(int argc, char** argv) {
   // Selection normally comes from a click in the Outliner, which an unattended screenshot run has
   // no way to make. -1 keeps the default "nothing selected".
   int selectObject = -1;
+  // Same reason as --select, for the entity path: the Inspector only shows components once
+  // something is selected, and an unattended screenshot has no way to click the Outliner.
+  int selectEntity = -1;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--scene" && i + 1 < argc) {
@@ -93,6 +104,8 @@ int main(int argc, char** argv) {
       sceneTool = true;
     } else if (a == "--select" && i + 1 < argc) {
       selectObject = std::stoi(argv[++i]);
+    } else if (a == "--select-entity" && i + 1 < argc) {
+      selectEntity = std::stoi(argv[++i]);
     } else if (a == "--borderless") {
       editorMode = true;
       borderless = true;
@@ -152,6 +165,7 @@ int main(int argc, char** argv) {
     editor::EditorShell shell;
     editor::EditorContext editorContext;
     editor::EditorTool* dirtyDemoTool = nullptr;
+    editor::SceneTool* sceneToolPtr = nullptr;
     if (editorMode) {
       if (shell.init(layoutPath)) {
         window.setTitle("Tucano Editor");
@@ -192,7 +206,43 @@ int main(int argc, char** argv) {
       if (sceneTool) {
         auto tool = std::make_unique<editor::SceneTool>();
         tool->setContext(&editorContext);
-        shell.addTool(std::move(tool));
+        auto* scenes = static_cast<editor::SceneTool*>(shell.addTool(std::move(tool)));
+        sceneToolPtr = scenes;
+        scenes->setDialogs(&shell.toolHost().dialogs());
+        // B-01: index the project once at startup. Sidecars are created here because this *is*
+        // the project being authored; a read-only viewer would pass false.
+        const size_t indexed = scenes->scanAssets("Assets", /*createMissingMeta=*/true);
+        std::cout << "[SponzaViewer] Asset registry: " << indexed << " assets\n";
+
+
+        // C-04: File -> New/Open/Save actually do it now. The tool owns the document — its path,
+        // its dirty flag and its undo stack — so the menu delegates rather than duplicating that
+        // state in the sample.
+        shell.onNewScene = [scenes] {
+          scenes->requestNewScene();
+          editor::ui::notifyInfo("New scene.");
+        };
+        shell.onOpenScene = [scenes] {
+          scenes->requestOpenScene();
+          if (!scenes->error().empty()) {
+            editor::ui::notifyError("Open failed: %s", scenes->error().c_str());
+          } else if (!scenes->documentPath().empty()) {
+            editor::ui::notifySuccess("Opened %s", scenes->documentPath().c_str());
+          }
+        };
+        shell.onImportAsset = [scenes] {
+          scenes->importAssetDialog();
+          if (!scenes->error().empty()) {
+            editor::ui::notifyError("Import failed: %s", scenes->error().c_str());
+          }
+        };
+        shell.onSaveScene = [scenes] {
+          if (scenes->saveScene()) {
+            editor::ui::notifySuccess("Saved %s", scenes->documentPath().c_str());
+          } else if (!scenes->error().empty()) {
+            editor::ui::notifyError("Save failed: %s", scenes->error().c_str());
+          }
+        };
       }
 
       if (toolsDemo) {
@@ -242,6 +292,96 @@ int main(int argc, char** argv) {
     };
 
     reloadScene();
+
+    // C-02c: the editor authors entities, and `Scene` is the render view fed from them. The glTF
+    // loader still produces RenderObjects, so one entity is created per object and linked to it by
+    // RenderObjectComponent::sceneIndex — the bridge the engine already had. Moving an entity in
+    // the Inspector therefore moves what is drawn.
+    ecs::World world;
+    const auto populateWorldFromScene = [&]() {
+      for (size_t i = 0; i < scene.objects.size(); ++i) {
+        const RenderObject& object = scene.objects[i];
+        const ecs::Entity entity = world.create();
+        world.add<ecs::NameComponent>(entity)->name =
+            object.name.empty() ? "Object" : std::string_view(object.name);
+        auto* transform = world.add<ecs::TransformComponent>(entity);
+        transform->position = object.transform.translation;
+        transform->rotation = object.transform.rotation;
+        transform->scale = object.transform.scale;
+        // Seeded so the first interpolated frame does not lerp in from the origin.
+        transform->prevPosition = transform->position;
+        transform->prevRotation = transform->rotation;
+        auto* meshRef = world.add<ecs::MeshComponent>(entity);
+        // Referenced by identity: the registry resolves the source path to the GUID its `.tumeta`
+        // sidecar carries, so renaming the file later does not orphan the entity.
+        if (sceneToolPtr != nullptr) {
+          if (const auto* found = sceneToolPtr->assets().findByPath(scenePath)) {
+            meshRef->mesh = found->guid;
+          }
+        }
+        meshRef->visible = object.visible;
+        world.add<ecs::RenderObjectComponent>(entity)->sceneIndex = static_cast<uint32_t>(i);
+      }
+      for (const Light& light : scene.lights) {
+        const ecs::Entity entity = world.create();
+        // Named by kind: six entries all called "Light" is a list you have to click through to
+        // read. The Outliner already shows a bulb icon, so the name should carry what the icon
+        // cannot.
+        world.add<ecs::NameComponent>(entity)->name =
+            light.type == LightType::Directional ? "Directional Light"
+            : light.type == LightType::Spot      ? "Spot Light"
+                                                 : "Point Light";
+        auto* transform = world.add<ecs::TransformComponent>(entity);
+        transform->position = light.position;
+        transform->prevPosition = light.position;
+        // The direction has to survive the trip, because the sync back rebuilds it from this
+        // rotation. Without it every directional and spot light would snap to straight down on the
+        // first frame — the scene would still light, just wrongly, which is the hardest kind to
+        // notice. Local -Y is the aim axis, matching `Light::direction`'s default.
+        transform->rotation = ecs::lightRotationFor(light.direction);
+        transform->prevRotation = transform->rotation;
+        auto* lightComponent = world.add<ecs::LightComponent>(entity);
+        lightComponent->type = light.type;
+        lightComponent->color = light.color;
+        lightComponent->intensity = light.intensity;
+        lightComponent->range = light.range;
+        lightComponent->innerCone = light.innerCone;
+        lightComponent->outerCone = light.outerCone;
+        lightComponent->castShadows = light.castShadows;
+      }
+    };
+    populateWorldFromScene();
+
+    // Resolves what the entities reference into what the renderer draws. Built after the registry
+    // scan so it has something to resolve against, and kept alive for the whole run because its
+    // texture cache is the reason the same image is not uploaded once per material.
+    std::unique_ptr<AssetResolver> assetResolver;
+    ecs::MaterialSyncState materialSync;
+    if (sceneToolPtr != nullptr) {
+      assetResolver = std::make_unique<AssetResolver>(*device, sceneToolPtr->assets(), "Assets");
+    }
+
+    // I-01: what actually runs during Play. The editor does not decide this — the host does, which
+    // is why PlayMode owns the state machine and the snapshot but not the simulation. This one is
+    // deliberately small and visible: everything drifts upward, so Play then Stop shows the scene
+    // move and snap back to exactly where it was.
+    if (sceneToolPtr != nullptr) {
+      sceneToolPtr->playMode().onTick = [&world](float dt) {
+        for (ecs::EntityManager::Archetype& archetype : world.entities().archetypes()) {
+          const int slot = archetype.slot(ecs::kCompTransform);
+          if (slot < 0) continue;
+          for (uint32_t chunkIndex = 0; chunkIndex < archetype.chunks.size(); ++chunkIndex) {
+            auto* transforms =
+                static_cast<ecs::TransformComponent*>(archetype.column(chunkIndex, slot));
+            for (uint32_t i = 0; i < archetype.chunks[chunkIndex].count; ++i) {
+              transforms[i].prevPosition = transforms[i].position;
+              transforms[i].position.y += dt * 0.5f;
+            }
+          }
+        }
+      };
+    }
+
     scene.camera.setPosition({0.0f, 2.0f, 0.0f});
     scene.camera.lookAt({1.0f, 2.0f, 0.0f});
     setupDefaultRain(renderer->rain());
@@ -290,6 +430,15 @@ int main(int argc, char** argv) {
       scene.camera.setPerspective(glm::radians(60.0f), window.aspect(), 0.1f, 300.0f);
     });
 
+    // ── Viewport offscreen target ──
+    // The scene is rendered here instead of straight to the back buffer whenever a Viewport panel
+    // asks for it. It has to be a texture because the editor cannot show the world behind its
+    // panels: the tool window is docked into the shell's central node, and an occupied dock node
+    // paints over anything drawn before ImGui.
+    std::shared_ptr<rhi::Texture> viewportTarget;
+    uint32_t viewportTargetW = 0;
+    uint32_t viewportTargetH = 0;
+
     int frame = 0;
     bool shotDone = screenshotPath.empty();
     while (!window.shouldClose() && !shell.quitRequested()) {
@@ -297,6 +446,17 @@ int main(int argc, char** argv) {
       input.beginFrame();
       ui.beginFrame();
       // The dockspace has to be submitted before the windows that dock into it.
+      // Published before the UI is built, because the panel reads it while building. The
+      // descriptor points at a texture this frame will fill later — and ImGui only samples it at
+      // endFrame, after the render, so the order is right.
+      editorContext.sceneTexture =
+          viewportTarget != nullptr ? ui.sceneTextureId(*device, *viewportTarget) : 0;
+      // Cleared each frame so only a panel that actually drew this frame is asking. Otherwise
+      // closing the Viewport tab would leave a stale request standing forever.
+      editorContext.requestedViewportW = 0;
+      editorContext.requestedViewportH = 0;
+      editorContext.viewportHovered = false;
+
       shell.beginFrame();
       if (shell.ready()) {
         const float fps = 1000.0f / std::max(1.0f, renderer->lastFrameMs());
@@ -310,12 +470,14 @@ int main(int argc, char** argv) {
       // The weather panel is a viewer control; with a tool open the Environment tool window covers
       // the same ground and this would just float over it.
       if (!toolsDemo && !sceneTool) {
-        ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+        ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings(),
+                                /*lightsOwnedByEcs=*/true);
       }
       if (closeDirtyAtFrame >= 0 && frame == closeDirtyAtFrame && dirtyDemoTool != nullptr) {
         shell.toolHost().requestClose(dirtyDemoTool);
       }
       // The tool draws whatever the context points at; the host keeps it current.
+      editorContext.world = &world;
       editorContext.scene = &scene;
       editorContext.renderer = renderer.get();
       editorContext.settings = &renderer->settings();
@@ -327,6 +489,32 @@ int main(int argc, char** argv) {
       // Applied every frame rather than once: --select is there to hold a selection steady for an
       // unattended screenshot, and the Outliner would otherwise be free to clear it.
       if (selectObject >= 0) editorContext.selectedObject = selectObject;
+      if (selectEntity >= 0) {
+        // By position in creation order, not by id: ids are an ECS implementation detail and a
+        // command line that has to know them is not usable.
+        int seen = 0;
+        for (ecs::Entity candidate = 0; candidate < 4096; ++candidate) {
+          if (!world.alive(candidate)) continue;
+          if (seen++ == selectEntity) {
+            editorContext.selectedEntity = candidate;
+            break;
+          }
+        }
+      }
+      // Advances only while playing; a no-op otherwise, so there is nothing to branch on here.
+      if (sceneToolPtr != nullptr) sceneToolPtr->playMode().tick(1.0f / 60.0f);
+      // After the tick, so what is drawn is the state the simulation just produced rather than the
+      // previous frame's. alpha = 1: nothing here interpolates, the entity position is the truth.
+      ecs::syncTransformsToScene(world, scene, 1.0f);
+      // And what it looks like: the material override and the visibility flag. Cheap per frame —
+      // it only rebuilds a material when the assignment actually changed.
+      if (assetResolver != nullptr) {
+        ecs::syncMeshComponentsToScene(world, scene, *assetResolver, materialSync);
+      }
+      // Lights are rebuilt wholesale from the entities. Calling this is the declaration that the
+      // ECS owns them — see the note on syncLightsToScene — which is true here because
+      // populateWorldFromScene created one entity per light.
+      ecs::syncLightsToScene(world, scene);
       shell.drawTools(1.0f / 60.0f);
       if (uiGallery) {
         editor::ui::drawGallery(nullptr);
@@ -402,7 +590,10 @@ int main(int argc, char** argv) {
         }
       }
       const float speed = input.keyDown(GLFW_KEY_LEFT_SHIFT) ? 12.0f : 4.0f;
-      const bool look = input.mouseDown(GLFW_MOUSE_BUTTON_RIGHT) && !ui.wantCaptureMouse();
+      // Over the viewport image the mouse belongs to the camera, not to ImGui: WantCaptureMouse is
+      // true over any ImGui window, and the scene lives inside one now.
+      const bool look = input.mouseDown(GLFW_MOUSE_BUTTON_RIGHT) &&
+                        (!ui.wantCaptureMouse() || editorContext.viewportHovered);
       if (look) {
         scene.camera.fly(1.0f / 60.0f, move * speed, dx * 0.0025f, -dy * 0.0025f);
       } else {
@@ -418,9 +609,46 @@ int main(int argc, char** argv) {
 
       LuaVM::instance().tick(1.0f / 60.0f);
 
+      // Between the UI and the render: the panel has just said how big it wants to be, and the
+      // renderer must not be resized mid-frame.
+      const uint32_t wantW = editorContext.requestedViewportW;
+      const uint32_t wantH = editorContext.requestedViewportH;
+      // A request of zero means no Viewport panel drew this frame — a closed or unselected tab. The
+      // existing target is kept and still rendered into, so re-selecting the tab shows a live scene
+      // instead of one frozen at the moment it was hidden.
+      if (wantW > 0 && wantH > 0 && (wantW != viewportTargetW || wantH != viewportTargetH)) {
+        device->waitIdle();
+        rhi::TextureDesc desc;
+        desc.width = wantW;
+        desc.height = wantH;
+        desc.format = rhi::Format::R8G8B8A8_UNORM;
+        desc.usage = rhi::TextureUsage::RenderTarget | rhi::TextureUsage::ShaderResource;
+        desc.debugName = "ViewportTarget";
+        viewportTarget = device->createTexture(desc);
+        viewportTargetW = wantW;
+        viewportTargetH = wantH;
+        renderer->resize(wantW, wantH);
+        // Aspect from the panel, not the window: a viewport that is not the whole window would
+        // otherwise render a subtly stretched world and nobody would be able to say why.
+        scene.camera.setPerspective(glm::radians(60.0f),
+                                    static_cast<float>(wantW) / static_cast<float>(wantH), 0.1f,
+                                    300.0f);
+      }
+
       auto* cmd = device->beginFrame();
       auto& bb = swapChain->backBuffer();
-      renderer->render(cmd, bb, scene);
+      if (viewportTarget != nullptr) {
+        renderer->render(cmd, *viewportTarget, scene);
+        // The panel samples it; without this the read happens while it is still a render target.
+        cmd->transition(*viewportTarget, rhi::ResourceState::ShaderResource);
+        // Nothing draws the back buffer any more, so it has to be cleared — otherwise the gaps
+        // between panels show whatever the last frame left in it.
+        cmd->transition(bb, rhi::ResourceState::RenderTarget);
+        const float clearColor[4] = {0.06f, 0.06f, 0.07f, 1.0f};
+        cmd->clearRenderTarget(bb, clearColor);
+      } else {
+        renderer->render(cmd, bb, scene);
+      }
       ui.endFrame(*cmd, bb);
 
       ScreenshotPending shot;

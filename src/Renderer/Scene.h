@@ -2,6 +2,7 @@
 
 #include "Core/TypeSystem/ReflectionMacros.h"
 #include "Renderer/Camera.h"
+#include "Renderer/LightType.h"
 #include "Renderer/Material.h"
 #include "Renderer/Mesh.h"
 
@@ -80,8 +81,6 @@ struct InstanceCloudRender {
   uint32_t billboardViews = 8;
   uint32_t billboardGrid = 16;
 };
-
-enum class LightType : uint32_t { Directional = 0, Point = 1, Spot = 2 };
 
 struct Light {
   LightType type = LightType::Point;

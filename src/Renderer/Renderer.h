@@ -15,9 +15,11 @@
 #include "Renderer/Weather/WaterSystem.h"
 #include "Renderer/Weather/FogSystem.h"
 #include "Renderer/Sky/Celestial.h"
+#include "Renderer/Sky/SkyParams.h"
 #include "Renderer/Texture.h"
 #include "RHI/RHI.h"
 #include "AssetPipeline/ResourceFactory.h"
+#include "Core/TypeSystem/ReflectionMacros.h"
 
 #include <array>
 #include <memory>
@@ -26,93 +28,141 @@
 
 namespace tucano {
 
-enum class GITier : uint32_t { Off = 0, Low = 1, Medium = 2, High = 3 };
-
-struct RendererSettings {
-  bool enableShadows = true;
-  bool enableIBL = true;
-  bool enableBloom = true;
-  bool enableAO = true;
-  bool enableTonemap = true;
-  bool enableSSR = true; // FASE 4.2 default-on
-  bool enableMeshlets = true; // FASE 3.2 default path
-  bool enableGpuMeshletCull = true; // CS frustum/cone → indirect args (requires enableMeshlets)
-  bool enableHiZOcclusion = true;
-  bool enableMeshletCompact = true;
-  bool enableVisibilityBuffer = true; // VisBuffer material path
-  bool enableMeshShaders = true; // gated by Device::supportsMeshShaders()
-  bool enableRTReflections = false; // set true in Renderer ctor when Device::supportsRaytracing()
-  bool enableRTShadows = false;     // Ray Query sun shadows (mask × CSM); auto-on with DXR
-  bool enableContactShadows = true;
-  bool enableAtmosphere = true;     // FASE 5.2 sky + fog
-  bool useBrunetonAtmosphere = true; // Bruneton precomputed LUTs (else artistic Nishita)
-  bool atmosphereDrivesSun = true;  // timeOfDay → directional light
-  float timeOfDay = 0.38f;          // 0=midnight, 0.25=sunrise, 0.5=noon, 0.75=sunset
-  float turbidity = 2.8f;           // 1=clear … 8=hazy
-  float fogDensity = 0.012f;
-  float fogHeight = 40.0f;
-  glm::vec3 wind = {0.2f, 0.0f, 0.05f};
-  bool enableClouds = true;
-  float cloudCoverage = 0.48f;
-  float cloudDensity = 1.15f;
-  float cloudAltitude = 1500.0f;
-  float cloudThickness = 2400.0f;
-  float cloudShadowStrength = 0.7f;
-  float cloudGodRayStrength = 0.55f;
-  float cloudStorminess = 0.35f;
-  bool enableCloudShadows = true;
-  bool enableCloudGodRays = true;
-  bool cloudsDriveRain = true;
-  bool enableVoxelGI = true;
-  bool enableToroidalShadows = true;
-  bool enableOctahedralPointShadows = true;
-  bool enableVSM = true;
-  bool enableAsyncCompute = true; // DDGI (and future CS) on compute queue
-  bool enableAutoExposure = true;
-  bool enableShaderHotReload = true;
-  bool enableESM = false;
-  bool enablePCSS = true;
-  float pcssLightSize = 0.035f;
-  float esmExponent = 80.0f;
-  float aoIntensity = 1.0f;
-  float aoRadius = 0.9f;
-  float bloomStrength = 0.28f;
-  float exposureMin = 0.08f;
-  float exposureMax = 4.0f;
-  float exposureAdapt = 0.1f;
-  float exposureTarget = 0.18f;
-
-  // ── Night sky ────────────────────────────────────
-  bool enableMoon = true;
-  bool enableStars = true;
-  /// Peak moonlight intensity at full moon and zenith. Two orders of magnitude under the sun on
-  /// purpose: real moonlight is ~400,000x weaker, but a night that dark is unplayable, so games
-  /// lift it. This is the dial for how far.
-  float moonIntensity = 0.045f;
-  float moonDiscBrightness = 2.5f;
-  /// Apparent radius in degrees. The real moon is 0.26; going bigger is the oldest cheat in
-  /// landscape art and it reads well.
-  float moonAngularRadiusDeg = 0.5f;
-  float starIntensity = 1.0f;
-  float starTwinkle = 0.35f;
-  /// Angular radius of a star before the sub-pixel clamp kicks in, in degrees.
-  float starSizeDeg = 0.055f;
-  /// Blend toward blue in dim areas of the frame. 0 disables the Purkinje shift.
-  float purkinjeStrength = 0.75f;
-  /// Observer's place and date. These drive the sidereal rotation, so they decide which
-  /// constellations are up and how they move.
-  float latitudeDeg = -23.55f;  // Sao Paulo
-  /// Day of year drives the season AND the lunar phase, since phase is elongation from the sun.
-  /// 156 lands on a full moon in this model, so a fresh scene at midnight actually has a moon in
-  /// the sky rather than a new moon sitting below the horizon with the sun.
-  float dayOfYear = 156.0f;
-  std::string starCatalogPath = "Sky/bright_stars.txt"; // under TUCANO_ENGINE_ASSETS_DIR
-
-  GITier giTier = GITier::Low;
-  uint32_t shadowMapSize = 2048;
-  std::string hdriPath = "IBL/default.hdr"; // under TUCANO_ENGINE_ASSETS_DIR
+enum class TUCANO_ENUM() GITier : uint32_t {
+  Off = 0,
+  Low = 1,
+  Medium = 2,
+  High = 3
 };
 
+// What the renderer does, as opposed to what the world looks like — sky, sun, moon and wind moved
+// out to SkyParams (E-01) so that a scene can save its environment without saving whether meshlets
+// are on.
+//
+// Reflected (D-01), which is what makes the Rendering panel generated rather than hand-written. The
+// old Environment panel wrote a widget per field by hand and reached 46 of 67 fields; the other 21
+// were unreachable from the editor at all. A field added here now appears with its range and its
+// tooltip, and cannot be forgotten.
+//
+// `.advanced` marks the engineering keys — the ones you flip to find out why something is slow or
+// wrong, not to make the game look a certain way. The grid hides them behind a toggle so the
+// artist-facing surface stays readable.
+struct TUCANO_TYPE() RendererSettings {
+  // Deliberately not annotated. SkyParams has its own panel and will be its own block in a scene
+  // file (E-02); reflecting it here as well would draw every sky field a second time, nested inside
+  // Rendering, and give the environment two places to be edited from.
+  SkyParams sky;
+
+  // ── Shadows ──────────────────────────────────────────────────────────────
+  TUCANO_FIELD(.label = "Enabled", .tooltip = "Master switch for every shadow pass", .category = "Shadows")
+  bool enableShadows = true;
+  TUCANO_FIELD(.label = "Soft shadows (PCSS)", .tooltip = "Contact-hardening penumbra that widens with distance from the caster", .category = "Shadows")
+  bool enablePCSS = true;
+  TUCANO_FIELD(.label = "Light size", .tooltip = "Apparent size of the sun for PCSS. Bigger means softer, blurrier penumbras", .category = "Shadows", .minValue = 0.0f, .maxValue = 0.2f, .step = 0.001f)
+  float pcssLightSize = 0.035f;
+  TUCANO_FIELD(.label = "Contact shadows", .tooltip = "Short screen-space rays that recover the tiny contact darkening shadow maps miss", .category = "Shadows")
+  bool enableContactShadows = true;
+  TUCANO_FIELD(.label = "Shadow map size", .tooltip = "Pixels per cascade face. Doubling this costs four times the memory", .category = "Shadows", .minValue = 512.0f, .maxValue = 8192.0f, .step = 512.0f)
+  uint32_t shadowMapSize = 2048;
+  TUCANO_FIELD(.label = "Toroidal CSM", .tooltip = "Scrolls cascades instead of redrawing them when the camera moves", .category = "Shadows", .advanced = true)
+  bool enableToroidalShadows = true;
+  TUCANO_FIELD(.label = "Octahedral point shadows", .tooltip = "Single-texture point-light shadows instead of a cube of six", .category = "Shadows", .advanced = true)
+  bool enableOctahedralPointShadows = true;
+  TUCANO_FIELD(.label = "Virtual shadow maps", .category = "Shadows", .advanced = true)
+  bool enableVSM = true;
+  TUCANO_FIELD(.label = "Exponential (ESM)", .tooltip = "Alternative filtering; leaks light through thin geometry", .category = "Shadows", .advanced = true)
+  bool enableESM = false;
+  TUCANO_FIELD(.label = "ESM exponent", .category = "Shadows", .minValue = 1.0f, .maxValue = 200.0f, .step = 1.0f, .advanced = true)
+  float esmExponent = 80.0f;
+
+  // ── Post processing ──────────────────────────────────────────────────────
+  TUCANO_FIELD(.label = "Tonemap", .tooltip = "HDR to display. Off shows raw linear values and looks blown out — a debugging view", .category = "Post processing")
+  bool enableTonemap = true;
+  TUCANO_FIELD(.label = "Bloom", .category = "Post processing")
+  bool enableBloom = true;
+  TUCANO_FIELD(.label = "Bloom strength", .category = "Post processing", .minValue = 0.0f, .maxValue = 2.0f, .step = 0.01f)
+  float bloomStrength = 0.28f;
+  TUCANO_FIELD(.label = "Ambient occlusion", .tooltip = "GTAO", .category = "Post processing")
+  bool enableAO = true;
+  TUCANO_FIELD(.label = "AO radius", .tooltip = "World-space metres sampled around each pixel", .category = "Post processing", .minValue = 0.1f, .maxValue = 4.0f, .step = 0.05f)
+  float aoRadius = 0.9f;
+  TUCANO_FIELD(.label = "AO intensity", .category = "Post processing", .minValue = 0.0f, .maxValue = 3.0f, .step = 0.05f)
+  float aoIntensity = 1.0f;
+  TUCANO_FIELD(.label = "Auto exposure", .tooltip = "Adapts to scene brightness, as an eye does. Off holds a fixed exposure", .category = "Exposure")
+  bool enableAutoExposure = true;
+  TUCANO_FIELD(.label = "Target", .tooltip = "Middle-grey the auto exposure aims for. 0.18 is the photographic standard", .category = "Exposure", .minValue = 0.01f, .maxValue = 1.0f, .step = 0.01f)
+  float exposureTarget = 0.18f;
+  TUCANO_FIELD(.label = "Adaptation", .tooltip = "How fast the eye adjusts. Low is slow and cinematic, high snaps", .category = "Exposure", .minValue = 0.01f, .maxValue = 1.0f, .step = 0.01f)
+  float exposureAdapt = 0.1f;
+  TUCANO_FIELD(.label = "Minimum", .tooltip = "Floor on auto exposure; stops a dark room from being lifted to daylight", .category = "Exposure", .minValue = 0.001f, .maxValue = 4.0f, .step = 0.01f)
+  float exposureMin = 0.08f;
+  TUCANO_FIELD(.label = "Maximum", .tooltip = "Ceiling on auto exposure; stops a bright sky from being crushed", .category = "Exposure", .minValue = 0.01f, .maxValue = 32.0f, .step = 0.05f)
+  float exposureMax = 4.0f;
+
+  // ── Global illumination and reflections ──────────────────────────────────
+  TUCANO_FIELD(.label = "Image-based lighting", .tooltip = "Environment light from the sky or an HDRI", .category = "Global illumination")
+  bool enableIBL = true;
+  TUCANO_FIELD(.label = "Screen-space reflections", .category = "Global illumination")
+  bool enableSSR = true;
+  TUCANO_FIELD(.label = "Voxel GI", .tooltip = "Bounced light from a voxelised scene", .category = "Global illumination")
+  bool enableVoxelGI = true;
+  TUCANO_FIELD(.label = "RT reflections", .tooltip = "Hardware ray-traced reflections. Needs DXR; auto-enabled when the device has it", .category = "Global illumination")
+  bool enableRTReflections = false;
+  TUCANO_FIELD(.label = "RT shadows", .tooltip = "Ray-query sun shadows masked against the cascades", .category = "Global illumination")
+  bool enableRTShadows = false;
+
+  // ── Clouds ───────────────────────────────────────────────────────────────
+  TUCANO_FIELD(.label = "Enabled", .category = "Clouds")
+  bool enableClouds = true;
+  TUCANO_FIELD(.label = "Coverage", .tooltip = "0 = clear sky, 1 = overcast", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
+  float cloudCoverage = 0.48f;
+  TUCANO_FIELD(.label = "Density", .tooltip = "How thick the cloud material is, independent of how much sky it covers", .category = "Clouds", .minValue = 0.1f, .maxValue = 3.0f, .step = 0.01f)
+  float cloudDensity = 1.15f;
+  TUCANO_FIELD(.label = "Altitude", .tooltip = "Metres to the cloud base", .category = "Clouds", .minValue = 200.0f, .maxValue = 8000.0f, .step = 10.0f)
+  float cloudAltitude = 1500.0f;
+  TUCANO_FIELD(.label = "Thickness", .tooltip = "Metres from base to top", .category = "Clouds", .minValue = 100.0f, .maxValue = 6000.0f, .step = 10.0f)
+  float cloudThickness = 2400.0f;
+  TUCANO_FIELD(.label = "Storminess", .tooltip = "Pushes the cloud shape toward towering, dark cumulonimbus", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
+  float cloudStorminess = 0.35f;
+  TUCANO_FIELD(.label = "Cast shadows", .tooltip = "Clouds darken the ground under them", .category = "Clouds")
+  bool enableCloudShadows = true;
+  TUCANO_FIELD(.label = "Shadow strength", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
+  float cloudShadowStrength = 0.7f;
+  TUCANO_FIELD(.label = "God rays", .tooltip = "Shafts of light through gaps in the cloud deck", .category = "Clouds")
+  bool enableCloudGodRays = true;
+  TUCANO_FIELD(.label = "God ray strength", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
+  float cloudGodRayStrength = 0.55f;
+  TUCANO_FIELD(.label = "Clouds drive rain", .tooltip = "Storminess raises the rain amount by itself, so weather stays consistent", .category = "Clouds")
+  bool cloudsDriveRain = true;
+
+  // ── Geometry pipeline ────────────────────────────────────────────────────
+  // Every one of these is a different way of drawing the same triangles. They belong to whoever is
+  // chasing a frame budget, not to whoever is dressing a level.
+  TUCANO_FIELD(.label = "Meshlets", .tooltip = "Cluster-based geometry path", .category = "Geometry pipeline", .advanced = true)
+  bool enableMeshlets = true;
+  TUCANO_FIELD(.label = "GPU meshlet culling", .tooltip = "Compute frustum/cone rejection feeding indirect args. Needs Meshlets", .category = "Geometry pipeline", .advanced = true)
+  bool enableGpuMeshletCull = true;
+  TUCANO_FIELD(.label = "Meshlet compaction", .category = "Geometry pipeline", .advanced = true)
+  bool enableMeshletCompact = true;
+  TUCANO_FIELD(.label = "Hi-Z occlusion", .tooltip = "Rejects geometry hidden behind last frame's depth pyramid", .category = "Geometry pipeline", .advanced = true)
+  bool enableHiZOcclusion = true;
+  TUCANO_FIELD(.label = "Visibility buffer", .tooltip = "Deferred material evaluation from a triangle-id buffer", .category = "Geometry pipeline", .advanced = true)
+  bool enableVisibilityBuffer = true;
+  TUCANO_FIELD(.label = "Mesh shaders", .tooltip = "Gated by device support; falls back automatically", .category = "Geometry pipeline", .advanced = true)
+  bool enableMeshShaders = true;
+  TUCANO_FIELD(.label = "Async compute", .tooltip = "Runs GI and other compute on a second queue", .category = "Geometry pipeline", .advanced = true)
+  bool enableAsyncCompute = true;
+  TUCANO_FIELD(.label = "Shader hot reload", .tooltip = "Watches the shader directory and recompiles on change", .category = "Geometry pipeline", .advanced = true)
+  bool enableShaderHotReload = true;
+
+  TUCANO_FIELD(.label = "GI tier", .tooltip = "How much of the global illumination budget to spend", .category = "Global illumination")
+  GITier giTier = GITier::Low;
+
+  // Not reflected: changing the path has to re-cook the IBL and roll back if the file cannot be
+  // used, which a plain string edit cannot express. The Environment panel owns the picker that
+  // does both.
+  std::string hdriPath = "IBL/default.hdr"; // under TUCANO_ENGINE_ASSETS_DIR
+};
 class Renderer {
 public:
   Renderer(rhi::Device& device, uint32_t width, uint32_t height);
@@ -153,12 +203,16 @@ public:
   uint32_t meshletsTotal() const { return m_meshletsTotal; }
   uint32_t meshletsDrawn() const { return m_meshletsDrawn; }
   uint64_t rgAliasedBytes() const { return m_graph.aliasedBytes(); }
+  SkyParams& sky() { return m_settings.sky; }
+  const SkyParams& sky() const { return m_settings.sky; }
   RainParams& rain() { return m_rain.params(); }
   const RainParams& rain() const { return m_rain.params(); }
   WaterParams& water() { return m_water.params(); }
   const WaterParams& water() const { return m_water.params(); }
   FogParams& fog() { return m_fog.params(); }
   const FogParams& fog() const { return m_fog.params(); }
+  CloudParams& clouds() { return m_clouds.params(); }
+  const CloudParams& clouds() const { return m_clouds.params(); }
 
 private:
   void createTargets();

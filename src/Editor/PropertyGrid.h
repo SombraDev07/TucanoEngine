@@ -57,8 +57,21 @@ public:
 	// search box wherever it likes.
 	ui::Filter& filter() { return m_filter; }
 
-	// Draws the search box above the grid. Returns true when the query changed.
+	// Draws the search box above the grid, plus an "Advanced" toggle when the type has engineering
+	// keys to reveal. Returns true when either changed.
 	bool drawFilterBox(float width = -1.0f);
+
+	// Whether properties marked `.advanced` are shown. Off by default: the artist-facing surface is
+	// the one that should be readable without being told which switches to ignore.
+	void setShowAdvanced(bool show) { m_showAdvanced = show; }
+	bool showAdvanced() const { return m_showAdvanced; }
+	// True when the last draw() saw at least one advanced property.
+	bool hasAdvanced() const { return m_hasAdvanced; }
+
+	// True when this property would be drawn: it passes the filter, and it is either not an
+	// engineering key or the grid is showing those. Public because it is the whole visibility rule
+	// in one place, and a rule nobody can ask about is a rule nobody can test.
+	bool visible(const PropertyInfo& property) const;
 
 	// Fired after a property is edited, so a panel can mark itself dirty or rebuild something.
 	std::function<void(const PropertyInfo&, void*)> onChanged;
@@ -71,6 +84,10 @@ public:
 	// with `assetKind` draw a picker; without a root the picker has nothing to offer and says so.
 	void setAssetRoot(std::string root);
 	const std::string& assetRoot() const { return m_assetRoot; }
+
+	// Project index for asset-path properties. With one set the pickers list the project instead of
+	// scanning the disk, and a pick carries a GUID.
+	void setAssetRegistry(const asset::AssetRegistry* registry);
 
 private:
 	bool drawCategory(const char* category, const TypeInfo& type, void* instance);
@@ -85,17 +102,18 @@ private:
 	bool drawVector(const PropertyInfo& property, void* instance, int components);
 	bool drawQuat(const PropertyInfo& property, void* instance);
 	bool drawAssetPath(const PropertyInfo& property, void* instance);
+	bool drawAssetRef(const PropertyInfo& property, void* instance);
 	bool drawEnum(const PropertyInfo& property, void* instance);
 	bool drawStruct(const PropertyInfo& property, void* instance, int depth);
 	bool drawArray(const TypeInfo& owner, const PropertyInfo& property, void* instance, int depth);
-
-	// True when this property should be shown under the current filter.
-	bool visible(const PropertyInfo& property) const;
 
 	UndoStack* m_undo = nullptr;
 	ui::Filter m_filter;
 	bool m_readOnly = false;
 	float m_labelFraction = 0.42f;
+	bool m_showAdvanced = false;
+	// Set by draw(), read by drawFilterBox(). Mutable state derived from the type, not a setting.
+	bool m_hasAdvanced = false;
 
 	// A quaternion is edited as Euler degrees, and the two are not one-to-one: recomputing the angles
 	// from the quaternion every frame makes them jump mid-drag (180/-180, gimbal-flipped triples). So
@@ -107,6 +125,7 @@ private:
 	// One picker per asset-path property, because a picker caches its directory scan. Keyed by the
 	// PropertyInfo address, which is static data and outlives every grid.
 	std::string m_assetRoot;
+	const asset::AssetRegistry* m_assetRegistry = nullptr;
 	std::unordered_map<const PropertyInfo*, ui::AssetPicker> m_assetPickers;
 };
 

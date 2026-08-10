@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/AssetGuid.h"
+
 // .tuasset v2 — Native Tucano Asset binary format
 //
 // Layout:
@@ -74,18 +76,8 @@ enum class AssetFlags : uint32_t {
 inline AssetFlags operator|(AssetFlags a, AssetFlags b) { return AssetFlags(uint32_t(a) | uint32_t(b)); }
 inline bool operator&(AssetFlags a, AssetFlags b) { return (uint32_t(a) & uint32_t(b)) != 0; }
 
-struct AssetGuid {
-	uint64_t hi = 0;
-	uint64_t lo = 0;
-
-	bool valid() const { return hi != 0 || lo != 0; }
-	bool operator==(const AssetGuid& o) const { return hi == o.hi && lo == o.lo; }
-	bool operator!=(const AssetGuid& o) const { return !(*this == o); }
-	bool operator<(const AssetGuid& o) const { return hi < o.hi || (hi == o.hi && lo < o.lo); }
-
-	static AssetGuid fromPath(const std::string& path);
-	std::string toString() const;
-};
+// AssetGuid moved to Core/AssetGuid.h: referring to an asset should not require including this
+// format header. Re-exported here so existing includes keep working.
 
 struct AssetDependency {
 	AssetGuid guid;

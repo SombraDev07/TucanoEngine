@@ -2,6 +2,8 @@
 
 #include <rpmalloc.h>
 
+#include <mutex>
+
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -12,7 +14,11 @@ namespace tucano::core {
 // ── Initialization ──
 
 void memoryInit() {
-	rpmalloc_initialize();
+	// Idempotent: rpmalloc_initialize() is not safe to call twice, and the callers that need it are
+	// spread across window creation, job workers and headless tools. Guarding here means no caller
+	// has to know whether someone else got there first.
+	static std::once_flag once;
+	std::call_once(once, [] { rpmalloc_initialize(); });
 }
 
 void memoryShutdown() {
@@ -20,6 +26,11 @@ void memoryShutdown() {
 }
 
 void memoryInitThreadHeap() {
+	// rpmalloc_thread_initialize() on an uninitialised allocator faults. That is reachable without
+	// anything obviously wrong at the call site: `memoryInit()` used to run only from window
+	// creation, so any headless program that built an ecs::World crashed the moment JobSystem
+	// started its workers — which is exactly how TucanoECSTest was failing.
+	memoryInit();
 	rpmalloc_thread_initialize();
 }
 

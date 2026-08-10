@@ -96,22 +96,22 @@ inline std::shared_ptr<Mesh> makeMarkerSphere(rhi::Device& device, float radius,
 inline void configureCleanRenderer(Renderer& renderer) {
   auto& s = renderer.settings();
   // Keep the lab light: sky / atmosphere / clouds only.
-  s.enableAtmosphere = true;
-  s.atmosphereDrivesSun = true;
+  s.sky.enableAtmosphere = true;
+  s.sky.atmosphereDrivesSun = true;
   s.enableClouds = true;
   s.enableCloudShadows = true;
   s.enableCloudGodRays = true;
   s.cloudsDriveRain = false;
-  s.timeOfDay = 0.42f;
-  s.turbidity = 2.6f;
-  s.fogDensity = 0.006f;
-  s.fogHeight = 80.0f;
+  s.sky.timeOfDay = 0.42f;
+  s.sky.turbidity = 2.6f;
+  s.sky.fogDensity = 0.006f;
+  s.sky.fogHeight = 80.0f;
   s.cloudCoverage = 0.52f;
   s.cloudDensity = 1.2f;
   s.cloudAltitude = 1400.0f;
   s.cloudThickness = 2400.0f;
   s.cloudStorminess = 0.3f;
-  s.wind = {0.25f, 0.0f, 0.08f};
+  s.sky.wind = {0.25f, 0.0f, 0.08f};
 
   s.enableShadows = true;
   s.enableIBL = true;

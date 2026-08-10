@@ -289,7 +289,8 @@ bool loadGLTFScene(rhi::Device& device, const std::string& path, Scene& outScene
 }
 
 
-int importGLTFAsTuasset(const std::string& path, const std::string& outputDir) {
+int importGLTFAsTuasset(const std::string& path, const std::string& outputDir,
+                        const asset::AssetGuid& sourceGuid) {
 	using namespace asset;
 
 	cgltf_options options{};
@@ -312,7 +313,12 @@ int importGLTFAsTuasset(const std::string& path, const std::string& outputDir) {
 
 				std::string meshName = mesh.name ? mesh.name : (assetName + "_mesh" + std::to_string(mi));
 				meshName += "_prim" + std::to_string(pi);
-				AssetGuid guid = AssetGuid::fromPath(path + "/mesh/" + meshName);
+				// Derived from the source's identity when the caller knows it, so a rename of the
+				// .gltf does not change the ids of what came out of it. The path hash is the
+				// fallback for callers with no registry.
+				AssetGuid guid = sourceGuid.valid()
+				                     ? AssetGuid::forSubAsset(sourceGuid, "mesh/" + meshName)
+				                     : AssetGuid::fromPath(path + "/mesh/" + meshName);
 
 				std::vector<float> positions, normals, uvs;
 				std::vector<uint32_t> indices;

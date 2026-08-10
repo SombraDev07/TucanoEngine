@@ -26,6 +26,8 @@ add_library(TucanoRuntime STATIC
   Editor/SceneTool.cpp
   Editor/PropertyGrid.cpp
   Editor/InspectorPanel.cpp
+  Editor/SceneCommands.cpp
+  Editor/PlayMode.cpp
   Editor/TypeEditingRules.cpp
   Editor/EngineEditingRules.cpp
   Editor/UI/Pickers.cpp
@@ -78,6 +80,7 @@ add_library(TucanoRuntime STATIC
   AssetPipeline/AssetPack.cpp
   AssetPipeline/TucanoAsset.cpp
   AssetPipeline/AssetRegistry.cpp
+  AssetPipeline/AssetResolver.cpp
   AssetPipeline/DracoMesh.cpp
   AssetPipeline/FBXLoader.cpp
   AssetPipeline/AssetImport.cpp
@@ -88,6 +91,8 @@ add_library(TucanoRuntime STATIC
   Core/JobSystem.cpp
   Core/Memory.cpp
   Core/TypeSystem/TypeRegistry.cpp
+  Core/TypeSystem/Serialization.cpp
+  Core/AssetGuid.cpp
   Generated/Reflection.g.cpp
   AssetPipeline/TinyExrImpl.cpp
   Renderer/Sky/Celestial.cpp
@@ -113,12 +118,15 @@ add_library(TucanoRuntime STATIC
   World/SceneCellProvider.cpp
   ECS/ComponentTypes.cpp
   ECS/Components.cpp
+  ECS/AuthoringComponents.cpp
+  ECS/SceneFile.cpp
   ECS/EntityManager.cpp
   ECS/QueryManager.cpp
   ECS/EventManager.cpp
   ECS/TemplateManager.cpp
   ECS/World.cpp
   ECS/PhysicsSync.cpp
+  ECS/RenderSync.cpp
   Terrain/Heightmap.cpp
   Terrain/TerrainGenerator.cpp
   Terrain/TerrainComponent.cpp

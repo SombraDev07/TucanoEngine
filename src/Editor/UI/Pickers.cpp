@@ -50,6 +50,8 @@ bool extensionMatches(const std::string& extension, AssetPicker::Kind kind) {
 			return extension == ".gltf" || extension == ".glb" || extension == ".tuscene";
 		case AssetPicker::Kind::Text:
 			return extension == ".txt" || extension == ".json" || extension == ".lua";
+		case AssetPicker::Kind::Material:
+			return extension == ".tumat";
 	}
 	return false;
 }
@@ -77,7 +79,44 @@ void AssetPicker::setKind(Kind kind) {
 	m_scanned = false;
 }
 
-void AssetPicker::setPath(std::string path) { m_path = std::move(path); }
+void AssetPicker::setPath(std::string path) {
+	m_path = std::move(path);
+	// The GUID no longer describes what is shown; a caller that wants one has to pick again or set
+	// it explicitly. Leaving a stale GUID here would be worse than having none.
+	m_guid = {};
+	if (m_registry != nullptr) {
+		if (const asset::RegistryEntry* entry = m_registry->findByPath(m_path)) m_guid = entry->guid;
+	}
+}
+
+void AssetPicker::setRegistry(const asset::AssetRegistry* registry) {
+	if (registry == m_registry) return;
+	m_registry = registry;
+	m_scanned = false;
+	// Re-resolve the current value against the new source, so a path set before the registry
+	// arrived still gains its GUID.
+	setPath(m_path);
+}
+
+void AssetPicker::setGuid(const asset::AssetGuid& guid) {
+	m_guid = guid;
+	m_path.clear();
+	if (m_registry == nullptr || !guid.valid()) return;
+	if (const asset::RegistryEntry* entry = m_registry->find(guid)) m_path = entry->relativePath;
+}
+
+asset::AssetType AssetPicker::assetTypeFor(Kind kind) {
+	switch (kind) {
+		case Kind::Mesh: return asset::AssetType::Mesh;
+		// Hdri is a Texture to the registry — the distinction is about *intent*, and it is the
+		// picker that enforces it by extension below.
+		case Kind::Texture:
+		case Kind::Hdri: return asset::AssetType::Texture;
+		case Kind::Scene: return asset::AssetType::Scene;
+		case Kind::Material: return asset::AssetType::Material;
+		default: return asset::AssetType::Unknown;
+	}
+}
 
 bool AssetPicker::matchesKind(const std::string& relativePath, Kind kind) {
 	const std::filesystem::path path(relativePath);
@@ -87,6 +126,22 @@ bool AssetPicker::matchesKind(const std::string& relativePath, Kind kind) {
 void AssetPicker::scan() {
 	m_candidates.clear();
 	m_scanned = true;
+
+	if (m_registry != nullptr) {
+		// From the index: no filesystem traffic, and every entry is something the project actually
+		// knows about rather than a file that happens to have the right suffix.
+		const asset::AssetType wanted = assetTypeFor(m_kind);
+		for (const asset::RegistryEntry& entry : m_registry->all()) {
+			if (wanted != asset::AssetType::Unknown && entry.type != wanted) continue;
+			// Hdri vs Texture is not a distinction the registry makes, so the extension rule still
+			// applies on top of it — pointing IBL at an 8-bit PNG is the failure this prevents.
+			if (!matchesKind(entry.relativePath, m_kind)) continue;
+			m_candidates.push_back(entry.relativePath);
+		}
+		std::sort(m_candidates.begin(), m_candidates.end());
+		return;
+	}
+
 	if (m_root.empty()) return;
 
 	std::error_code ec;
@@ -126,8 +181,13 @@ bool AssetPicker::draw(const char* id, float width) {
 
 	// The value is shown, not typed. A path field invites a typo that produces a missing asset with
 	// no feedback; browsing cannot produce one.
-	const bool missing = !m_path.empty() && !m_root.empty() &&
-	                     !std::filesystem::exists(std::filesystem::path(m_root) / m_path);
+	// Against the registry, "missing" means the index does not know this path — which is a stronger
+	// and cheaper answer than stat-ing the disk every frame.
+	const bool missing =
+	    m_path.empty() ? false
+	    : m_registry != nullptr
+	        ? m_registry->findByPath(m_path) == nullptr
+	        : (!m_root.empty() && !std::filesystem::exists(std::filesystem::path(m_root) / m_path));
 
 	// Red for a path that points at nothing: a missing asset is the failure this widget exists to
 	// prevent, and it has to be visible without hovering.
@@ -156,6 +216,7 @@ bool AssetPicker::draw(const char* id, float width) {
 	ImGui::BeginDisabled(m_path.empty());
 	if (flatIconButton(TUCANO_ICON_CLOSE, "Clear")) {
 		m_path.clear();
+		m_guid = {};
 		changed = true;
 	}
 	ImGui::EndDisabled();
@@ -166,8 +227,10 @@ bool AssetPicker::draw(const char* id, float width) {
 		m_filter.draw("##assetFilter");
 
 		if (m_candidates.empty()) {
-			textColored(Style::kTextDisabled, "Nothing of this kind under %s",
-			            m_root.empty() ? "(no root set)" : m_root.c_str());
+			textColored(Style::kTextDisabled, "Nothing of this kind %s",
+			            m_registry != nullptr ? "in the project index"
+			            : m_root.empty()      ? "(no root set)"
+			                                  : m_root.c_str());
 		} else if (m_candidates.size() >= kMaxCandidates) {
 			// Never silently truncate: a list that stops at 4000 looks complete.
 			textColored(Style::kAccent0, "Showing the first %zu matches — narrow the filter",
@@ -179,7 +242,7 @@ bool AssetPicker::draw(const char* id, float width) {
 			if (!m_filter.matches(candidate)) continue;
 			const bool selected = candidate == m_path;
 			if (ImGui::Selectable(candidate.c_str(), selected)) {
-				m_path = candidate;
+				setPath(candidate); // resolves the GUID when a registry is bound
 				changed = true;
 				ImGui::CloseCurrentPopup();
 			}

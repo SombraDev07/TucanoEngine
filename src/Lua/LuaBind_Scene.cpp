@@ -130,7 +130,7 @@ void registerRendererSettings(lua_State* L) {
 
 	lua_pushcclosure(L, [](lua_State* Ls) -> int {
 		auto* r = getRenderer(Ls);
-		if (r) r->settings().timeOfDay = (float)luaL_checknumber(Ls, 1);
+		if (r) r->settings().sky.timeOfDay = (float)luaL_checknumber(Ls, 1);
 		return 0;
 	}, 0);
 	lua_setfield(L, -2, "set_time_of_day");
@@ -144,7 +144,7 @@ void registerRendererSettings(lua_State* L) {
 
 	lua_pushcclosure(L, [](lua_State* Ls) -> int {
 		auto* r = getRenderer(Ls);
-		if (r) r->settings().enableAtmosphere = lua_toboolean(Ls, 1);
+		if (r) r->settings().sky.enableAtmosphere = lua_toboolean(Ls, 1);
 		return 0;
 	}, 0);
 	lua_setfield(L, -2, "set_atmosphere");

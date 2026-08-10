@@ -339,9 +339,9 @@ void Renderer::buildStarCatalogTextures() {
   m_starDataTex.reset();
   m_starCount = 0;
 
-  std::string path = joinPath(TUCANO_ENGINE_ASSETS_DIR, m_settings.starCatalogPath);
-  if (!fileExists(path) && fileExists(m_settings.starCatalogPath)) {
-    path = m_settings.starCatalogPath;
+  std::string path = joinPath(TUCANO_ENGINE_ASSETS_DIR, m_settings.sky.starCatalogPath);
+  if (!fileExists(path) && fileExists(m_settings.sky.starCatalogPath)) {
+    path = m_settings.sky.starCatalogPath;
   }
 
   const std::vector<CatalogStar> catalog = loadStarCatalog(path);
@@ -1252,13 +1252,13 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   // the two never drift apart. See Renderer/Sky/Celestial.h for what it does and does not model.
   {
     SkyEpoch epoch{};
-    epoch.timeOfDay = m_settings.timeOfDay;
-    epoch.dayOfYear = m_settings.dayOfYear;
-    epoch.latitudeDeg = m_settings.latitudeDeg;
+    epoch.timeOfDay = m_settings.sky.timeOfDay;
+    epoch.dayOfYear = m_settings.sky.dayOfYear;
+    epoch.latitudeDeg = m_settings.sky.latitudeDeg;
     m_celestial = computeCelestial(epoch);
   }
 
-  if (m_settings.enableAtmosphere && m_settings.atmosphereDrivesSun) {
+  if (m_settings.sky.enableAtmosphere && m_settings.sky.atmosphereDrivesSun) {
     sunDir = m_celestial.sunDir;
     const float elev = -sunDir.y; // -1..1, positive when the sun is up
     const float day = std::clamp((elev + 0.05f) / 0.85f, 0.0f, 1.0f);
@@ -1275,8 +1275,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       }
     }
   }
-  if (m_settings.enableAtmosphere) {
-    m_rain.params().wind = m_settings.wind;
+  if (m_settings.sky.enableAtmosphere) {
+    m_rain.params().wind = m_settings.sky.wind;
   }
 
   FrameCBData frame{};
@@ -1293,7 +1293,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   frame.sunDirectionIntensity = glm::vec4(sunDir, sunIntensity);
   frame.sunColor = glm::vec4(sunColor, 1.0f);
   frame.ambientColor = glm::vec4(0.03f, 0.04f, 0.06f, 1.0f);
-  if (m_settings.enableAtmosphere) {
+  if (m_settings.sky.enableAtmosphere) {
     const float elev = -sunDir.y;
     const float day = std::clamp((elev + 0.05f) / 0.85f, 0.0f, 1.0f);
     frame.ambientColor = glm::vec4(glm::mix(glm::vec3(0.01f, 0.015f, 0.04f), glm::vec3(0.08f, 0.11f, 0.18f), day), 1.0f);
@@ -2386,12 +2386,12 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                                        m_settings.enablePCSS ? 1.f : 0.f),
                              glm::vec4(useVsm ? 1.f : 0.f, float(m_vsm.pagesPerAxis()), float(m_vsm.physicalGrid()),
                                        0.f),
-                             glm::vec4(m_settings.turbidity, m_settings.fogDensity, m_settings.fogHeight,
-                                       m_settings.enableAtmosphere ? 1.f : 0.f),
+                             glm::vec4(m_settings.sky.turbidity, m_settings.sky.fogDensity, m_settings.sky.fogHeight,
+                                       m_settings.sky.enableAtmosphere ? 1.f : 0.f),
                              glm::vec4(m_bruneton.bottomRadiusKm(), m_bruneton.topRadiusKm(), m_bruneton.mieG(),
                                        m_bruneton.exposure()),
                              glm::uvec4(0, 0, 0,
-                                        (m_settings.useBrunetonAtmosphere && m_bruneton.ready()) ? 1u : 0u),
+                                        (m_settings.sky.useBrunetonAtmosphere && m_bruneton.ready()) ? 1u : 0u),
                              m_bruneton.transmittance(),
                              m_bruneton.scattering(),
                              m_bruneton.irradiance(),
@@ -2417,16 +2417,16 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     // Above the horizon only, and scaled by how much of the disc is actually lit — a crescent
     // gives a fraction of the light a full moon does.
     const float moonElev = glm::clamp(-m_celestial.moonDir.y * 6.0f, 0.0f, 1.0f);
-    const float moonLightAmount = m_settings.enableMoon
-                                      ? m_settings.moonIntensity * m_celestial.moonIllumination *
+    const float moonLightAmount = m_settings.sky.enableMoon
+                                      ? m_settings.sky.moonIntensity * m_celestial.moonIllumination *
                                             moonElev * starFade
                                       : 0.0f;
     lctx.moonColorIntensity = glm::vec4(moonlight, moonLightAmount);
-    lctx.moonDiscParams = glm::vec4(glm::radians(m_settings.moonAngularRadiusDeg),
-                                    m_celestial.moonIllumination, m_settings.moonDiscBrightness,
-                                    m_settings.enableMoon ? 1.0f : 0.0f);
-    lctx.starParams = glm::vec4(m_settings.enableStars ? m_settings.starIntensity : 0.0f, 0.006f,
-                                glm::radians(m_settings.starSizeDeg), m_settings.starTwinkle);
+    lctx.moonDiscParams = glm::vec4(glm::radians(m_settings.sky.moonAngularRadiusDeg),
+                                    m_celestial.moonIllumination, m_settings.sky.moonDiscBrightness,
+                                    m_settings.sky.enableMoon ? 1.0f : 0.0f);
+    lctx.starParams = glm::vec4(m_settings.sky.enableStars ? m_settings.sky.starIntensity : 0.0f, 0.006f,
+                                glm::radians(m_settings.sky.starSizeDeg), m_settings.sky.starTwinkle);
     lctx.celestialParams =
         glm::vec4(pixelAngle, m_timeSeconds, starFade, float(m_starDataWidth));
     // Volumetric fog: build the froxel volume just before it is consumed, so it sees this
@@ -2443,7 +2443,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       fctx.sunIntensity = frame.sunDirectionIntensity.w;
       fctx.sunColor = glm::vec3(frame.sunColor);
       fctx.ambientColor = glm::vec3(frame.ambientColor);
-      fctx.wind = m_settings.wind;
+      fctx.wind = m_settings.sky.wind;
       for (int i = 0; i < 4; ++i) fctx.lightViewProj[i] = frame.lightViewProj[i];
       fctx.cascadeSplits = lctx.cascadeSplits;
       fctx.shadowBindless = m_settings.enableShadows && m_shadowMap ? bindlessOf(*m_shadowMap) : 0;
@@ -2490,7 +2490,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     // matches the sky the atmosphere pass actually drew.
     const uint32_t prefilteredIdx = m_prefiltered ? bindlessOf(*m_prefiltered) : 0;
     m_water.execute(*cmd, *waterSrc, *m_depthColor, weather, *m_waterCB, *m_samplerLinear, frame.invViewProj,
-                    frame.viewProj, frame.view, eye, sunDir, sunColor, m_settings.turbidity, m_timeSeconds,
+                    frame.viewProj, frame.view, eye, sunDir, sunColor, m_settings.sky.turbidity, m_timeSeconds,
                     m_width, m_height, depthIdx, hdrIdx, weatherIdx, prefilteredIdx, float(m_iblMaxMip),
                     m_iblExposure * m_skyLightScale);
     postHdr = waterDst;
@@ -2510,7 +2510,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     cp.enableShadows = m_settings.enableCloudShadows;
     cp.enableGodRays = m_settings.enableCloudGodRays;
     cp.driveRain = m_settings.cloudsDriveRain;
-    cp.wind = m_settings.wind;
+    cp.wind = m_settings.sky.wind;
 
     rhi::Texture* src = postHdr;
     rhi::Texture* dst = (postHdr == m_hdr.get()) ? m_hdrCompose.get() : m_hdr.get();
@@ -2932,7 +2932,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                             1.0f,
                             // Only ramp in the night-vision response once the sun is actually down;
                             // during the day it would wash out shadowed corners.
-                            m_settings.purkinjeStrength *
+                            m_settings.sky.purkinjeStrength *
                                 glm::clamp((0.02f + m_celestial.sunDir.y) / 0.12f, 0.0f, 1.0f),
                             vp,
                             sc};

@@ -93,7 +93,7 @@ int main(int argc, char** argv) {
       renderer->water().enabled = false;
     }
     if (tod >= 0.0f) {
-      renderer->settings().timeOfDay = tod;
+      renderer->settings().sky.timeOfDay = tod;
     }
 
     Input input(window.handle());

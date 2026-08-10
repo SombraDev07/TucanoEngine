@@ -4,6 +4,14 @@
 # build for the handful that carry annotations, and a glob makes it impossible to tell whether a
 # type is missing because it is unannotated or because nobody looked.
 Renderer/Material.h
+Renderer/LightType.h
 Renderer/Scene.h
 Renderer/Weather/WaterParams.h
 Renderer/Weather/FogParams.h
+Renderer/Weather/RainParams.h
+Renderer/Weather/CloudSystem.h
+ECS/AuthoringComponents.h
+ECS/Components.h
+Renderer/MaterialAsset.h
+Renderer/Sky/SkyParams.h
+Renderer/Renderer.h

@@ -18,9 +18,9 @@ namespace tucano::waterlab {
 inline void configureWaterRenderer(Renderer& renderer) {
   auto& s = renderer.settings();
 
-  s.enableAtmosphere = true;
-  s.atmosphereDrivesSun = true;
-  s.useBrunetonAtmosphere = true;
+  s.sky.enableAtmosphere = true;
+  s.sky.atmosphereDrivesSun = true;
+  s.sky.useBrunetonAtmosphere = true;
   s.enableClouds = true;
   s.enableCloudShadows = true;
   s.enableCloudGodRays = true;
@@ -47,16 +47,16 @@ inline void configureWaterRenderer(Renderer& renderer) {
   s.enableToroidalShadows = false;
   s.giTier = GITier::Off;
 
-  s.timeOfDay = 0.38f;
-  s.turbidity = 2.8f;
-  s.fogDensity = 0.008f;
-  s.fogHeight = 60.0f;
+  s.sky.timeOfDay = 0.38f;
+  s.sky.turbidity = 2.8f;
+  s.sky.fogDensity = 0.008f;
+  s.sky.fogHeight = 60.0f;
   s.cloudCoverage = 0.48f;
   s.cloudDensity = 1.15f;
   s.cloudAltitude = 1400.0f;
   s.cloudThickness = 2400.0f;
   s.cloudStorminess = 0.3f;
-  s.wind = {0.25f, 0.0f, 0.08f};
+  s.sky.wind = {0.25f, 0.0f, 0.08f};
 
   renderer.rain().enabled = false;
   renderer.rain().enableSceneRain = false;

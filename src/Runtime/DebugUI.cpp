@@ -76,6 +76,40 @@ void DebugUI::init(Window& window, rhi::Device& device) {
   m_ready = true;
 }
 
+uint64_t DebugUI::sceneTextureId(rhi::Device& device, rhi::Texture& texture) {
+  if (!m_ready || m_srvHeap == nullptr) return 0;
+
+  auto& dx = static_cast<rhi::DX12Device&>(device);
+  auto& dxTexture = static_cast<rhi::DX12Texture&>(texture);
+  ID3D12Resource* resource = dxTexture.get();
+  if (resource == nullptr) return 0;
+
+  auto* heap = static_cast<ID3D12DescriptorHeap*>(m_srvHeap);
+  const UINT stride =
+      dx.device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+  // Rotate, and write the descriptor fresh each frame rather than caching it: the offscreen target
+  // is recreated whenever the viewport is resized, and a cache keyed by resource pointer would hand
+  // back a descriptor for a texture that no longer exists — worse, a new allocation can land on the
+  // same address, so the staleness would be invisible.
+  const uint32_t slot = 1u + (m_sceneSlotCursor % rhi::kBackBufferCount);
+  ++m_sceneSlotCursor;
+
+  D3D12_CPU_DESCRIPTOR_HANDLE cpu = heap->GetCPUDescriptorHandleForHeapStart();
+  cpu.ptr += static_cast<SIZE_T>(slot) * stride;
+  D3D12_GPU_DESCRIPTOR_HANDLE gpu = heap->GetGPUDescriptorHandleForHeapStart();
+  gpu.ptr += static_cast<UINT64>(slot) * stride;
+
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv{};
+  srv.Format = rhi::toDxgi(texture.format());
+  srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srv.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srv.Texture2D.MipLevels = 1;
+  dx.device()->CreateShaderResourceView(resource, &srv, cpu);
+
+  return static_cast<uint64_t>(gpu.ptr);
+}
+
 void DebugUI::shutdown() {
   if (m_ready) {
     ImGui_ImplDX12_Shutdown();
@@ -171,7 +205,8 @@ void DebugUI::drawPerfHud(float frameMs, uint32_t drawCalls, uint32_t width, uin
   ImGui::End();
 }
 
-void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSettings& settings) {
+void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSettings& settings,
+                                   bool lightsOwnedByEcs) {
   if (!m_ready) {
     return;
   }
@@ -262,15 +297,15 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
     }
 
     if (ImGui::CollapsingHeader("Atmosphere (FASE 5.2)", ImGuiTreeNodeFlags_DefaultOpen)) {
-      ImGui::Checkbox("Enable atmosphere", &settings.enableAtmosphere);
-      ImGui::Checkbox("Bruneton LUTs (EGSR)", &settings.useBrunetonAtmosphere);
-      ImGui::Checkbox("Time of day drives sun", &settings.atmosphereDrivesSun);
-      ImGui::SliderFloat("Time of day", &settings.timeOfDay, 0.0f, 1.0f);
+      ImGui::Checkbox("Enable atmosphere", &settings.sky.enableAtmosphere);
+      ImGui::Checkbox("Bruneton LUTs (EGSR)", &settings.sky.useBrunetonAtmosphere);
+      ImGui::Checkbox("Time of day drives sun", &settings.sky.atmosphereDrivesSun);
+      ImGui::SliderFloat("Time of day", &settings.sky.timeOfDay, 0.0f, 1.0f);
       ImGui::TextDisabled("0=mid  0.25=rise  0.5=noon  0.75=set");
-      ImGui::SliderFloat("Turbidity", &settings.turbidity, 1.0f, 8.0f);
-      ImGui::SliderFloat("Fog density", &settings.fogDensity, 0.0f, 0.08f, "%.4f");
-      ImGui::SliderFloat("Fog height", &settings.fogHeight, 5.0f, 200.0f);
-      ImGui::SliderFloat3("Wind", &settings.wind.x, -2.0f, 2.0f);
+      ImGui::SliderFloat("Turbidity", &settings.sky.turbidity, 1.0f, 8.0f);
+      ImGui::SliderFloat("Fog density", &settings.sky.fogDensity, 0.0f, 0.08f, "%.4f");
+      ImGui::SliderFloat("Fog height", &settings.sky.fogHeight, 5.0f, 200.0f);
+      ImGui::SliderFloat3("Wind", &settings.sky.wind.x, -2.0f, 2.0f);
       ImGui::Separator();
       ImGui::Checkbox("Volumetric clouds", &settings.enableClouds);
       if (settings.enableClouds) {
@@ -290,12 +325,12 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
         ImGui::Checkbox("Clouds drive rain amount", &settings.cloudsDriveRain);
       }
       if (ImGui::Button("Preset: Clear noon")) {
-        settings.enableAtmosphere = true;
-        settings.atmosphereDrivesSun = true;
-        settings.timeOfDay = 0.5f;
-        settings.turbidity = 2.0f;
-        settings.fogDensity = 0.004f;
-        settings.fogHeight = 60.0f;
+        settings.sky.enableAtmosphere = true;
+        settings.sky.atmosphereDrivesSun = true;
+        settings.sky.timeOfDay = 0.5f;
+        settings.sky.turbidity = 2.0f;
+        settings.sky.fogDensity = 0.004f;
+        settings.sky.fogHeight = 60.0f;
         settings.enableClouds = true;
         settings.cloudCoverage = 0.28f;
         settings.cloudDensity = 0.9f;
@@ -305,12 +340,12 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
       }
       ImGui::SameLine();
       if (ImGui::Button("Preset: Golden hour")) {
-        settings.enableAtmosphere = true;
-        settings.atmosphereDrivesSun = true;
-        settings.timeOfDay = 0.78f;
-        settings.turbidity = 3.5f;
-        settings.fogDensity = 0.018f;
-        settings.fogHeight = 35.0f;
+        settings.sky.enableAtmosphere = true;
+        settings.sky.atmosphereDrivesSun = true;
+        settings.sky.timeOfDay = 0.78f;
+        settings.sky.turbidity = 3.5f;
+        settings.sky.fogDensity = 0.018f;
+        settings.sky.fogHeight = 35.0f;
         settings.enableClouds = true;
         settings.cloudCoverage = 0.55f;
         settings.cloudDensity = 1.2f;
@@ -321,12 +356,12 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
       }
       ImGui::SameLine();
       if (ImGui::Button("Preset: Overcast")) {
-        settings.enableAtmosphere = true;
-        settings.atmosphereDrivesSun = true;
-        settings.timeOfDay = 0.42f;
-        settings.turbidity = 6.5f;
-        settings.fogDensity = 0.035f;
-        settings.fogHeight = 25.0f;
+        settings.sky.enableAtmosphere = true;
+        settings.sky.atmosphereDrivesSun = true;
+        settings.sky.timeOfDay = 0.42f;
+        settings.sky.turbidity = 6.5f;
+        settings.sky.fogDensity = 0.035f;
+        settings.sky.fogHeight = 25.0f;
         settings.enableClouds = true;
         settings.cloudCoverage = 0.88f;
         settings.cloudDensity = 1.6f;
@@ -338,6 +373,10 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
     }
 
     if (ImGui::CollapsingHeader("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (lightsOwnedByEcs) {
+        ImGui::TextDisabled("Owned by the scene's entities — edit in the Outliner/Inspector.");
+        ImGui::BeginDisabled();
+      }
       for (size_t i = 0; i < scene.lights.size(); ++i) {
         auto& L = scene.lights[i];
         ImGui::PushID(static_cast<int>(i));
@@ -363,7 +402,12 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
         }
         ImGui::PopID();
       }
-      if (ImGui::Button("Add point light")) {
+      if (lightsOwnedByEcs) {
+        // No "Add" either: it would append to a list that is rebuilt from entities next frame, so
+        // the light would appear for one frame and vanish. Adding a light entity is the Outliner's
+        // job now.
+        ImGui::EndDisabled();
+      } else if (ImGui::Button("Add point light")) {
         scene.addPoint(scene.camera.position() + scene.camera.forward() * 2.0f, {1, 0.9f, 0.7f}, 15.0f, 10.0f);
       }
     }

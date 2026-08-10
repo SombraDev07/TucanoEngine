@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/EditorContext.h"
+#include "Editor/PlayMode.h"
 
 #include <imgui.h>
 
@@ -56,21 +57,42 @@ public:
 
 		ImGui::Separator();
 
-		// ── Playback ──
+		// ── Playback (I-01) ──
 		ImGui::TextUnformatted("Playback");
-		{
-			ImVec4 playColor = m_playing ? ImVec4(0.2f, 0.8f, 0.2f, 1) : ImVec4(0.3f, 0.3f, 0.3f, 1);
-			ImGui::PushStyleColor(ImGuiCol_Button, playColor);
-			if (ImGui::Button("Play##PlayBtn", ImVec2(-1, 0))) {
-				m_playing = !m_playing;
-				ctx.logInfo(m_playing ? "Play mode started." : "Play mode stopped.");
+		if (ctx.play == nullptr) {
+			ImGui::TextDisabled("No play mode bound.");
+		} else {
+			PlayMode& play = *ctx.play;
+			const bool running = play.isPlaying();
+
+			ImGui::PushStyleColor(ImGuiCol_Button, running ? ImVec4(0.15f, 0.55f, 0.18f, 1)
+			                                               : ImVec4(0.3f, 0.3f, 0.3f, 1));
+			if (ImGui::Button(running ? "Stop##PlayBtn" : "Play##PlayBtn", ImVec2(-1, 0))) {
+				if (running) {
+					play.stop();
+					ctx.logInfo("Play stopped — scene restored.");
+				} else if (play.play()) {
+					ctx.logInfo("Play started.");
+				} else {
+					ctx.logWarn("Could not start play: " + play.error());
+				}
 			}
 			ImGui::PopStyleColor();
-		}
 
-		if (ImGui::Button("Pause##PauseBtn", ImVec2(-1, 0))) {
-			m_paused = !m_paused;
-			ctx.logInfo(m_paused ? "Paused." : "Resumed.");
+			// Pause only means something while running, and a button that does nothing is worse
+			// than one that says it cannot.
+			ImGui::BeginDisabled(!running);
+			if (ImGui::Button(play.isPaused() ? "Resume##PauseBtn" : "Pause##PauseBtn",
+			                  ImVec2(-1, 0))) {
+				play.togglePause();
+				ctx.logInfo(play.isPaused() ? "Paused." : "Resumed.");
+			}
+			ImGui::EndDisabled();
+
+			if (running) {
+				ImGui::TextDisabled("%s — %.1fs", play.isPaused() ? "paused" : "running",
+				                    play.playTime());
+			}
 		}
 
 		// Terrain tool placeholder

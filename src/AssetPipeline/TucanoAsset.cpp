@@ -25,11 +25,6 @@ AssetGuid AssetGuid::fromPath(const std::string& path) {
 	return g;
 }
 
-std::string AssetGuid::toString() const {
-	std::ostringstream ss;
-	ss << std::hex << std::setfill('0') << std::setw(16) << hi << std::setw(16) << lo;
-	return ss.str();
-}
 
 // ── CRC32 ─────────────────────────────────────────────
 

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/AssetGuid.h"
+
 // Single entry point for source-model → .tuasset conversion, plus the reverse path that turns a
 // cooked .tuasset back into a renderable Mesh. Callers (editor C ABI, tools) should use these
 // rather than the format-specific importers so a new source format is one switch case, not a new
@@ -18,7 +20,8 @@ namespace tucano {
 /// Converts `path` (.gltf/.glb/.fbx) into one .tuasset per mesh primitive under
 /// `outputDir/<sourceStem>/`. Returns the number of assets written (0 = nothing imported).
 /// Unknown extensions return 0 rather than being fed to the wrong parser.
-int importModelAsTuasset(const std::string& path, const std::string& outputDir);
+int importModelAsTuasset(const std::string& path, const std::string& outputDir,
+                         const asset::AssetGuid& sourceGuid = {});
 
 /// True when `path` has an extension importModelAsTuasset knows how to read.
 bool isImportableModel(const std::string& path);

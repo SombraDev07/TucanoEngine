@@ -61,6 +61,13 @@ CORE_TYPE_BY_SPELLING = {
     "float": "Float",
     "double": "Double",
     "std::string": "String",
+    "tucano::asset::AssetGuid": "AssetRef",
+    "asset::AssetGuid": "AssetRef",
+    "AssetGuid": "AssetRef",
+    "tucano::NameString": "FixedString",
+    "tucano::PathString": "FixedString",
+    "NameString": "FixedString",
+    "PathString": "FixedString",
     "glm::vec2": "Vec2",
     "glm::vec3": "Vec3",
     "glm::vec4": "Vec4",
@@ -69,7 +76,7 @@ CORE_TYPE_BY_SPELLING = {
 
 KNOWN_CORE_TYPES = {
     "Bool", "Int32", "UInt32", "Int64", "UInt64", "Float", "Double", "String",
-    "Vec2", "Vec3", "Vec4", "Quat", "Color", "Enum", "Struct", "Array",
+    "Vec2", "Vec3", "Vec4", "Quat", "Color", "Enum", "Struct", "Array", "FixedString", "AssetRef",
 }
 
 
@@ -81,10 +88,22 @@ class Field:
         self.struct_type = struct_type
 
 
-class ReflectedType:
-    def __init__(self, name, header):
+class ReflectedEnum:
+    def __init__(self, name, header, namespace=""):
         self.name = name
         self.header = header
+        self.namespace = namespace
+        # (constant, label). The label is what a combo shows; the constant is what a file stores.
+        self.constants = []
+
+
+class ReflectedType:
+    def __init__(self, name, header, namespace=""):
+        self.name = name
+        self.header = header
+        # Namespace under `tucano`, empty when the type sits directly in it. Kept because the
+        # registration macro has to name the real type, while the *registered* name stays short.
+        self.namespace = namespace
         self.fields = []
 
 
@@ -134,7 +153,9 @@ def infer_core_type(field_type, reflected_names):
 
     decl = canonical.get_declaration()
     if decl is not None and decl.kind == ci.CursorKind.ENUM_DECL:
-        return ("Enum", None, 0)
+        # The name matters: a property of CoreType::Enum whose TypeID points nowhere draws as a
+        # number spinner and serialises as an integer. Carried in the same slot Struct uses.
+        return ("Enum", decl.spelling, 0)
 
     bare = spelling.split("::")[-1]
     if bare in reflected_names:
@@ -143,7 +164,58 @@ def infer_core_type(field_type, reflected_names):
     return None
 
 
-def collect(cursor, header, out_types, reflected_names):
+def namespace_of(node):
+    """Namespace chain under `tucano`, e.g. "ecs" for tucano::ecs::NameComponent."""
+    import clang.cindex as ci
+
+    parts = []
+    parent = node.semantic_parent
+    while parent is not None and parent.kind == ci.CursorKind.NAMESPACE:
+        parts.append(parent.spelling)
+        parent = parent.semantic_parent
+    parts.reverse()
+    if parts and parts[0] == "tucano":
+        parts = parts[1:]
+    return "::".join(parts)
+
+
+def collect_enums(cursor, header, out_enums):
+    """Enums annotated with TUCANO_ENUM(), with their constants.
+
+    Same one-header-owns-it rule as types: walking a translation unit reaches every include, and an
+    enum emitted twice is a duplicate registration.
+    """
+    import clang.cindex as ci
+
+    for node in cursor.walk_preorder():
+        if node.kind != ci.CursorKind.ENUM_DECL or not node.is_definition():
+            continue
+        if node.location.file is None:
+            continue
+        if os.path.normcase(os.path.abspath(node.location.file.name)) != os.path.normcase(
+            os.path.abspath(header)
+        ):
+            continue
+        if not any(c.kind == ci.CursorKind.ANNOTATE_ATTR and c.spelling.startswith(ENUM_MARK)
+                   for c in node.get_children()):
+            continue
+
+        reflected = ReflectedEnum(node.spelling, header, namespace_of(node))
+        for member in node.get_children():
+            if member.kind != ci.CursorKind.ENUM_CONSTANT_DECL:
+                continue
+            # The label is the constant name. Every enum reflected so far reads correctly as
+            # written ("Directional", "Point", "Spot"), and a per-constant label override would be
+            # a code path with no caller — which is a code path nothing tests. When a constant
+            # genuinely needs a different label, TUCANO_ENUMERATOR is already declared in
+            # ReflectionMacros.h and this is where it plugs in.
+            reflected.constants.append((member.spelling, '"%s"' % member.spelling))
+
+        if reflected.constants:
+            out_enums.append(reflected)
+
+
+def collect(cursor, header, out_types, reflected_names, reflected_enums=frozenset()):
     import clang.cindex as ci
 
     for node in cursor.walk_preorder():
@@ -166,7 +238,7 @@ def collect(cursor, header, out_types, reflected_names):
         if not any(a.startswith(TYPE_MARK) for a in annotations):
             continue
 
-        reflected = ReflectedType(node.spelling, header)
+        reflected = ReflectedType(node.spelling, header, namespace_of(node))
         for member in node.get_children():
             if member.kind != ci.CursorKind.FIELD_DECL:
                 continue
@@ -195,6 +267,19 @@ def collect(cursor, header, out_types, reflected_names):
             if core_type == "Struct":
                 struct_type = normalise_spelling(member.type.spelling).split("::")[-1]
 
+            if core_type == "Enum":
+                struct_type = (inferred[1] if inferred is not None and inferred[1]
+                               else normalise_spelling(member.type.spelling).split("::")[-1])
+                # Loud rather than silent: an unannotated enum still compiles, and the only symptom
+                # is a combo that shows "1" and a scene file full of integers that change meaning
+                # when a constant is inserted.
+                if struct_type not in reflected_enums:
+                    raise ValueError(
+                        f"{node.spelling}::{member.spelling} is of enum type '{struct_type}', "
+                        f"which is not reflected. Annotate it with TUCANO_ENUM() and add its "
+                        f"header to the manifest."
+                    )
+
             reflected.fields.append(Field(member.spelling, core_type, metadata, struct_type))
 
         if reflected.fields:
@@ -210,7 +295,7 @@ BANNER = [
 ]
 
 
-def emit_header(types, headers):
+def emit_header(types, headers, enums=()):
     """The registration itself.
 
     A header, not a .cpp, because TUCANO_REFLECT_TYPE_BEGIN also specialises TypeName<T> — and that
@@ -226,11 +311,30 @@ def emit_header(types, headers):
         lines.append(f'#include "{header}"')
     lines.append("")
 
+    # Enums first: a property points at its enum by TypeID, and reading the file top-down should
+    # find the thing being pointed at before the pointer.
+    for reflected in enums:
+        if reflected.namespace:
+            lines.append(
+                f"TUCANO_REFLECT_ENUM_BEGIN_NS({reflected.namespace}, {reflected.name})")
+        else:
+            lines.append(f"TUCANO_REFLECT_ENUM_BEGIN({reflected.name})")
+        for constant, label in reflected.constants:
+            lines.append("\tTUCANO_ENUM_CONSTANT(%s, %s)" % (constant, label))
+        lines.append(f"TUCANO_REFLECT_ENUM_END({reflected.name})")
+        lines.append("")
+
     for reflected in types:
-        lines.append(f"TUCANO_REFLECT_TYPE_BEGIN({reflected.name})")
+        if reflected.namespace:
+            lines.append(
+                f"TUCANO_REFLECT_TYPE_BEGIN_NS({reflected.namespace}, {reflected.name})")
+        else:
+            lines.append(f"TUCANO_REFLECT_TYPE_BEGIN({reflected.name})")
         for field in reflected.fields:
             if field.core_type == "Struct":
                 macro = f"\tTUCANO_PROPERTY_STRUCT({field.name}, {field.struct_type}"
+            elif field.core_type == "Enum":
+                macro = f"\tTUCANO_PROPERTY_ENUM({field.name}, {field.struct_type}"
             else:
                 macro = f"\tTUCANO_PROPERTY({field.name}, {field.core_type}"
             if field.metadata:
@@ -310,6 +414,7 @@ def main():
     # struct can only be recognised as Struct once that struct is known. Header order in the
     # manifest should not decide whether a field is editable.
     reflected_names = set()
+    reflected_enum_names = set()
     parsed = []
     for relative in headers:
         absolute = os.path.join(args.src_root, relative)
@@ -331,11 +436,22 @@ def main():
                 if any(c.kind == ci.CursorKind.ANNOTATE_ATTR and c.spelling.startswith(TYPE_MARK)
                        for c in node.get_children()):
                     reflected_names.add(node.spelling)
+            if node.kind == ci.CursorKind.ENUM_DECL and node.is_definition() and \
+               node.location.file is not None and \
+               os.path.normcase(os.path.abspath(node.location.file.name)) == \
+               os.path.normcase(os.path.abspath(absolute)):
+                if any(c.kind == ci.CursorKind.ANNOTATE_ATTR and c.spelling.startswith(ENUM_MARK)
+                       for c in node.get_children()):
+                    reflected_enum_names.add(node.spelling)
 
     types = []
+    enums = []
+    for relative, absolute, translation_unit in parsed:
+        collect_enums(translation_unit.cursor, absolute, enums)
     for relative, absolute, translation_unit in parsed:
         try:
-            collect(translation_unit.cursor, absolute, types, reflected_names)
+            collect(translation_unit.cursor, absolute, types, reflected_names,
+                    reflected_enum_names)
         except ValueError as error:
             print(f"reflector: {relative}: {error}", file=sys.stderr)
             return 1
@@ -347,7 +463,7 @@ def main():
     header_path = args.out
     source_path = os.path.splitext(args.out)[0] + ".cpp"
     outputs = {
-        header_path: emit_header(types, headers) + "\n",
+        header_path: emit_header(types, headers, enums) + "\n",
         source_path: emit_source(os.path.basename(header_path)) + "\n",
     }
 
@@ -360,7 +476,8 @@ def main():
             if existing != text:
                 print(f"reflector: {path} is stale — run the TucanoReflect target.", file=sys.stderr)
                 return 1
-        print(f"reflector: generated reflection is up to date ({len(types)} types).")
+        print(f"reflector: generated reflection is up to date "
+              f"({len(types)} types, {len(enums)} enums).")
         return 0
 
     for path, text in outputs.items():
@@ -368,7 +485,9 @@ def main():
         with open(path, "w", encoding="utf-8") as handle:
             handle.write(text)
     total_fields = sum(len(t.fields) for t in types)
-    print(f"reflector: wrote {header_path} — {len(types)} types, {total_fields} properties.")
+    total_constants = sum(len(e.constants) for e in enums)
+    print(f"reflector: wrote {header_path} — {len(types)} types, {total_fields} properties, "
+          f"{len(enums)} enums, {total_constants} constants.")
     return 0
 
 

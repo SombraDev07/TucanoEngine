@@ -24,7 +24,8 @@ glm::mat4 toGlm(const ofbx::DMatrix& m) {
 
 } // namespace
 
-int importFBXAsTuasset(const std::string& fbxPath, const std::string& outputDir) {
+int importFBXAsTuasset(const std::string& fbxPath, const std::string& outputDir,
+                       const asset::AssetGuid& sourceGuid) {
 	using namespace asset;
 
 	std::ifstream file(fbxPath, std::ios::binary | std::ios::ate);

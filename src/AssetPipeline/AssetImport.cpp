@@ -171,10 +171,11 @@ bool isImportableModel(const std::string& path) {
 	return ext == ".gltf" || ext == ".glb" || ext == ".fbx";
 }
 
-int importModelAsTuasset(const std::string& path, const std::string& outputDir) {
+int importModelAsTuasset(const std::string& path, const std::string& outputDir,
+                         const asset::AssetGuid& sourceGuid) {
 	const std::string ext = lowerExtension(path);
-	if (ext == ".gltf" || ext == ".glb") return importGLTFAsTuasset(path, outputDir);
-	if (ext == ".fbx") return importFBXAsTuasset(path, outputDir);
+	if (ext == ".gltf" || ext == ".glb") return importGLTFAsTuasset(path, outputDir, sourceGuid);
+	if (ext == ".fbx") return importFBXAsTuasset(path, outputDir, sourceGuid);
 	std::cerr << "[Tuasset] unsupported source format '" << ext << "' for " << path << "\n";
 	return 0;
 }

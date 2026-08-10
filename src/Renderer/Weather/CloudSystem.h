@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/TypeSystem/ReflectionMacros.h"
+
 #include "RHI/RHI.h"
 
 #include <glm/glm.hpp>
@@ -7,19 +9,32 @@
 
 namespace tucano {
 
-struct CloudParams {
+struct TUCANO_TYPE() CloudParams {
+  TUCANO_FIELD(.label = "Enabled", .tooltip = "Draw the volumetric cloud layer at all", .category = "Clouds")
   bool enabled = true;
+  TUCANO_FIELD(.label = "Cloud shadows", .tooltip = "Clouds cast shadows onto the world below", .category = "Lighting")
   bool enableShadows = true;
+  TUCANO_FIELD(.label = "God rays", .tooltip = "Light shafts through gaps in the layer", .category = "Lighting")
   bool enableGodRays = true;
+  TUCANO_FIELD(.label = "Weather map", .tooltip = "Procedural map deciding where cloud forms; off gives a uniform layer", .category = "Weather")
   bool enableWeatherMap = true;
+  TUCANO_FIELD(.label = "Clouds drive rain", .tooltip = "Cloud coverage feeds RainParams::amount automatically", .category = "Weather")
   bool driveRain = true;
+  TUCANO_FIELD(.label = "Coverage", .tooltip = "Fraction of sky filled. 0 is clear, 1 is overcast", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
   float coverage = 0.48f;
+  TUCANO_FIELD(.label = "Density", .tooltip = "Extinction inside the cloud; higher reads as heavier and darker", .category = "Clouds", .minValue = 0.0f, .maxValue = 4.0f, .step = 0.05f)
   float density = 1.15f;
+  TUCANO_FIELD(.label = "Base altitude", .tooltip = "Height of the cloud bottom, in metres", .category = "Shape", .minValue = 100.0f, .maxValue = 8000.0f, .step = 50.0f)
   float altitude = 1500.0f;
+  TUCANO_FIELD(.label = "Thickness", .tooltip = "Vertical extent of the layer, in metres", .category = "Shape", .minValue = 100.0f, .maxValue = 8000.0f, .step = 50.0f)
   float thickness = 2400.0f;
+  TUCANO_FIELD(.label = "Shadow strength", .tooltip = "How much cloud shadow darkens the ground", .category = "Lighting", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.02f)
   float shadowStrength = 0.7f;
+  TUCANO_FIELD(.label = "Temporal blend", .tooltip = "History weight of the temporal filter. High is stable but smears when the camera moves", .category = "Quality", .minValue = 0.0f, .maxValue = 0.99f, .step = 0.01f)
   float temporalAlpha = 0.88f;
+  TUCANO_FIELD(.label = "God ray strength", .tooltip = "Intensity of the light shafts", .category = "Lighting", .minValue = 0.0f, .maxValue = 2.0f, .step = 0.05f)
   float godRayStrength = 0.55f;
+  TUCANO_FIELD(.label = "Storminess", .tooltip = "Pushes the shape towards towering, anvil-topped cloud", .category = "Shape", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.02f)
   float storminess = 0.35f;
   glm::vec3 wind{0.2f, 0.0f, 0.05f};
 };

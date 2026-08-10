@@ -33,6 +33,14 @@ enum class CoreType : uint8_t {
 	Float,
 	Double,
 	String,
+	// Inline, fixed-capacity string (tucano::FixedString). Distinct from String because the storage
+	// is a char buffer, not a std::string — ECS components must stay trivially copyable, so a name
+	// or an asset path on a component is one of these. `size` carries the capacity.
+	FixedString,
+	// Reference to an asset by identity (tucano::asset::AssetGuid), not by path. The editor draws a
+	// picker over the project index and stores the GUID, so renaming the file does not break the
+	// reference. `meta.assetKind` says which kind the field accepts.
+	AssetRef,
 	Vec2,
 	Vec3,
 	Vec4,
@@ -56,6 +64,12 @@ struct PropertyMetadata {
 	float minValue = 0.0f;
 	float maxValue = 0.0f; // max <= min means "unbounded", which is the honest default
 	float step = 0.0f;     // 0 means the editor picks
+	// An engineering key rather than an authoring one: something you flip to find out why a frame is
+	// slow or wrong, not to decide how the game looks. The grid hides these behind a toggle, which
+	// is the difference between a panel an artist can read and a wall of 67 checkboxes.
+	// Declared here, between `step` and `readOnly`, because these are designated initialisers and
+	// the order below has to match the order above — see the note at the top of this file.
+	bool advanced = false;
 	bool readOnly = false;
 	// Kept out of a saved file. For derived or transient state that would be misleading on disk.
 	bool transient = false;
@@ -99,6 +113,35 @@ struct PropertyInfo {
 	template <typename T>
 	const T& valueIn(const void* instance) const {
 		return *static_cast<const T*>(addressIn(instance));
+	}
+
+	// Enum access that respects the declared underlying type.
+	//
+	// An `enum class E : uint8_t` occupies one byte. Reading it as int32_t — which the grid and the
+	// serialiser both used to do — reads three bytes of whatever follows it in the struct, and
+	// writing it back scribbles over them. It happens to work today only because every reflected
+	// enum is 4 bytes wide, which is not a property anyone declared or checked.
+	int64_t enumValueIn(const void* instance) const {
+		const void* address = addressIn(instance);
+		if (address == nullptr) return 0;
+		switch (size) {
+			case 1: return *static_cast<const int8_t*>(address);
+			case 2: return *static_cast<const int16_t*>(address);
+			case 4: return *static_cast<const int32_t*>(address);
+			case 8: return *static_cast<const int64_t*>(address);
+			default: return 0;
+		}
+	}
+	void setEnumValueIn(void* instance, int64_t value) const {
+		void* address = addressIn(instance);
+		if (address == nullptr) return;
+		switch (size) {
+			case 1: *static_cast<int8_t*>(address) = static_cast<int8_t>(value); break;
+			case 2: *static_cast<int16_t*>(address) = static_cast<int16_t>(value); break;
+			case 4: *static_cast<int32_t*>(address) = static_cast<int32_t>(value); break;
+			case 8: *static_cast<int64_t*>(address) = value; break;
+			default: break;
+		}
 	}
 };
 

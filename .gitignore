@@ -61,12 +61,16 @@ CMakeUserPresets.json
 /lua_log.txt
 /NodeEditor.json
 /NUL.obj
-EditorLayout.ini
+# Any layout variant — these are per-machine window arrangements, not project data.
+EditorLayout*.ini
 
 # Screenshots / debug images (root only)
 /*.png
 /editor_stream_world/
 /world_lab/
+
+# Output of TucanoAssetTest
+/asset_test_out/
 
 # Dagor reference docs (local)
 /docs/DAGOR_PARITY.md

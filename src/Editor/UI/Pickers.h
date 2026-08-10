@@ -5,15 +5,19 @@
 //
 // Derived from Esoterica (MIT) — Code/EngineTools/Widgets/Pickers/{DataPathPicker,TypeInfoPicker}.h
 //
-// P4-04 of the roadmap, with one honest deviation. Esoterica's ResourcePicker browses a *resource
-// database*: cooked, typed, id-addressed entries with dependency tracking. Tucano has no such
-// database yet — that is P5. So AssetPicker browses the project's asset tree and yields a path.
-// The widget, its filtering and its call sites survive P5 unchanged; only what sits behind
-// `AssetPicker::Kind` changes, from an extension list to a resource-type query.
+// P4-04 built these against a directory scan, because there was no index. B-06 gives them the
+// `AssetRegistry`: with one bound, the list is the *project's* assets — typed, and each carrying a
+// stable GUID, so a pick survives the file being renamed. Without one it falls back to the
+// extension scan, which is what a host with no project still gets.
+//
+// The fallback is scaffolding with a cost worth naming: a path picked that way breaks the moment
+// the file moves. That is exactly the failure the registry exists to remove, so the fallback is
+// the degraded mode, not an equal option.
 //
 // Both pickers scan lazily and cache. A recursive directory walk or a registry sweep per frame
 // would be paid on every frame the panel is open, for data that changes on the order of never.
 
+#include "AssetPipeline/AssetRegistry.h"
 #include "Core/TypeSystem/TypeID.h"
 #include "Editor/UI/Widgets.h"
 
@@ -35,11 +39,24 @@ class AssetPicker {
 public:
 	// What the field expects. Kind is deliberately about *purpose*, not about extension: a field
 	// wanting a texture does not care whether the artist saved .png or .dds.
-	enum class Kind { Any, Mesh, Texture, Hdri, Scene, Text };
+	enum class Kind { Any, Mesh, Texture, Hdri, Scene, Text, Material };
 
 	// Root the paths are relative to. Changing it invalidates the scan.
 	void setRoot(std::string root);
 	const std::string& root() const { return m_root; }
+
+	// Bind the project index. With one set, `candidates()` comes from it and the directory scan is
+	// not run at all. Null goes back to scanning.
+	void setRegistry(const asset::AssetRegistry* registry);
+	bool usingRegistry() const { return m_registry != nullptr; }
+
+	// GUID of the current value when it came from the registry; invalid otherwise. This is what a
+	// caller should store — the path is a display detail.
+	const asset::AssetGuid& guid() const { return m_guid; }
+	void setGuid(const asset::AssetGuid& guid);
+
+	// AssetType this Kind maps onto, so the picker and the registry agree on what "mesh" means.
+	static asset::AssetType assetTypeFor(Kind kind);
 
 	void setKind(Kind kind);
 	Kind kind() const { return m_kind; }
@@ -73,6 +90,8 @@ private:
 	std::string m_path;
 	Kind m_kind = Kind::Any;
 	bool m_disabled = false;
+	const asset::AssetRegistry* m_registry = nullptr;
+	asset::AssetGuid m_guid;
 
 	bool m_scanned = false;
 	std::vector<std::string> m_candidates;

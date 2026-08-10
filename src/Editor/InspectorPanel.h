@@ -2,18 +2,23 @@
 
 #include "Editor/PropertyGrid.h"
 
+#include <string>
+#include <vector>
+
+namespace tucano::asset {
+class AssetRegistry;
+}
+
 // InspectorPanel — the properties of whatever is selected in the Outliner.
 //
-// P4-05 of the roadmap. This panel used to be ~85 lines of hand-written ImGui: a DragFloat3 per
-// transform field, a fixed handful of material sliders, and a quaternion-to-Euler conversion done
-// inline. It is now two PropertyGrids over the reflection generated from the
-// annotations on Material and RenderObject themselves (P3-03), so
-// what it shows is decided by the structs rather than by this file.
+// P4-05 replaced ~85 lines of hand-written ImGui with PropertyGrids over reflection data. C-02c
+// then moved what it edits: with a `World` bound it shows the selected **entity's components**,
+// which is the unit the editor authors (decision C-02, section 8 of the roadmap). Without a world
+// it falls back to the old `Scene::objects` path, so hosts that have not been migrated keep
+// working — the fallback is scaffolding, not a second design.
 //
-// The practical difference: `aoFactor`, `reflectance`, `clearcoatRoughness`, `fuzzColor`,
-// `detailScale`, `alphaMask` and `alphaCutoff` were live material parameters the hand-written panel
-// never exposed. They appear now because they are declared, not because anyone wrote a row for
-// them — and the same will be true of the next field added to Material.
+// One grid per component rather than one shared grid: each keeps its own column split and filter
+// state, and a grid rebuilt for a different type every frame would lose both.
 
 namespace tucano::editor {
 
@@ -28,16 +33,33 @@ public:
 	// this is optional rather than a constructor argument.
 	void setUndoStack(UndoStack* stack);
 
+	// Where asset-path properties browse from. Passed to every component grid, so a MeshComponent
+	// gets a picker over the project index rather than a text box.
+	void setAssetSource(const asset::AssetRegistry* registry, const std::string& root);
+
 	// True when the last draw() changed something; the host decides what "dirty" means for it.
 	bool changed() const { return m_changed; }
 
 private:
-	// The object and its material are separate registered types reached through a shared_ptr, so
-	// they are two grids. Both are driven by the single filter box the panel draws.
+	void drawEntity(EditorContext& context);
+	void drawSceneObject(EditorContext& context);
+
+	// Indexed by the component table in the .cpp, so a grid belongs to a component type for the
+	// life of the panel.
+	// Draws the Add Component button and its menu, offering only what the entity lacks.
+	void drawAddComponent(EditorContext& context, uint32_t entity);
+
+	std::vector<PropertyGrid> m_componentGrids;
+
+	// The pre-C-02 path: object and its material are separate registered types reached through a
+	// shared_ptr, so they are two grids.
 	PropertyGrid m_objectGrid;
 	PropertyGrid m_materialGrid;
 	int m_materialSlot = 0;
 	bool m_changed = false;
+	UndoStack* m_undo = nullptr;
+	const asset::AssetRegistry* m_assetRegistry = nullptr;
+	std::string m_assetRoot;
 };
 
 } // namespace tucano::editor

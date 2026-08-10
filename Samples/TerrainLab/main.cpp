@@ -98,9 +98,9 @@ int main(int argc, char** argv) {
 			s.enableMeshShaders = false;
 			s.enableMeshlets = false;
 			s.enableHiZOcclusion = false;
-			s.timeOfDay = 0.38f;
-			s.fogDensity = 0.008f;
-			s.fogHeight = 80.0f;
+			s.sky.timeOfDay = 0.38f;
+			s.sky.fogDensity = 0.008f;
+			s.sky.fogHeight = 80.0f;
 			renderer->rain().enabled = false;
 		}
 

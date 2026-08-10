@@ -1,123 +1,205 @@
 #pragma once
 
+#include "AssetPipeline/AssetRegistry.h"
 #include "Editor/EditorContext.h"
+#include "Editor/UI/Icons.h"
+#include "Editor/UI/Widgets.h"
 
 #include <imgui.h>
-#include <filesystem>
-#include <string>
-#include <vector>
+
 #include <algorithm>
+#include <string>
+#include <string_view>
+#include <vector>
+
+// Content Browser — the project's assets.
+//
+// B-02: it used to walk the disk with `directory_iterator` every frame and classify files by
+// extension. It now reads the `AssetRegistry` (B-01), which buys three things it could not do
+// before: every item carries a **stable GUID**, so what gets picked survives the file being
+// renamed; the folder tree is the *project's* shape rather than whatever happens to sit on disk
+// beside it; and there is no filesystem traffic per frame.
+//
+// Folders are virtual — derived from the registry's relative paths, never queried. A directory
+// holding nothing the editor understands therefore does not appear, which is the right answer for
+// a browser whose job is to show assets.
 
 namespace tucano::editor {
 
 class ContentBrowser {
 public:
 	void draw(EditorContext& ctx) {
-		if (m_currentPath.empty()) {
-			m_currentPath = "Assets";
-		}
-
-		// ── Navigation bar ──
-		if (ImGui::Button("<")) {
-			if (m_currentPath != "Assets") {
-				m_currentPath = std::filesystem::path(m_currentPath).parent_path().string();
-			}
-		}
-		ImGui::SameLine();
-		ImGui::TextUnformatted(m_currentPath.c_str());
-
-		ImGui::SameLine();
-		ImGui::SetNextItemWidth(180);
-		const char* filterItems[] = {"All", "Meshes", "Textures", "Materials"};
-		ImGui::Combo("##Filter", &m_filterIndex, filterItems, IM_ARRAYSIZE(filterItems));
-
-		ImGui::Separator();
-
-		// ── Content area ──
-		ImGui::BeginChild("ContentArea", ImVec2(0, 0), false);
-
-		std::error_code ec;
-		std::vector<std::filesystem::path> dirs, files;
-
-		for (const auto& entry : std::filesystem::directory_iterator(m_currentPath, ec)) {
-			if (entry.is_directory()) {
-				dirs.push_back(entry.path());
-			} else {
-				files.push_back(entry.path());
-			}
-		}
-		if (ec) {
-			ImGui::TextColored(ImVec4(1, 0.3f, 0.3f, 1), "Cannot read: %s", m_currentPath.c_str());
-			ImGui::EndChild();
+		if (ctx.assets == nullptr) {
+			ImGui::TextDisabled("No project scanned.");
 			return;
 		}
 
-		std::sort(dirs.begin(), dirs.end());
-		std::sort(files.begin(), files.end());
+		drawToolbar(ctx);
+		ImGui::Separator();
 
-		const float itemSize = 80.0f;
-		const float availWidth = ImGui::GetContentRegionAvail().x;
-		int columns = std::max(1, static_cast<int>(availWidth / (itemSize + ImGui::GetStyle().ItemSpacing.x)));
+		std::vector<std::string> folders;
+		std::vector<const asset::RegistryEntry*> files;
+		collect(*ctx.assets, folders, files);
 
-		int col = 0;
+		ImGui::BeginChild("ContentArea", ImVec2(0, 0), false);
+
+		const float itemSize = 72.0f;
+		const float available = ImGui::GetContentRegionAvail().x;
+		const int columns =
+		    std::max(1, static_cast<int>(available / (itemSize + ImGui::GetStyle().ItemSpacing.x)));
+
+		int column = 0;
 		ImGui::Columns(columns, nullptr, false);
 
-		// Directories
-		for (const auto& dir : dirs) {
-			drawItem(dir, true, itemSize);
-			++col;
-			if (col >= columns) { ImGui::NextColumn(); col = 0; }
+		for (const std::string& folder : folders) {
+			drawFolder(folder, itemSize);
+			if (++column >= columns) {
+				ImGui::NextColumn();
+				column = 0;
+			}
 		}
-
-		// Files
-		for (const auto& file : files) {
-			if (!passesFilter(file)) continue;
-			drawItem(file, false, itemSize);
-			++col;
-			if (col >= columns) { ImGui::NextColumn(); col = 0; }
-		}
-
-		ImGui::Columns(1);
-		ImGui::EndChild();
-	}
-
-private:
-	void drawItem(const std::filesystem::path& path, bool isDir, float size) {
-		ImGui::BeginGroup();
-		ImGui::PushID(path.string().c_str());
-
-		const std::string label = path.filename().string();
-		const ImVec2 btnSize(size, size);
-
-		if (ImGui::Button(isDir ? "D" : "F", btnSize)) {
-			if (isDir) {
-				m_currentPath = path.string();
+		for (const asset::RegistryEntry* entry : files) {
+			drawAsset(*entry, itemSize);
+			if (++column >= columns) {
+				ImGui::NextColumn();
+				column = 0;
 			}
 		}
 
-		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0) && !isDir) {
-			// Import asset on double-click
+		ImGui::Columns(1);
+		if (folders.empty() && files.empty()) {
+			ImGui::TextDisabled(m_filter.empty() ? "Nothing here." : "Nothing matches the filter.");
+		}
+		ImGui::EndChild();
+	}
+
+	// What was last clicked, so a panel that wants to act on a selection can. Invalid until
+	// something is selected — and a GUID, not a path, because that is what survives a rename.
+	const asset::AssetGuid& selected() const { return m_selected; }
+
+private:
+	void drawToolbar(EditorContext& ctx) {
+		ImGui::BeginDisabled(m_folder.empty());
+		if (ui::flatIconButton(TUCANO_ICON_ARROW_LEFT, "Up one folder")) {
+			const size_t slash = m_folder.find_last_of('/');
+			m_folder = slash == std::string::npos ? std::string() : m_folder.substr(0, slash);
+		}
+		ImGui::EndDisabled();
+
+		ImGui::SameLine();
+		ImGui::AlignTextToFramePadding();
+		const std::string here = m_folder.empty() ? "Assets" : "Assets/" + m_folder;
+		ImGui::TextUnformatted(here.c_str());
+
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(140.0f);
+		const char* kTypes[] = {"All", "Meshes", "Textures", "Materials", "Scenes", "Audio"};
+		ImGui::Combo("##type", &m_typeIndex, kTypes, IM_ARRAYSIZE(kTypes));
+
+		ImGui::SameLine();
+		m_filter.setHint("Filter assets...");
+		m_filter.draw("##contentFilter", -1.0f);
+
+		ImGui::TextDisabled("%zu assets indexed", ctx.assets->size());
+	}
+
+	asset::AssetType selectedType() const {
+		switch (m_typeIndex) {
+			case 1: return asset::AssetType::Mesh;
+			case 2: return asset::AssetType::Texture;
+			case 3: return asset::AssetType::Material;
+			case 4: return asset::AssetType::Scene;
+			case 5: return asset::AssetType::Audio;
+			default: return asset::AssetType::Unknown; // "All"
+		}
+	}
+
+	// Splits the registry into the folders under `m_folder` and the assets directly inside it.
+	void collect(const asset::AssetRegistry& registry, std::vector<std::string>& folders,
+	             std::vector<const asset::RegistryEntry*>& files) const {
+		const asset::AssetType wanted = selectedType();
+		const std::string prefix = m_folder.empty() ? std::string() : m_folder + "/";
+
+		for (const asset::RegistryEntry& entry : registry.all()) {
+			if (wanted != asset::AssetType::Unknown && entry.type != wanted) continue;
+			if (entry.relativePath.size() < prefix.size()) continue;
+			if (entry.relativePath.compare(0, prefix.size(), prefix) != 0) continue;
+
+			const std::string_view rest(entry.relativePath.data() + prefix.size(),
+			                            entry.relativePath.size() - prefix.size());
+			const size_t slash = rest.find('/');
+			if (slash == std::string_view::npos) {
+				if (m_filter.empty() || m_filter.matches(entry.name)) files.push_back(&entry);
+				continue;
+			}
+			std::string folder(rest.substr(0, slash));
+			if (std::find(folders.begin(), folders.end(), folder) == folders.end()) {
+				folders.push_back(std::move(folder));
+			}
 		}
 
-		ImGui::TextWrapped("%s", label.c_str());
+		std::sort(folders.begin(), folders.end());
+		std::sort(files.begin(), files.end(),
+		          [](const asset::RegistryEntry* a, const asset::RegistryEntry* b) {
+			          return a->name < b->name;
+		          });
+	}
+
+	void drawFolder(const std::string& folder, float size) {
+		ImGui::BeginGroup();
+		ImGui::PushID(folder.c_str());
+		if (ImGui::Button(TUCANO_ICON_FOLDER, ImVec2(size, size))) {
+			m_folder = m_folder.empty() ? folder : m_folder + "/" + folder;
+		}
+		wrappedLabel(folder.c_str(), size);
 		ImGui::PopID();
 		ImGui::EndGroup();
-		ImGui::SameLine();
 	}
 
-	bool passesFilter(const std::filesystem::path& path) const {
-		if (m_filterIndex == 0) return true; // All
-		const auto ext = path.extension().string();
-		switch (m_filterIndex) {
-		case 1: return ext == ".gltf" || ext == ".glb" || ext == ".fbx" || ext == ".tucmesh"; // Meshes
-		case 2: return ext == ".png" || ext == ".jpg" || ext == ".dds" || ext == ".hdr" || ext == ".tga"; // Textures
-		case 3: return ext == ".tmat"; // Materials
-		default: return true;
+	void drawAsset(const asset::RegistryEntry& entry, float size) {
+		ImGui::BeginGroup();
+		ImGui::PushID(static_cast<int>(entry.guid.lo));
+
+		const bool selected = m_selected == entry.guid;
+		if (selected) {
+			ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+		}
+		if (ImGui::Button(icon(entry.type), ImVec2(size, size))) m_selected = entry.guid;
+		if (selected) ImGui::PopStyleColor();
+
+		// The GUID is what survives a rename, so it is what the tooltip leads with; the path is the
+		// part that can change under you.
+		ui::itemTooltip("%s\n%s\nGUID %s", entry.name.c_str(), entry.relativePath.c_str(),
+		                entry.guid.toString().c_str());
+
+		wrappedLabel(entry.name.c_str(), size);
+		ImGui::PopID();
+		ImGui::EndGroup();
+	}
+
+	// Names are long and the cells are narrow, so the label has to wrap *inside* its own column.
+	// Without the explicit wrap position it wraps at the window edge and neighbouring cells overlap.
+	static void wrappedLabel(const char* text, float width) {
+		ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+		ImGui::TextUnformatted(text);
+		ImGui::PopTextWrapPos();
+	}
+
+	static const char* icon(asset::AssetType type) {
+		switch (type) {
+			case asset::AssetType::Mesh: return TUCANO_ICON_CUBE_OUTLINE;
+			case asset::AssetType::Texture: return TUCANO_ICON_IMAGE;
+			case asset::AssetType::Material: return TUCANO_ICON_PALETTE;
+			case asset::AssetType::Scene: return TUCANO_ICON_FILE_TREE;
+			case asset::AssetType::Audio: return TUCANO_ICON_VOLUME_HIGH;
+			default: return TUCANO_ICON_FILE;
 		}
 	}
 
-	std::string m_currentPath;
-	int m_filterIndex = 0;
+	std::string m_folder; // relative to the project root; empty is the root
+	int m_typeIndex = 0;
+	ui::Filter m_filter;
+	asset::AssetGuid m_selected;
 };
 
 } // namespace tucano::editor
