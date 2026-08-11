@@ -15,4 +15,5 @@ ECS/Components.h
 Renderer/MaterialAsset.h
 Renderer/Sky/SkyParams.h
 Renderer/PostFX/PostFxParams.h
+Terrain/TerrainGenerator.h
 Renderer/Renderer.h

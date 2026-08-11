@@ -1,10 +1,15 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
 namespace tucano {
+
+namespace terrain {
+struct TerrainGenParams;
+}
 
 class Scene;
 class Renderer;
@@ -92,6 +97,16 @@ struct EditorContext {
 	// is true over *any* ImGui window, and the viewport is one now — without this the camera stops
 	// responding the moment the scene moves into a panel.
 	bool viewportHovered = false;
+
+	// ── Terrain (F-01) ──
+	//
+	// Published by the host, because building a terrain needs a device, a physics world and a place
+	// in the render scene — none of which the editor owns. The panel edits `terrainParams` freely
+	// (it is just numbers) and calls `applyTerrain` when somebody asks for the landscape to be
+	// rebuilt; the scene file does the same on load. Null when the host has no terrain support,
+	// which is what the panel checks before offering anything.
+	terrain::TerrainGenParams* terrainParams = nullptr;
+	std::function<bool(const terrain::TerrainGenParams&)> applyTerrain;
 
 	// Console log
 	static constexpr size_t kMaxLogEntries = 512;

@@ -42,6 +42,10 @@ struct SkyParams;
 struct PostFxParams;
 } // namespace tucano
 
+namespace tucano::terrain {
+struct TerrainGenParams;
+} // namespace tucano::terrain
+
 namespace tucano::ecs {
 
 class World;
@@ -77,6 +81,16 @@ struct SceneEnvironment {
 	// On failure the running lighting is kept and `hdriPath` is left alone: a scene naming a missing
 	// HDRI opens lit by whatever you had, not black.
 	std::function<bool(const std::string&)> applyHdri;
+
+	// The terrain, as the recipe rather than the result (F-01). Nine numbers regenerate the
+	// landscape exactly, on any machine, so a scene stores those instead of a heightmap — a few
+	// hundred bytes against a few megabytes.
+	//
+	// Same value-plus-operation shape as the HDRI above, and for the same reason: building a
+	// terrain allocates a heightmap, uploads it and rebuilds a collision mesh. `applyTerrain` is
+	// called **only when the parameters differ** from what is already built.
+	terrain::TerrainGenParams* terrain = nullptr;
+	std::function<bool(const terrain::TerrainGenParams&)> applyTerrain;
 };
 
 // Serialises every live entity that carries at least one authoring component. Entities that only

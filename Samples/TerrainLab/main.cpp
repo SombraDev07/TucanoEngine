@@ -75,7 +75,17 @@ static void projectToScreen(const Camera& cam, float wx, float wy, float wz,
 }
 
 int main(int argc, char** argv) {
-	(void)argc; (void)argv;
+	// `--frames N` exits after N frames instead of waiting for the window to be closed.
+	//
+	// Added because this lab was **not verifiable**: it ignored its arguments and looped until
+	// somebody closed the window, so a gate run that passed `--frames` got a process that never
+	// returned — and a report of "TerrainLab -> 0" that meant the process had been killed, not that
+	// it had run. Every other sample takes this flag; this one silently did not.
+	int maxFrames = -1;
+	for (int i = 1; i < argc; ++i) {
+		const std::string a = argv[i];
+		if (a == "--frames" && i + 1 < argc) maxFrames = std::stoi(argv[++i]);
+	}
 
 	try {
 		Window window({1920, 1080, "Tucano — TerrainLab (sculpt tools)"});
@@ -171,7 +181,7 @@ int main(int argc, char** argv) {
 		int frame = 0;
 		bool needsRegen = false;
 
-		while (!window.shouldClose()) {
+		while (!window.shouldClose() && (maxFrames < 0 || frame < maxFrames)) {
 			window.pollEvents();
 			input.beginFrame();
 			ui.beginFrame();

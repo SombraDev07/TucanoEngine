@@ -19,6 +19,7 @@
 #include "Renderer/MaterialAsset.h"
 #include "Renderer/Sky/SkyParams.h"
 #include "Renderer/PostFX/PostFxParams.h"
+#include "Terrain/TerrainGenerator.h"
 #include "Renderer/Renderer.h"
 
 TUCANO_REFLECT_ENUM_BEGIN(LightType)
@@ -244,6 +245,18 @@ TUCANO_REFLECT_TYPE_BEGIN(PostFxParams)
 	TUCANO_PROPERTY(exposureMin, Float, .label = "Minimum", .tooltip = "Floor on auto exposure; stops a dark room from being lifted to daylight", .category = "Exposure", .minValue = 0.001f, .maxValue = 4.0f, .step = 0.01f)
 	TUCANO_PROPERTY(exposureMax, Float, .label = "Maximum", .tooltip = "Ceiling on auto exposure; stops a bright sky from being crushed", .category = "Exposure", .minValue = 0.01f, .maxValue = 32.0f, .step = 0.05f)
 TUCANO_REFLECT_TYPE_END(PostFxParams)
+
+TUCANO_REFLECT_TYPE_BEGIN_NS(terrain, TerrainGenParams)
+	TUCANO_PROPERTY(resolution, UInt32, .label = "Resolution", .tooltip = "Height samples per side. Doubling this costs four times the memory and " "the generation time", .category = "Terrain", .minValue = 64.0f, .maxValue = 4096.0f, .step = 64.0f)
+	TUCANO_PROPERTY(worldSize, Float, .label = "World size", .tooltip = "Metres the terrain spans, edge to edge", .category = "Terrain", .minValue = 64.0f, .maxValue = 16384.0f, .step = 64.0f)
+	TUCANO_PROPERTY(seed, UInt32, .label = "Seed", .tooltip = "Same seed and same settings give the same landscape, on any machine", .category = "Terrain", .step = 1.0f)
+	TUCANO_PROPERTY(octaves, UInt32, .label = "Octaves", .tooltip = "Layers of noise summed together; each adds finer detail and costs another " "pass over every sample", .category = "Noise", .minValue = 1.0f, .maxValue = 12.0f, .step = 1.0f)
+	TUCANO_PROPERTY(persistence, Float, .label = "Persistence", .tooltip = "How much each octave contributes next to the one before it. Low is smooth " "and rolling, high is rough", .category = "Noise", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
+	TUCANO_PROPERTY(lacunarity, Float, .label = "Lacunarity", .tooltip = "How fast the frequency climbs per octave", .category = "Noise", .minValue = 1.0f, .maxValue = 4.0f, .step = 0.05f)
+	TUCANO_PROPERTY(baseFrequency, Float, .label = "Base frequency", .tooltip = "Scale of the largest shapes. High turns mountains into hills", .category = "Noise", .minValue = 0.25f, .maxValue = 32.0f, .step = 0.25f)
+	TUCANO_PROPERTY(baseAmplitude, Float, .label = "Amplitude", .tooltip = "Metres from valley floor to peak", .category = "Height", .minValue = 1.0f, .maxValue = 2048.0f, .step = 1.0f)
+	TUCANO_PROPERTY(baseHeight, Float, .label = "Base height", .tooltip = "Vertical offset of the whole terrain, in metres", .category = "Height", .minValue = -1000.0f, .maxValue = 1000.0f, .step = 1.0f)
+TUCANO_REFLECT_TYPE_END(TerrainGenParams)
 
 TUCANO_REFLECT_TYPE_BEGIN(RendererSettings)
 	TUCANO_PROPERTY(enableShadows, Bool, .label = "Enabled", .tooltip = "Master switch for every shadow pass", .category = "Shadows")

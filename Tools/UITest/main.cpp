@@ -36,6 +36,7 @@
 #include "Renderer/Material.h"
 #include "Renderer/Renderer.h"
 #include "Renderer/Sky/SkyParams.h"
+#include "Terrain/TerrainGenerator.h"
 #include "Editor/PlayMode.h"
 #include "AssetPipeline/TucanoAsset.h"
 #include "ECS/PhysicsSync.h"
@@ -963,6 +964,12 @@ int main(int argc, char** argv) {
 			postFx.bloomStrength = 1.75f;
 			postFx.exposureTarget = 0.42f;
 			postFx.enableAO = false;
+			// F-01: a paisagem, como receita e nao como resultado. Nove numeros regeneram o mesmo
+			// terreno em qualquer maquina, entao a cena guarda eles em vez de um heightmap.
+			terrain::TerrainGenParams land;
+			land.seed = 1337;
+			land.baseAmplitude = 320.0f;
+			land.octaves = 9;
 			std::string hdri = "IBL/noite.hdr";
 			SceneEnvironment environment;
 			environment.water = &water;
@@ -970,6 +977,7 @@ int main(int argc, char** argv) {
 			environment.sky = &sky;
 			environment.clouds = &clouds;
 			environment.postFx = &postFx;
+			environment.terrain = &land;
 			environment.hdriPath = &hdri;
 
 			const std::string text = sceneToJson(world, environment);
@@ -990,6 +998,8 @@ int main(int argc, char** argv) {
 			SkyParams sky2;
 			CloudParams clouds2;
 			PostFxParams postFx2;
+			terrain::TerrainGenParams land2;
+			int terrainBuilds = 0;
 			// O que o editor teria carregado antes de abrir a cena. Tem que ser diferente do que
 			// esta no arquivo, senao o teste nao distingue "aplicou" de "ja estava assim".
 			std::string hdri2 = "IBL/default.hdr";
@@ -1001,6 +1011,11 @@ int main(int argc, char** argv) {
 			environment2.sky = &sky2;
 			environment2.clouds = &clouds2;
 			environment2.postFx = &postFx2;
+			environment2.terrain = &land2;
+			environment2.applyTerrain = [&](const terrain::TerrainGenParams&) {
+				++terrainBuilds;
+				return true;
+			};
 			environment2.hdriPath = &hdri2;
 			environment2.applyHdri = [&](const std::string& path) {
 				++hdriApplied;
@@ -1054,6 +1069,38 @@ int main(int argc, char** argv) {
 			check(postFx2.bloomStrength == 1.75f && postFx2.exposureTarget == 0.42f &&
 			          postFx2.enableAO == false,
 			      "e o grading da cena — bloom, exposicao e AO (E-04)");
+
+			// ── F-01: a paisagem ──────────────────────────────────────────────
+			check(land2.seed == 1337u && land2.baseAmplitude == 320.0f && land2.octaves == 9u,
+			      "os parametros de terreno voltam do arquivo");
+			check(terrainBuilds == 1, "e o terreno foi construido uma vez, nao um por campo lido");
+
+			// Reconstruir custa gerar um heightmap e uma malha de colisao. Abrir de novo a mesma
+			// cena — ou dar Stop no play mode, que restaura este bloco de um snapshot — nao pode
+			// disparar isso; mesma regra do HDRI.
+			{
+				World again;
+				check(sceneFromJson(text, again, environment2, &sceneErr), "a mesma cena carrega de novo");
+				check(terrainBuilds == 1,
+				      "e o terreno que ja esta de pe nao e regenerado (o Stop do play mode passa aqui)");
+			}
+
+			// Um terreno que nao pode ser construido nao pode deixar os parametros mentindo sobre o
+			// que esta na tela.
+			{
+				World falha;
+				terrain::TerrainGenParams land3;  // fica nos defaults
+				SceneEnvironment environment5;
+				environment5.terrain = &land3;
+				environment5.applyTerrain = [](const terrain::TerrainGenParams&) { return false; };
+				std::string terrenoErr;
+				check(sceneFromJson(text, falha, environment5, &terrenoErr),
+				      "a cena carrega mesmo com o terreno recusado");
+				check(land3.seed == terrain::TerrainGenParams{}.seed,
+				      "e os parametros correntes ficam como estavam, descrevendo o que existe");
+				check(terrenoErr.find("terrain") != std::string::npos,
+				      "com o problema reportado, nao engolido");
+			}
 			check(sky2.useBrunetonAtmosphere == false,
 			      "e o modelo de atmosfera tambem, nao so os floats");
 			check(hdriApplied == 1, "o HDRI da cena foi aplicado uma vez, nao a cada bloco lido");
@@ -3484,7 +3531,11 @@ int main(int argc, char** argv) {
 			// "Post FX" entrou na E-04, pelo mesmo motivo que Sky entrou na E-01: os campos de
 			// grading viraram uma struct propria para poderem ser gravados na cena, e uma struct
 			// refletida ganha painel sem ninguem escrever UI para ela.
-			const char* generated[] = {"Sky", "Rendering", "Post FX", "Water", "Fog", "Clouds", "Rain"};
+			// "Terrain" entrou na F-01 pela mesma porta: refletir os nove numeros que descrevem a
+			// paisagem deu o painel de graca. O que ele acrescenta a mao e so o botao Generate, que
+			// existe porque reconstruir uma paisagem nao e coisa de se fazer por frame de slider.
+			const char* generated[] = {"Sky",   "Rendering", "Post FX", "Water",
+			                           "Fog",   "Clouds",    "Rain",    "Terrain"};
 
 			int found = 0;
 			for (const char* name : migrated) {
@@ -3496,13 +3547,13 @@ int main(int argc, char** argv) {
 			for (const char* name : generated) {
 				if (tool.findWindow(name) != nullptr) ++generatedFound;
 			}
-			check(generatedFound == 7, "as 7 janelas geradas por reflection existem (" +
-			                               std::to_string(generatedFound) + "/7)");
+			check(generatedFound == 8, "as 8 janelas geradas por reflection existem (" +
+			                               std::to_string(generatedFound) + "/8)");
 			// Viewport entrou junto: a cena virou um painel, ancorado no no central que o layout
 			// deixa vazio de proposito.
 			check(tool.findWindow("Viewport") != nullptr, "a janela de Viewport existe");
-			check(tool.windows().size() == 16,
-			      "SceneTool declara 16 janelas (" + std::to_string(tool.windows().size()) + ")");
+			check(tool.windows().size() == 17,
+			      "SceneTool declara 17 janelas (" + std::to_string(tool.windows().size()) + ")");
 
 			// A tool with no context must not crash: the panels report "no scene" instead.
 			check(tool.context() == nullptr, "contexto comeca nulo e e tolerado");

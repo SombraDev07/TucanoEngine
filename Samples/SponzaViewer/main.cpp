@@ -20,6 +20,9 @@
 #include "Platform/Window.h"
 #include "Renderer/Renderer.h"
 #include "Runtime/DebugUI.h"
+#include "Renderer/DevTexture.h"
+#include "Terrain/TerrainComponent.h"
+#include "Terrain/TerrainGenerator.h"
 #include "Runtime/Screenshot.h"
 #include "Lua/LuaVM.h"
 
@@ -381,6 +384,51 @@ int main(int argc, char** argv) {
       }
     };
     populateWorldFromScene();
+
+    // ── Terrain (F-01) ──
+    //
+    // The editor edits nine numbers; building a landscape out of them needs a device and a slot in
+    // the render scene, which only the host has. So the host owns the terrain and publishes the
+    // operation, exactly as it does for the HDRI.
+    //
+    // The generated object is replaced rather than appended: regenerating twice must leave one
+    // terrain, not two. `Scene::removeObject` frees the slot and `addObject` reuses it (C-09), so
+    // the handle churn costs nothing and no other object's handle shifts.
+    terrain::TerrainGenParams terrainParams;
+    std::unique_ptr<terrain::TerrainComponent> terrainComp;
+    RenderObjectHandle terrainObject = kInvalidRenderObject;
+    auto buildTerrain = [&](const terrain::TerrainGenParams& wanted) -> bool {
+      auto heightmap = terrain::TerrainGenerator::generate(*device, wanted);
+      if (heightmap == nullptr) return false;
+
+      auto material = std::make_shared<Material>();
+      material->name = "Terrain";
+      material->baseColorFactor = {1.0f, 1.0f, 1.0f, 1.0f};
+      // Both textures are required, not decoration: the shader reads albedo and normal through the
+      // bindless heap, and a material with neither indexes a descriptor that was never written —
+      // which is a GPU page fault, not a grey terrain. Found the hard way.
+      material->albedo = devtex::defaultFloor(*device);
+      material->normal = devtex::defaultNormal(*device);
+      material->roughnessFactor = 0.95f;
+      material->metallicFactor = 0.0f;
+
+      // The constructor already builds the mesh at 256 — below the heightmap's own resolution on
+      // purpose, because a vertex per sample at 512² is a quarter of a million triangles for a hill
+      // nobody is standing on. The clipmap path (F-05) is what fixes that properly.
+      auto built = std::make_unique<terrain::TerrainComponent>(*device, heightmap, material);
+      // Centred on the origin, not spanning 0..worldSize as the generator lays it out. "Generate"
+      // has to put the landscape where the camera already is; a terrain that appears half a
+      // kilometre away reads as one that did not appear.
+      built->setWorldPosition({-wanted.worldSize * 0.5f, 0.0f, -wanted.worldSize * 0.5f});
+
+      scene.removeObject(terrainObject);
+      terrainObject = scene.addObject(built->createRenderObject());
+      terrainComp = std::move(built);
+      terrainParams = wanted;
+      return true;
+    };
+    editorContext.terrainParams = &terrainParams;
+    editorContext.applyTerrain = buildTerrain;
 
     // Resolves what the entities reference into what the renderer draws. Built after the registry
     // scan so it has something to resolve against, and kept alive for the whole run because its

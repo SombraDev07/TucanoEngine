@@ -9,6 +9,7 @@
 #include "ECS/World.h"
 #include "Renderer/PostFX/PostFxParams.h"
 #include "Renderer/Sky/SkyParams.h"
+#include "Terrain/TerrainGenerator.h"
 #include "Renderer/Weather/CloudSystem.h"
 #include "Renderer/Weather/FogParams.h"
 #include "Renderer/Weather/RainParams.h"
@@ -64,6 +65,7 @@ void appendEnvironment(std::string& out, const SceneEnvironment& environment) {
 	// look like the scene they saved.
 	block("SkyParams", registry.find(TypeID{"SkyParams"}), environment.sky, first);
 	block("PostFxParams", registry.find(TypeID{"PostFxParams"}), environment.postFx, first);
+	block("TerrainGenParams", registry.find(TypeID{"TerrainGenParams"}), environment.terrain, first);
 	block("WaterParams", registry.find(TypeID{"WaterParams"}), environment.water, first);
 	block("FogParams", registry.find(TypeID{"FogParams"}), environment.fog, first);
 	block("CloudParams", registry.find(TypeID{"CloudParams"}), environment.clouds, first);
@@ -104,6 +106,31 @@ void readEnvironment(const core::JsonValue& node, const SceneEnvironment& enviro
 	block("FogParams", environment.fog);
 	block("CloudParams", environment.clouds);
 	block("RainParams", environment.rain);
+
+	// The terrain, read into a copy first. Overlaying straight onto the live parameters would leave
+	// nothing to compare against, and regenerating a 512² heightmap because a scene happened to
+	// name the terrain already standing is a stall nobody asked for.
+	if (environment.terrain != nullptr && environment.applyTerrain) {
+		if (const core::JsonValue* value = node.find("TerrainGenParams"); value != nullptr) {
+			if (const TypeInfo* type = TypeRegistry::instance().find(TypeID{"TerrainGenParams"})) {
+				terrain::TerrainGenParams wanted = *environment.terrain;
+				std::string blockError;
+				readStructInto(*value, *type, &wanted, &blockError);
+				if (!blockError.empty() && err != nullptr) {
+					if (!err->empty()) *err += "; ";
+					*err += blockError;
+				}
+				if (std::memcmp(&wanted, environment.terrain, sizeof(wanted)) != 0) {
+					if (environment.applyTerrain(wanted)) {
+						*environment.terrain = wanted;
+					} else if (err != nullptr) {
+						if (!err->empty()) *err += "; ";
+						*err += "could not build the terrain this scene describes";
+					}
+				}
+			}
+		}
+	}
 
 	// The HDRI, which is an operation rather than an assignment: applying it re-cooks the
 	// image-based lighting, so it is only attempted when the path actually differs from what is

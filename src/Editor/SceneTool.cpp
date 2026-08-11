@@ -48,6 +48,7 @@ struct SceneTool::Panels {
 	PropertyGrid skyGrid;
 	PropertyGrid renderGrid;
 	PropertyGrid postFxGrid;
+	PropertyGrid terrainGrid;
 	PropertyGrid waterGrid;
 	PropertyGrid fogGrid;
 	PropertyGrid cloudGrid;
@@ -108,6 +109,7 @@ void SceneTool::onInitialize() {
 	addWindow("Sky", withContext([this](EditorContext& c) { drawSky(c); }));
 	addWindow("Rendering", withContext([this](EditorContext& c) { drawRendering(c); }));
 	addWindow("Post FX", withContext([this](EditorContext& c) { drawPostFx(c); }));
+	addWindow("Terrain", withContext([this](EditorContext& c) { drawTerrain(c); }));
 	addWindow("Water", withContext([this](EditorContext& c) { drawWater(c); }));
 	addWindow("Fog", withContext([this](EditorContext& c) { drawFog(c); }));
 	addWindow("Clouds", withContext([this](EditorContext& c) { drawClouds(c); }));
@@ -259,6 +261,42 @@ void SceneTool::drawRendering(EditorContext& context) {
 	m_panels->renderGrid.setUndoStack(&undoStack());
 	m_panels->renderGrid.drawFilterBox();
 	if (m_panels->renderGrid.draw(context.renderer->settings())) markDirty();
+}
+
+void SceneTool::drawTerrain(EditorContext& context) {
+	if (context.terrainParams == nullptr || !context.applyTerrain) {
+		ImGui::TextDisabled("This host has no terrain.");
+		return;
+	}
+
+	// The parameters *are* the landscape, so editing one does not change what is drawn until it is
+	// rebuilt — generating a 512² heightmap and its collision mesh is not something to do sixty
+	// times a second while a slider is dragged. Hence an explicit Generate, and a note saying so
+	// rather than leaving people to wonder why the mountains did not move.
+	m_panels->terrainGrid.setUndoStack(&undoStack());
+	m_panels->terrainGrid.drawFilterBox();
+	const bool edited = m_panels->terrainGrid.draw(*context.terrainParams);
+	if (edited) {
+		markDirty();
+		m_terrainDirty = true;
+	}
+
+	ImGui::Separator();
+	if (ImGui::Button(TUCANO_ICON_TERRAIN "  Generate")) {
+		if (context.applyTerrain(*context.terrainParams)) {
+			m_terrainDirty = false;
+			markDirty();
+			context.logInfo("Terrain rebuilt.");
+		} else {
+			context.logError("Could not build the terrain.");
+		}
+	}
+	ImGui::SameLine();
+	if (m_terrainDirty) {
+		ImGui::TextDisabled("edited — press Generate to rebuild");
+	} else {
+		ImGui::TextDisabled("up to date");
+	}
 }
 
 void SceneTool::drawPostFx(EditorContext& context) {
@@ -517,6 +555,10 @@ void SceneTool::bindEnvironment(void* environmentPtr) const {
 	environment.rain = &m_context->renderer->rain();
 	environment.sky = &m_context->renderer->sky();
 	environment.postFx = &m_context->renderer->postFx();
+	// Straight through from the host: the editor does not own a terrain, it edits the numbers the
+	// host builds one from.
+	environment.terrain = m_context->terrainParams;
+	environment.applyTerrain = m_context->applyTerrain;
 	// The HDRI is the one environment value that costs something to apply, so it travels as a value
 	// plus the operation. `reloadIBL` already keeps the previous lighting when the file cannot be
 	// used, which is exactly the contract the loader wants.

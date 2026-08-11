@@ -149,6 +149,7 @@ private:
 	void drawSky(EditorContext& context);
 	void drawRendering(EditorContext& context);
 	void drawPostFx(EditorContext& context);
+	void drawTerrain(EditorContext& context);
 	void drawWater(EditorContext& context);
 	void drawFog(EditorContext& context);
 	void drawClouds(EditorContext& context);
@@ -162,6 +163,10 @@ private:
 	std::unique_ptr<asset::AssetRegistry> m_assets;
 	std::string m_assetRoot;
 	std::string m_error;
+	// Terrain parameters were edited but the landscape has not been rebuilt from them yet. Shown in
+	// the panel, because a slider that visibly changes nothing is how people conclude a tool is
+	// broken.
+	bool m_terrainDirty = false;
 
 	// Runs `action` now when there is nothing to lose, otherwise after the user answers.
 	void guardUnsaved(const char* what, std::function<void()> action);
