@@ -280,8 +280,17 @@ int main(int argc, char** argv) {
       }
     };
 
+    // Declared before `reloadScene` because that lambda has to reset it: the state is keyed by
+    // scene-object index, and clearing the object array makes every one of those keys point at a
+    // different object — or at nothing.
+    ecs::RenderSyncState renderSync;
+
     auto reloadScene = [&]() {
       scene.objects.clear();
+      // Both halves matter. `originals` maps a scene index to the materials that were there before
+      // an override; after a reload those indices belong to other objects. `failedMeshes` is a
+      // cache of "this did not load", and a reload is exactly when that might have changed.
+      renderSync.clear();
       if (!loadGLTFScene(*device, scenePath, scene)) {
         std::cerr << "Failed to load scene: " << scenePath << "\n";
         std::cerr << "Place Khronos Sponza glTF under Assets/Sponza/\n";
@@ -356,7 +365,6 @@ int main(int argc, char** argv) {
     // scan so it has something to resolve against, and kept alive for the whole run because its
     // texture cache is the reason the same image is not uploaded once per material.
     std::unique_ptr<AssetResolver> assetResolver;
-    ecs::MaterialSyncState materialSync;
     if (sceneToolPtr != nullptr) {
       assetResolver = std::make_unique<AssetResolver>(*device, sceneToolPtr->assets(), "Assets");
     }
@@ -509,7 +517,10 @@ int main(int argc, char** argv) {
       // And what it looks like: the material override and the visibility flag. Cheap per frame —
       // it only rebuilds a material when the assignment actually changed.
       if (assetResolver != nullptr) {
-        ecs::syncMeshComponentsToScene(world, scene, *assetResolver, materialSync);
+        // Before the material/visibility pass, so an object created this frame is dressed on the
+        // same frame rather than appearing untextured for one.
+        ecs::spawnMeshObjects(world, scene, *assetResolver, renderSync);
+        ecs::syncMeshComponentsToScene(world, scene, *assetResolver, renderSync);
       }
       // Lights are rebuilt wholesale from the entities. Calling this is the declaration that the
       // ECS owns them — see the note on syncLightsToScene — which is true here because

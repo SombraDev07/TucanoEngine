@@ -33,6 +33,7 @@ namespace tucano {
 // `struct` and `class` are not interchangeable in a forward declaration on MSVC: the mangled name
 // differs, and the mismatch only shows up as an unresolved symbol at link time.
 struct Material;
+class Mesh;
 class Texture;
 struct MaterialAsset;
 
@@ -60,15 +61,31 @@ public:
 	// Reads a `.tumat` by identity and builds it. Null when the GUID names no material.
 	std::shared_ptr<Material> material(const asset::AssetGuid& guid);
 
+	// Reads a cooked `.tuasset` mesh by identity. Null when the GUID names nothing, or names a file
+	// that is not a cooked mesh — a source `.gltf` resolves to a path but not to geometry, because
+	// a glTF is a whole scene of primitives and materials rather than one mesh. Import it first;
+	// `error` says so when given.
+	//
+	// `outMaterial`, when supplied, receives the material the asset was cooked with, so a mesh
+	// dropped into a scene arrives textured instead of white.
+	std::shared_ptr<Mesh> mesh(const asset::AssetGuid& guid, std::string* error = nullptr,
+	                           std::shared_ptr<Material>* outMaterial = nullptr);
+
 	// Drops every cached object. Called automatically when the device is destroyed; exposed so a
 	// test can prove the cache is a cache.
 	void clearCache();
 
 	size_t cachedTextureCount() const { return m_textures->size(); }
+	size_t cachedMeshCount() const { return m_meshes->size(); }
 
 private:
 	// Absolute path for a GUID, or empty when the index does not know it.
 	std::string pathFor(const asset::AssetGuid& guid) const;
+
+	// Arranges for every cache to be emptied while the device is still usable. Idempotent, and
+	// called on the first successful load rather than in the constructor — a resolver that never
+	// loaded anything has nothing to release.
+	void registerRelease();
 
 	rhi::Device& m_device;
 	const asset::AssetRegistry& m_registry;
@@ -89,6 +106,17 @@ private:
 
 	using TextureCache = std::unordered_map<TextureKey, std::shared_ptr<Texture>, TextureKeyHash>;
 	std::shared_ptr<TextureCache> m_textures = std::make_shared<TextureCache>();
+
+	// Meshes are keyed by GUID alone — unlike a texture, the same file has only one GPU form.
+	// A `shared_ptr` to the map for the same reason as the textures: whoever clears it on device
+	// teardown has to own it, or the callback reaches into a resolver that is already gone.
+	struct GuidHash {
+		size_t operator()(const asset::AssetGuid& g) const {
+			return static_cast<size_t>(g.hi ^ (g.lo * 31));
+		}
+	};
+	using MeshCache = std::unordered_map<asset::AssetGuid, std::shared_ptr<Mesh>, GuidHash>;
+	std::shared_ptr<MeshCache> m_meshes = std::make_shared<MeshCache>();
 	bool m_releaseRegistered = false;
 };
 

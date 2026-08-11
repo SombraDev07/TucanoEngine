@@ -45,6 +45,10 @@ struct RenderObjectComponent {
   // serialised: it exists so the sync can tell "nothing changed" from "not applied yet" and skip
   // rebuilding a material — and therefore reloading its textures — on every frame.
   asset::AssetGuid appliedMaterial;
+
+  // Same, for the geometry. Loading a mesh uploads vertex and index buffers, so doing it because a
+  // frame happened would be far worse than re-resolving a material.
+  asset::AssetGuid appliedMesh;
 };
 
 // Ids estáveis dos componentes-core (registrados em registerCoreComponents()).

@@ -36,6 +36,8 @@
 #include "Renderer/Renderer.h"
 #include "Renderer/Sky/SkyParams.h"
 #include "Editor/PlayMode.h"
+#include "AssetPipeline/TucanoAsset.h"
+#include "ECS/PhysicsSync.h"
 #include "ECS/RenderSync.h"
 #include "ECS/World.h"
 #include "Editor/PropertyGrid.h"
@@ -2143,6 +2145,164 @@ int main(int argc, char** argv) {
 			check(sky != nullptr && sky->propertyCount == 20, "SkyParams expoe 20 campos");
 			check(render != nullptr && render->propertyCount >= 44,
 			      "RendererSettings expoe o resto (>=44)");
+		}
+
+		// ── C-08: dar um mesh a uma entidade faz geometria aparecer ──────────
+		// O passo 4 da Definition of Done. Ate aqui `Add entity` + `MeshComponent` produzia uma
+		// referencia que resolvia para um arquivo e para pixel nenhum, porque o sync de malha casa
+		// a entidade com um `RenderObject` que ja existe — e uma entidade criada no editor nao tem.
+		{
+			namespace fs = std::filesystem;
+			std::error_code ec;
+			const fs::path root = fs::temp_directory_path() / "tucano_spawn_test";
+			fs::remove_all(root, ec);
+			fs::create_directories(root, ec);
+
+			editor::SceneTool tool;
+			editor::EditorContext toolContext;
+			tool.setContext(&toolContext);
+			tool.initialize();
+			tool.scanAssets(root.string(), true);
+
+			AssetResolver resolver(*device, tool.assets(), root.string());
+			Scene scene;
+			ecs::World world;
+			ecs::RenderSyncState syncState;
+
+			// Nada para instanciar ainda.
+			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 0,
+			      "sem entidades com mesh, nada e criado");
+
+			const ecs::Entity e = world.create();
+			world.add<ecs::NameComponent>(e)->name = "Caixa";
+			world.add<ecs::TransformComponent>(e)->position = glm::vec3(4.0f, 1.0f, -2.0f);
+			world.add<ecs::MeshComponent>(e);
+
+			// Com o slot vazio nao ha o que criar — e esse e o estado de uma malha recem-adicionada.
+			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 0,
+			      "um MeshComponent sem asset atribuido nao cria objeto");
+			check(!world.entities().has(e, ecs::kCompRenderObject),
+			      "e a entidade nao ganha componente de render a toa");
+
+			// Um GUID desconhecido nao pode criar geometria nem ser tentado para sempre.
+			asset::AssetGuid unknown;
+			unknown.hi = 4242;
+			unknown.lo = 2424;
+			world.get<ecs::MeshComponent>(e)->mesh = unknown;
+			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 0,
+			      "um GUID que o indice nao conhece nao cria objeto");
+			check(syncState.failedMeshes.size() == 1,
+			      "e a falha e lembrada, para nao reler o arquivo a 60 por segundo");
+			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 0,
+			      "a segunda passada nem tenta");
+			check(scene.objects.empty(), "a cena continua vazia");
+
+			// Um .tuasset de verdade. Escrito a mao em vez de importado de um glTF porque o que se
+			// afirma aqui e a instanciacao, e um importador quebrado faria este teste falhar pelo
+			// motivo errado.
+			const asset::AssetGuid meshGuid = asset::AssetGuid::fromPath("gate/spawncube");
+			{
+				// Um triangulo, que e a menor coisa que o Mesh::create aceita e desenha.
+				const float positions[] = {0.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 0.0f, 1.0f, 0.0f};
+				const uint32_t indices[] = {0, 1, 2};
+				asset::MeshAssetData md{};
+				md.vertexCount = 3;
+				md.indexCount = 3;
+				md.submeshCount = 1;
+
+				asset::TucanoAssetWriter writer(asset::AssetType::Mesh, meshGuid, "gate");
+				writer.setMetadata("{\"name\":\"SpawnCube\"}");
+				std::vector<uint8_t> payload;
+				payload.insert(payload.end(), reinterpret_cast<const uint8_t*>(&md),
+				               reinterpret_cast<const uint8_t*>(&md) + sizeof(md));
+				payload.insert(payload.end(), reinterpret_cast<const uint8_t*>(positions),
+				               reinterpret_cast<const uint8_t*>(positions) + sizeof(positions));
+				writer.addChunk(asset::ChunkType::Vert, payload.data(), uint32_t(payload.size()));
+				writer.addChunk(asset::ChunkType::Indx, indices, uint32_t(sizeof(indices)));
+				check(writer.write((root / "SpawnCube.tuasset").string()),
+				      "o gate escreveu um .tuasset valido");
+			}
+			tool.scanAssets(root.string(), true);
+			check(tool.assets().find(meshGuid) != nullptr, "e o indice o encontrou pelo GUID");
+
+			// O resolver sozinho: GUID -> Mesh.
+			std::string meshError;
+			auto resolvedMesh = resolver.mesh(meshGuid, &meshError);
+			check(resolvedMesh != nullptr, "o resolver carrega a malha pelo GUID (" + meshError + ")");
+			check(resolver.mesh(meshGuid) == resolvedMesh, "e a segunda pedida vem do cache");
+			check(resolver.cachedMeshCount() == 1, "uma entrada de cache para uma malha");
+
+			// Um .gltf de origem resolve para um caminho e nao para geometria: e uma cena de
+			// primitivas, nao uma malha. A recusa tem que dizer isso.
+			std::string sourceError;
+			check(resolver.mesh(unknown, &sourceError) == nullptr, "GUID desconhecido segue nulo");
+			check(!sourceError.empty(), "e a recusa explica o motivo");
+
+			// E agora a coisa toda: atribuir e a geometria aparecer.
+			syncState.clear();  // o projeto foi re-escaneado; o que falhou antes merece nova chance
+			world.get<ecs::MeshComponent>(e)->mesh = meshGuid;
+			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 1,
+			      "atribuir uma malha cria um objeto na cena");
+			check(scene.objects.size() == 1, "a cena tem o objeto");
+			check(world.entities().has(e, ecs::kCompRenderObject),
+			      "e a entidade ganhou o componente que a liga a ele");
+			const auto* render = world.get<ecs::RenderObjectComponent>(e);
+			check(render != nullptr && render->sceneIndex == 0, "apontando para o indice certo");
+			check(render != nullptr && render->appliedMesh == meshGuid,
+			      "e lembrando qual malha ja foi aplicada");
+			check(!scene.objects[0].name.empty() && scene.objects[0].name == "Caixa",
+			      "o objeto herda o nome da entidade");
+			check(scene.objects[0].mesh != nullptr, "e tem geometria de verdade");
+
+			// Nao pode criar de novo no frame seguinte.
+			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 0,
+			      "o frame seguinte nao cria um segundo objeto para a mesma entidade");
+			check(scene.objects.size() == 1, "a cena continua com um");
+
+			// Perder o objeto nao pode ser permanente. `scene.objects` e compactado por descarga de
+			// celula (SceneCellProvider.cpp:476), por liberacao de tile de terreno
+			// (TerrainCellProvider.cpp:320) e pelo delete do Outliner, e zerado num reload de cena.
+			// Sem esta segunda passada a entidade guardaria o componente com um indice morto, a
+			// criacao nunca dispararia de novo, e a coisa ficaria invisivel pelo resto da sessao —
+			// em silencio, porque os syncs so fazem `continue` num indice fora de faixa.
+			scene.objects.clear();
+			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 1,
+			      "uma entidade que perdeu seu objeto ganha outro");
+			check(scene.objects.size() == 1 && scene.objects[0].mesh != nullptr,
+			      "com geometria de novo");
+			const auto* repointed = world.get<ecs::RenderObjectComponent>(e);
+			check(repointed != nullptr && repointed->sceneIndex == 0,
+			      "e o componente foi reapontado, nao duplicado");
+
+			// Play -> Stop destroi toda entidade e a recria do JSON (PlayMode.cpp:64 ->
+			// SceneFile.cpp:238), e `RenderObjectComponent` e estado de runtime que arquivo nenhum
+			// carrega. Sem reaproveitar, cada ciclo acrescentaria uma copia da cena inteira.
+			{
+				const size_t before = scene.objects.size();
+				world.destroy(e);
+				const ecs::Entity revivida = world.create();
+				world.add<ecs::NameComponent>(revivida)->name = "Caixa";
+				world.add<ecs::TransformComponent>(revivida);
+				world.add<ecs::MeshComponent>(revivida)->mesh = meshGuid;
+				check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 1,
+				      "a entidade recriada ganha objeto");
+				check(scene.objects.size() == before,
+				      "reaproveitando o objeto orfao em vez de acrescentar outro");
+				const auto* r = world.get<ecs::RenderObjectComponent>(revivida);
+				check(r != nullptr && r->sceneIndex < scene.objects.size(),
+				      "e aponta para dentro da cena");
+				check(r != nullptr && scene.objects[r->sceneIndex].visible,
+				      "o objeto reaproveitado volta visivel");
+				check(r != nullptr && scene.objects[r->sceneIndex].name == "Caixa",
+				      "e nao carrega sobras do ocupante anterior");
+			}
+
+			// E a posicao da entidade chega ao objeto, que e o que faz "colocar" significar algo.
+			ecs::syncTransformsToScene(world, scene, 1.0f);
+			check(scene.objects[0].worldMatrix[3][0] == 0.0f,
+			      "e o transform da entidade recriada chega ao objeto");
+
+			fs::remove_all(root, ec);
 		}
 
 		// ── C-07: Add / Remove Component ─────────────────────────────────────

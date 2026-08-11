@@ -9,15 +9,20 @@
 #include "Renderer/Scene.h"
 
 #include <glm/geometric.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 
 #include <cmath>
+#include <string>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 namespace tucano::ecs {
 
 void syncMeshComponentsToScene(World& world, tucano::Scene& scene, AssetResolver& resolver,
-                               MaterialSyncState& state) {
+                               RenderSyncState& state) {
 	// "mesh" is RenderObjectComponent (where in the scene), "mesh_ref" is MeshComponent (what to
 	// show). Both read-write: the sync writes back the GUID it just applied.
 	const QueryDesc desc{{"mesh", "mesh_ref"}, {}, {}, {}};
@@ -97,6 +102,123 @@ glm::quat lightRotationFor(const glm::vec3& direction) {
 	const glm::vec3 axis = glm::cross(from, to);
 	const float s = std::sqrt((1.0f + d) * 2.0f);
 	return glm::normalize(glm::quat(s * 0.5f, axis / s));
+}
+
+size_t spawnMeshObjects(World& world, tucano::Scene& scene, AssetResolver& resolver,
+                        RenderSyncState& state) {
+	if (kCompMesh == kInvalidEntity || kCompRenderObject == kInvalidEntity) return 0;
+
+	// Collected during the query, acted on after it — see the note in the header. Entity ids rather
+	// than pointers, because the archetype migration that follows invalidates every pointer the
+	// query handed out.
+	std::vector<std::pair<Entity, asset::AssetGuid>> pending;
+
+	const auto wanted = [&](const asset::AssetGuid& guid) {
+		if (!guid.valid()) return false;
+		// A GUID that already failed is not retried until the project is re-scanned: loading a mesh
+		// reads a file and uploads buffers, and doing that every frame for something that is not
+		// going to appear would cost the frame rate to no purpose.
+		return state.failedMeshes.count(guid.hi ^ guid.lo) == 0;
+	};
+
+	// Entities with no render object at all — the ordinary case, an entity just given a mesh.
+	const QueryDesc fresh{{}, {"mesh_ref"}, {}, {"mesh"}};
+	world.queries().performQueryChunks(world.queries().registerQuery(fresh),
+	                                   [&](ComponentAccessor& acc) {
+		const auto* meshes = acc.column<MeshComponent>();
+		for (uint32_t i = 0; i < acc.count(); ++i) {
+			if (!wanted(meshes[i].mesh)) continue;
+			pending.emplace_back(acc.entities()[i], meshes[i].mesh);
+		}
+	});
+
+	// Entities whose object is *gone*. `scene.objects` is compacted by streaming cell unloads
+	// (SceneCellProvider.cpp:476), terrain tile releases (TerrainCellProvider.cpp:320) and the
+	// Outliner's delete (OutlinerPanel.h:184), and cleared outright on a scene reload. Without this
+	// pass, an entity that lost its object would keep its component, so the creation path would
+	// never fire again and the thing would be invisible for the rest of the session with no way
+	// back. The syncs merely `continue` on an out-of-range index, so nothing else would report it.
+	const QueryDesc orphaned{{}, {"mesh", "mesh_ref"}, {}, {}};
+	world.queries().performQueryChunks(world.queries().registerQuery(orphaned),
+	                                   [&](ComponentAccessor& acc) {
+		const auto* renders = acc.column<RenderObjectComponent>();
+		const auto* meshes = acc.column<MeshComponent>();
+		for (uint32_t i = 0; i < acc.count(); ++i) {
+			if (renders[i].sceneIndex < scene.objects.size()) continue;
+			if (!wanted(meshes[i].mesh)) continue;
+			pending.emplace_back(acc.entities()[i], meshes[i].mesh);
+		}
+	});
+
+	// Which of the objects this sync created still have an entity pointing at them. Everything else
+	// it made is abandoned and can be handed to a new entity.
+	std::unordered_set<uint32_t> referenced;
+	const QueryDesc linked{{}, {"mesh"}, {}, {}};
+	world.queries().performQueryChunks(world.queries().registerQuery(linked),
+	                                   [&](ComponentAccessor& acc) {
+		const auto* renders = acc.column<RenderObjectComponent>();
+		for (uint32_t i = 0; i < acc.count(); ++i) referenced.insert(renders[i].sceneIndex);
+	});
+
+	std::vector<uint32_t> reusable;
+	for (const uint32_t index : state.spawned) {
+		if (index >= scene.objects.size() || referenced.count(index) != 0) continue;
+		reusable.push_back(index);
+		// Hidden immediately: an abandoned object with nobody to move it would otherwise keep
+		// drawing at the last place its entity happened to be.
+		scene.objects[index].visible = false;
+	}
+
+	size_t created = 0;
+	for (const auto& [entity, guid] : pending) {
+		if (!world.alive(entity)) continue;
+
+		// The asset carries the material it was cooked with, so a mesh dropped into a scene arrives
+		// looking like it did in the source rather than flat white.
+		std::shared_ptr<Material> cooked;
+		std::string error;
+		std::shared_ptr<Mesh> mesh = resolver.mesh(guid, &error, &cooked);
+		if (mesh == nullptr) {
+			state.failedMeshes.insert(guid.hi ^ guid.lo);
+			continue;
+		}
+
+		RenderObject object;
+		object.mesh = std::move(mesh);
+		if (cooked != nullptr) object.materials.push_back(std::move(cooked));
+		if (const auto* named = world.get<NameComponent>(entity)) {
+			object.name = named->name.c_str();
+		}
+		// Placed by the transform sync on the same frame; until then it sits at the origin rather
+		// than at an uninitialised matrix.
+		if (const auto* t = world.get<TransformComponent>(entity)) {
+			object.worldMatrix = glm::translate(glm::mat4(1.0f), t->position) *
+			                     glm::mat4_cast(t->rotation) *
+			                     glm::scale(glm::mat4(1.0f), t->scale);
+		}
+
+		uint32_t index;
+		if (!reusable.empty()) {
+			index = reusable.back();
+			reusable.pop_back();
+			// Whole-object assignment, not a field-by-field patch: the previous occupant's materials,
+			// name and skinning palette all have to go, and forgetting one is a bug that only shows
+			// on the second Play.
+			scene.objects[index] = std::move(object);
+		} else {
+			index = static_cast<uint32_t>(scene.objects.size());
+			scene.objects.push_back(std::move(object));
+			state.spawned.push_back(index);
+		}
+
+		// `add` on an entity that already has the component returns the existing one, which is
+		// exactly right for the re-created case: the same component is repointed at the new object.
+		auto* render = world.add<RenderObjectComponent>(entity);
+		render->sceneIndex = index;
+		render->appliedMesh = guid;
+		++created;
+	}
+	return created;
 }
 
 void syncLightsToScene(World& world, tucano::Scene& scene) {
