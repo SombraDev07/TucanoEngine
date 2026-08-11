@@ -136,6 +136,39 @@ private:
 	std::string m_after;
 };
 
+// One gizmo drag, as one step.
+//
+// The component is looked up by entity id on every undo and redo rather than held by pointer.
+// `EntityManager` moves an entity's components to another archetype with memcpy when a component is
+// added or removed, so a `TransformComponent*` captured here stops pointing at the entity the first
+// time someone uses Add Component — and writes into whatever moved into that slot instead.
+class TransformAction final : public UndoAction {
+public:
+	TransformAction(std::string name, ecs::World& world, ecs::Entity entity,
+	                const ecs::TransformComponent& before, const ecs::TransformComponent& after)
+	    : m_name(std::move(name)), m_world(world), m_entity(entity), m_before(before),
+	      m_after(after) {}
+
+	void undo() override { apply(m_before); }
+	void redo() override { apply(m_after); }
+	const std::string& name() const override { return m_name; }
+
+	// No mergeWith, unlike RenameAction: a drag already arrives here as one finished gesture, so
+	// merging consecutive ones would fold two separate moves into a single undo step.
+
+private:
+	void apply(const ecs::TransformComponent& value) {
+		if (!m_world.alive(m_entity)) return;
+		if (auto* transform = m_world.get<ecs::TransformComponent>(m_entity)) *transform = value;
+	}
+
+	std::string m_name;
+	ecs::World& m_world;
+	ecs::Entity m_entity = ecs::kInvalidEntity;
+	ecs::TransformComponent m_before;
+	ecs::TransformComponent m_after;
+};
+
 } // namespace
 
 ecs::Entity createEntity(ecs::World& world, UndoStack* undo, std::string_view name) {
@@ -232,6 +265,27 @@ bool removeComponent(ecs::World& world, UndoStack* undo, ecs::Entity entity,
 		return true;
 	}
 	info.remove(world, entity);
+	return true;
+}
+
+bool pushTransformEdit(ecs::World& world, UndoStack* undo, ecs::Entity entity,
+                       const ecs::TransformComponent& before, const char* what) {
+	if (!world.alive(entity)) return false;
+	const auto* current = world.get<ecs::TransformComponent>(entity);
+	if (current == nullptr) return false;
+
+	// Only the authored fields. `prevPosition`/`prevRotation` are interpolation state that follows
+	// the value anyway, and comparing them would call a click that moved nothing a change.
+	if (current->position == before.position && current->rotation == before.rotation &&
+	    current->scale == before.scale) {
+		return false;
+	}
+
+	if (undo != nullptr) {
+		undo->push(std::make_unique<TransformAction>(what != nullptr ? what : "Transform", world,
+		                                             entity, before, *current));
+		undo->breakMerge();
+	}
 	return true;
 }
 

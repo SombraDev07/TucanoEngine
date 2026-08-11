@@ -27,6 +27,7 @@ add_library(TucanoRuntime STATIC
   Editor/PropertyGrid.cpp
   Editor/InspectorPanel.cpp
   Editor/SceneCommands.cpp
+  Editor/ViewportInteraction.cpp
   Editor/PlayMode.cpp
   Editor/TypeEditingRules.cpp
   Editor/EngineEditingRules.cpp

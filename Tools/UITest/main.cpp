@@ -30,6 +30,7 @@
 #include "Editor/ContentBrowser.h"
 #include "Editor/OutlinerPanel.h"
 #include "Editor/SceneCommands.h"
+#include "Editor/ViewportInteraction.h"
 #include "AssetPipeline/AssetRegistry.h"
 #include "AssetPipeline/AssetResolver.h"
 #include "Renderer/Material.h"
@@ -60,8 +61,11 @@
 
 #include <imgui.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <type_traits>
@@ -145,6 +149,27 @@ void verifyProbe(const std::vector<uint8_t>& rgba, const Probe& p) {
 	check(ok, std::string(p.name) + ": drawn (" + std::to_string(minX) + "," + std::to_string(minY) + ")-(" +
 	              std::to_string(maxX) + "," + std::to_string(maxY) + "), expected (" + std::to_string(p.x0) + "," +
 	              std::to_string(p.y0) + ")-(" + std::to_string(p.x1 - 1) + "," + std::to_string(p.y1 - 1) + ")");
+}
+
+// A 1x1x1 cube centred on the origin, for the picking checks. Built here rather than loaded so the
+// bounds under test are known exactly — `Mesh::create` recomputes each submesh's AABB from the
+// vertices it actually indexes, which is what the ray is tested against.
+std::shared_ptr<Mesh> makeUnitCube(rhi::Device& device) {
+	std::vector<Vertex> vertices;
+	vertices.reserve(8);
+	for (int i = 0; i < 8; ++i) {
+		Vertex v{};
+		v.position = {(i & 1) ? 0.5f : -0.5f, (i & 2) ? 0.5f : -0.5f, (i & 4) ? 0.5f : -0.5f};
+		v.normal = glm::normalize(v.position);
+		vertices.push_back(v);
+	}
+	// Winding does not matter here: nothing rasterises this, the ray only reads the bounds.
+	const std::vector<uint32_t> indices = {0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1,
+	                                       2, 3, 7, 2, 7, 6, 0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3};
+	SubMesh sub{};
+	sub.indexOffset = 0;
+	sub.indexCount = static_cast<uint32_t>(indices.size());
+	return Mesh::create(device, vertices, indices, {sub});
 }
 
 // Minimal tool, so the EditorTool contract is tested without dragging in a real one.
@@ -2303,6 +2328,251 @@ int main(int argc, char** argv) {
 			      "e o transform da entidade recriada chega ao objeto");
 
 			fs::remove_all(root, ec);
+		}
+
+		// ── Gizmo e picking no viewport (fecha o passo 4 da DoD) ─────────────
+		// "Colocar o objeto na cena, mover com gizmo, duplicar, renomear": colocar, duplicar e
+		// renomear ja existiam; mover so dava para fazer digitando numeros no Inspector. O que se
+		// testa aqui e a parte que quebra em silencio — a matematica do raio e da matriz. A
+		// manipulacao em si e o ImGuizmo, que so um humano arrasta.
+		{
+			using editor::decomposeMatrix;
+			using editor::entityForSceneObject;
+			using editor::pickSceneObject;
+			using editor::rayHitsAabb;
+
+			const glm::vec3 boxMin(-1.0f);
+			const glm::vec3 boxMax(1.0f);
+			float t = -1.0f;
+
+			check(rayHitsAabb({0, 0, -5}, {0, 0, 1}, boxMin, boxMax, t) && std::fabs(t - 4.0f) < 1e-4f,
+			      "o raio entra na caixa na distancia certa");
+			check(!rayHitsAabb({0, 5, -5}, {0, 0, 1}, boxMin, boxMax, t), "e passa por cima sem tocar");
+			check(rayHitsAabb({0, 0, 0}, {0, 0, 1}, boxMin, boxMax, t) && t == 0.0f,
+			      "de dentro da caixa a distancia e zero, nao negativa");
+			// Nada atras da origem conta: uma caixa que a camera ja passou nao pode ser clicavel.
+			check(!rayHitsAabb({0, 0, 5}, {0, 0, 1}, boxMin, boxMax, t),
+			      "uma caixa atras da origem nao e acertada");
+			// Rasante: paralelo a um eixo **e** exatamente no plano da caixa, que e onde o calculo
+			// produz 0 * inf = NaN. Este check e afirmacao de comportamento, nao rede de seguranca —
+			// mutar o guard de paralelismo fora do rayHitsAabb nao o faz falhar, porque os std::min /
+			// std::max absorvem o NaN. Ver o comentario em ViewportInteraction.cpp.
+			check(rayHitsAabb({1, 0, -5}, {0, 0, 1}, boxMin, boxMax, t),
+			      "rasante a face, paralelo ao eixo, ainda acerta");
+
+			// Picking sobre malha de verdade.
+			const auto cube = makeUnitCube(*device);
+			check(cube != nullptr && !cube->submeshes().empty(), "o gate tem um cubo com bounds");
+
+			Scene scene;
+			ecs::World world;
+
+			const auto addCube = [&](const glm::mat4& matrix, bool visible) {
+				RenderObject object;
+				object.mesh = cube;
+				object.worldMatrix = matrix;
+				object.visible = visible;
+				scene.objects.push_back(object);
+				return static_cast<int>(scene.objects.size() - 1);
+			};
+
+			const int near_ = addCube(glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 5.0f)), true);
+			const int far_ = addCube(glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, 20.0f)), true);
+			check(pickSceneObject(scene, {0, 0, 0}, {0, 0, 1}) == near_,
+			      "entre dois na mesma linha, ganha o mais proximo");
+
+			scene.objects[near_].visible = false;
+			check(pickSceneObject(scene, {0, 0, 0}, {0, 0, 1}) == far_,
+			      "um objeto escondido nao e selecionavel — o usuario esta olhando o que esta atras");
+			scene.objects[near_].visible = true;
+			check(pickSceneObject(scene, {0, 3, 0}, {0, 0, 1}) == -1, "e um raio que passa ao lado nao acerta nada");
+
+			// Espaco do objeto, nao do mundo. A AABB de um cubo girado 45 graus, medida no mundo, e
+			// 41% maior que o cubo: com ela o objeto seria selecionavel de onde ele visivelmente nao
+			// esta. O ponto (0.65, 0.65) em XZ esta dentro dessa caixa inflada e fora do cubo.
+			{
+				Scene rotated;
+				RenderObject object;
+				object.mesh = cube;
+				object.worldMatrix = glm::rotate(glm::mat4(1.0f), glm::radians(45.0f), glm::vec3(0, 1, 0));
+				rotated.objects.push_back(object);
+				check(pickSceneObject(rotated, {0.0f, 5.0f, 0.0f}, {0, -1, 0}) == 0,
+				      "de cima, o centro do cubo girado e acertado");
+				check(pickSceneObject(rotated, {0.65f, 5.0f, 0.65f}, {0, -1, 0}) == -1,
+				      "e o canto vazio da caixa girada nao — o teste e no espaco do objeto");
+			}
+
+			// A escala do objeto tem que valer: um cubo unitario com escala 3 e clicavel bem alem de
+			// onde o cubo unitario acaba.
+			{
+				Scene scaled;
+				RenderObject object;
+				object.mesh = cube;
+				object.worldMatrix = glm::scale(glm::mat4(1.0f), glm::vec3(3.0f));
+				scaled.objects.push_back(object);
+				check(pickSceneObject(scaled, {1.2f, 5.0f, 0.0f}, {0, -1, 0}) == 0,
+				      "a escala do objeto entra na conta do picking");
+			}
+
+			// Do objeto de render de volta para a entidade, que e quem o editor seleciona.
+			const ecs::Entity dono = world.create();
+			world.add<ecs::NameComponent>(dono)->name = "Dono";
+			world.add<ecs::TransformComponent>(dono);
+			world.add<ecs::RenderObjectComponent>(dono)->sceneIndex = static_cast<uint32_t>(far_);
+			check(entityForSceneObject(world, far_) == dono, "o objeto de render encontra sua entidade");
+			check(entityForSceneObject(world, near_) == ecs::kInvalidEntity,
+			      "e um objeto sem dono (celula, terreno) nao inventa uma");
+
+			// Decompor: o que o gizmo devolve e uma matriz, e o que a entidade guarda sao tres campos.
+			{
+				const glm::vec3 position(3.0f, -2.0f, 7.5f);
+				const glm::quat rotation = glm::angleAxis(glm::radians(37.0f), glm::normalize(glm::vec3(0.3f, 1.0f, 0.2f)));
+				const glm::vec3 scale(2.0f, 0.5f, 1.25f);
+				const glm::mat4 built = glm::translate(glm::mat4(1.0f), position) *
+				                        glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.0f), scale);
+
+				glm::vec3 outPosition(0.0f);
+				glm::quat outRotation(1, 0, 0, 0);
+				glm::vec3 outScale(1.0f);
+				decomposeMatrix(built, outPosition, outRotation, outScale);
+				check(glm::length(outPosition - position) < 1e-4f, "a posicao volta identica");
+				check(glm::length(outScale - scale) < 1e-4f, "e a escala nao-uniforme tambem");
+				// Comparado pela matriz e nao pelo quaternion: q e -q sao a mesma rotacao, e um teste
+				// que ignora isso reprova por um sinal.
+				const glm::mat4 rebuilt = glm::translate(glm::mat4(1.0f), outPosition) *
+				                          glm::mat4_cast(outRotation) * glm::scale(glm::mat4(1.0f), outScale);
+				float worst = 0.0f;
+				for (int c = 0; c < 4; ++c) {
+					for (int r = 0; r < 4; ++r) worst = std::max(worst, std::fabs(rebuilt[c][r] - built[c][r]));
+				}
+				check(worst < 1e-4f, "e recompor devolve a mesma matriz");
+
+				// Espelhado: o quaternion nao sabe refletir, entao a reflexao vai para a escala. Sem
+				// isso o objeto viraria do avesso a cada vez que o valor fosse escrito e lido.
+				const glm::mat4 mirrored = built * glm::scale(glm::mat4(1.0f), glm::vec3(-1.0f, 1.0f, 1.0f));
+				decomposeMatrix(mirrored, outPosition, outRotation, outScale);
+				check(outScale.x < 0.0f, "uma matriz espelhada volta com escala negativa, nao com rotacao invalida");
+				check(!std::isnan(outRotation.w), "e sem NaN no quaternion");
+			}
+
+			// Escrever de volta na entidade, que e o que um arrasto faz sessenta vezes por segundo.
+			{
+				ecs::World w;
+				editor::UndoStack undo;
+				const ecs::Entity e = editor::createEntity(w, &undo, "Movida");
+				const glm::mat4 alvo = glm::translate(glm::mat4(1.0f), glm::vec3(10.0f, 0.0f, 0.0f));
+				check(editor::applyMatrixToTransform(w, e, alvo), "a matriz do gizmo chega ao transform");
+				const auto* transform = w.get<ecs::TransformComponent>(e);
+				check(transform != nullptr && std::fabs(transform->position.x - 10.0f) < 1e-4f,
+				      "com a posicao que o gizmo produziu");
+				// prevPosition existe para interpolar entre passos fixos. Arrastar e teletransporte:
+				// deixar o prev para tras faz o objeto entrar deslizando de onde ele estava.
+				check(transform != nullptr && transform->prevPosition == transform->position,
+				      "e o estado de interpolacao acompanha, em vez de puxar o objeto de volta");
+				check(!editor::applyMatrixToTransform(w, ecs::kInvalidEntity, alvo),
+				      "numa entidade que nao existe nao escreve nada");
+			}
+
+			// Undo: um passo por gesto, e ele tem que sobreviver ao que mexe na memoria do ECS.
+			{
+				ecs::World w;
+				editor::UndoStack undo;
+				const ecs::Entity a = editor::createEntity(w, &undo, "A");
+				const ecs::Entity b = editor::createEntity(w, &undo, "B");
+				w.get<ecs::TransformComponent>(b)->position = glm::vec3(-50.0f, 0.0f, 0.0f);
+
+				const ecs::TransformComponent antes = *w.get<ecs::TransformComponent>(a);
+				check(!editor::pushTransformEdit(w, &undo, a, antes, "Move"),
+				      "clicar num handle sem arrastar nao empilha um passo que nao faz nada");
+
+				w.get<ecs::TransformComponent>(a)->position = glm::vec3(5.0f, 1.0f, 2.0f);
+				check(editor::pushTransformEdit(w, &undo, a, antes, "Move"), "e um arrasto de verdade empilha");
+				check(undo.undoName() == "Move", "com o nome do gesto, nao do codigo");
+
+				// **O motivo de a acao guardar a entidade e nao um ponteiro.** `EntityManager` move os
+				// componentes para outro archetype com memcpy quando um componente e adicionado, entao
+				// um `TransformComponent*` capturado no arrasto passaria a apontar para o que ocupou
+				// aquele slot — e o undo escreveria na entidade errada, em silencio.
+				const ecs::AuthoringComponentInfo* table = ecs::authoringComponents();
+				for (size_t i = 0; i < ecs::authoringComponentCount(); ++i) {
+					if (std::string_view(table[i].key) == "light") editor::addComponent(w, &undo, a, table[i]);
+				}
+
+				undo.undo();  // desfaz o Add Component
+				undo.undo();  // desfaz o movimento
+				const auto* restaurada = w.get<ecs::TransformComponent>(a);
+				check(restaurada != nullptr && glm::length(restaurada->position - antes.position) < 1e-4f,
+				      "undo devolve a posicao autorada mesmo depois de a entidade ter migrado de archetype");
+				const auto* vizinha = w.get<ecs::TransformComponent>(b);
+				check(vizinha != nullptr && std::fabs(vizinha->position.x + 50.0f) < 1e-4f,
+				      "e nao escreve na entidade que estava do lado");
+
+				undo.redo();
+				const auto* refeita = w.get<ecs::TransformComponent>(a);
+				check(refeita != nullptr && std::fabs(refeita->position.x - 5.0f) < 1e-4f, "redo repoe o movimento");
+			}
+
+			// Um clique no viewport vira selecao — a ponta que liga tudo isto ao editor.
+			{
+				editor::EditorContext context;
+				Camera camera;
+				camera.setPerspective(glm::radians(60.0f), 4.0f / 3.0f, 0.1f, 300.0f);
+				camera.setPosition({0.0f, 0.0f, -10.0f});
+				camera.lookAt({0.0f, 0.0f, 0.0f});
+
+				Scene viewScene;
+				RenderObject object;
+				object.mesh = cube;
+				object.worldMatrix = glm::mat4(1.0f);
+				viewScene.objects.push_back(object);
+
+				ecs::World w;
+				const ecs::Entity e = w.create();
+				w.add<ecs::NameComponent>(e)->name = "Alvo";
+				w.add<ecs::TransformComponent>(e);
+				w.add<ecs::RenderObjectComponent>(e)->sceneIndex = 0;
+
+				context.scene = &viewScene;
+				context.world = &w;
+				context.camera = &camera;
+
+				check(editor::pickAtViewportPosition(context, 320.0f, 240.0f, 640.0f, 480.0f),
+				      "o clique no centro do viewport e respondido");
+				check(context.selectedEntity == e,
+				      "e seleciona a **entidade**, nao o objeto de render — e ela que o editor edita");
+				check(context.selectedObject == 0, "guardando tambem o indice, para hosts sem mundo");
+
+				// Clicar no ceu limpa. Sem isso nao ha como parar de olhar para um gizmo.
+				check(editor::pickAtViewportPosition(context, 2.0f, 2.0f, 640.0f, 480.0f),
+				      "o clique no vazio tambem e respondido");
+				check(!context.hasSelectedEntity() && context.selectedObject == -1,
+				      "e limpa a selecao em vez de manter o gizmo no meio da tela");
+
+				// Desenhar o gizmo nao pode, por si so, mover nada: um ImGuizmo mal alimentado devolve
+				// a matriz alterada e o objeto anda sozinho ao abrir o painel.
+				context.selectedEntity = e;
+				const ecs::TransformComponent antes = *w.get<ecs::TransformComponent>(e);
+				editor::ViewportGizmoState gizmo;
+				bool changed = true;
+				for (int i = 0; i < 2; ++i) {
+					window.pollEvents();
+					ui.beginFrame();
+					ImGui::Begin("##gizmoProbe");
+					editor::drawViewportGizmo(context, gizmo, 0.0f, 0.0f, 640.0f, 480.0f, changed);
+					ImGui::End();
+					auto* cmd = device->beginFrame();
+					auto& bb = swapChain->backBuffer();
+					cmd->transition(bb, rhi::ResourceState::RenderTarget);
+					ui.endFrame(*cmd, bb);
+					cmd->transition(bb, rhi::ResourceState::Present);
+					device->endFrame(*swapChain);
+				}
+				check(!changed, "desenhar o gizmo sem ninguem arrastando nao marca mudanca");
+				const auto* depois = w.get<ecs::TransformComponent>(e);
+				check(depois != nullptr && depois->position == antes.position &&
+				          depois->scale == antes.scale,
+				      "e nao mexe no transform da entidade selecionada");
+			}
 		}
 
 		// ── C-07: Add / Remove Component ─────────────────────────────────────

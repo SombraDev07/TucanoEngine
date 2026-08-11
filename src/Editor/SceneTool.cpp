@@ -18,6 +18,7 @@
 #include "Editor/PlayMode.h"
 #include "Editor/SystemDialogs.h"
 #include "Editor/UI/Icons.h"
+#include "Editor/ViewportInteraction.h"
 #include "ECS/SceneFile.h"
 #include "ECS/World.h"
 #include "Renderer/Renderer.h"
@@ -50,6 +51,10 @@ struct SceneTool::Panels {
 	PropertyGrid fogGrid;
 	PropertyGrid cloudGrid;
 	PropertyGrid rainGrid;
+
+	// Which handle the viewport is offering, and the transform a drag started from. Per tool rather
+	// than global: two scene tools open on two documents each keep their own mode.
+	ViewportGizmoState gizmo;
 };
 
 SceneTool::SceneTool()
@@ -136,9 +141,91 @@ void SceneTool::drawViewport(EditorContext& context) {
 	// The image is last frame's target at last frame's size — on the frame a resize lands it is
 	// stretched by a few pixels for one frame, which is invisible next to the alternative of
 	// stalling the GPU mid-UI to resize.
+	const ImVec2 imageMin = ImGui::GetCursorScreenPos();
 	ImGui::Image(static_cast<ImTextureID>(context.sceneTexture), ImVec2(static_cast<float>(width),
 	                                                                    static_cast<float>(height)));
 	context.viewportHovered = ImGui::IsItemHovered();
+
+	// Submitted after the image so it draws on top of it, and grouped so one hover test covers the
+	// whole strip — a click on a toolbar button must not also pick whatever is behind it.
+	ImGui::SetCursorScreenPos(ImVec2(imageMin.x + 8.0f, imageMin.y + 8.0f));
+	ImGui::BeginGroup();
+	drawGizmoToolbar(context);
+	ImGui::EndGroup();
+	const bool overToolbar = ImGui::IsItemHovered();
+
+	// The gizmo, in screen coordinates: ImGuizmo hit-tests against io.MousePos, so a rect of
+	// (0,0,w,h) would put the handles wherever the window happens not to be.
+	bool moved = false;
+	const bool usingGizmo =
+	    drawViewportGizmo(context, m_panels->gizmo, imageMin.x, imageMin.y,
+	                      static_cast<float>(width), static_cast<float>(height), moved);
+	if (moved) markDirty();
+
+	// Picking. Suppressed while a handle is held or hovered, otherwise finishing a drag would
+	// re-select whatever is behind the object — or nothing, if the drag ended over the sky.
+	if (context.viewportHovered && !overToolbar && !usingGizmo && !gizmoIsOver() &&
+	    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+		const ImVec2 mouse = ImGui::GetIO().MousePos;
+		pickAtViewportPosition(context, mouse.x - imageMin.x, mouse.y - imageMin.y,
+		                       static_cast<float>(width), static_cast<float>(height));
+	}
+}
+
+void SceneTool::drawGizmoToolbar(EditorContext& context) {
+	ViewportGizmoState& gizmo = m_panels->gizmo;
+
+	// Ctrl+1/2/3 rather than the W/E/R every other editor uses: W, E and R are already the host's
+	// fly-camera keys, and a shortcut that moves the camera *and* changes the tool is worse than no
+	// shortcut. Rebinding them belongs to A-01 (commands with names), where the conflict can be
+	// resolved in one place instead of guessed at here.
+	const bool takesKeys = ImGui::IsWindowFocused() || context.viewportHovered;
+	if (takesKeys && ImGui::GetIO().KeyCtrl) {
+		if (ImGui::IsKeyPressed(ImGuiKey_1)) gizmo.operation = GizmoOperation::Translate;
+		if (ImGui::IsKeyPressed(ImGuiKey_2)) gizmo.operation = GizmoOperation::Rotate;
+		if (ImGui::IsKeyPressed(ImGuiKey_3)) gizmo.operation = GizmoOperation::Scale;
+	}
+
+	const auto opButton = [&gizmo](const char* label, GizmoOperation op, const char* tooltip) {
+		const bool active = gizmo.operation == op;
+		if (active) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+		if (ImGui::Button(label)) gizmo.operation = op;
+		if (active) ImGui::PopStyleColor();
+		ImGui::SetItemTooltip("%s", tooltip);
+		ImGui::SameLine();
+	};
+
+	opButton(TUCANO_ICON_ARROW_ALL, GizmoOperation::Translate, "Move  (Ctrl+1)");
+	opButton(TUCANO_ICON_ROTATE_3D_VARIANT, GizmoOperation::Rotate, "Rotate  (Ctrl+2)");
+	opButton(TUCANO_ICON_RESIZE, GizmoOperation::Scale, "Scale  (Ctrl+3)");
+
+	// Scale is only meaningful along the object's own axes, so the choice is disabled rather than
+	// offered and quietly ignored.
+	const bool localOnly = gizmo.operation == GizmoOperation::Scale;
+	ImGui::BeginDisabled(localOnly);
+	if (ImGui::Button(localOnly || gizmo.space == GizmoSpace::Local ? "Local" : "World")) {
+		gizmo.space = gizmo.space == GizmoSpace::World ? GizmoSpace::Local : GizmoSpace::World;
+	}
+	ImGui::EndDisabled();
+	ImGui::SetItemTooltip("%s", "Axes of the world, or of the object");
+	ImGui::SameLine();
+
+	ImGui::Checkbox("Snap", &gizmo.snapEnabled);
+	if (gizmo.snapEnabled) {
+		ImGui::SameLine();
+		ImGui::SetNextItemWidth(70.0f);
+		switch (gizmo.operation) {
+			case GizmoOperation::Translate:
+				ImGui::DragFloat("##snapT", &gizmo.translateSnap, 0.05f, 0.01f, 100.0f, "%.2f m");
+				break;
+			case GizmoOperation::Rotate:
+				ImGui::DragFloat("##snapR", &gizmo.rotateSnap, 1.0f, 1.0f, 90.0f, "%.0f deg");
+				break;
+			case GizmoOperation::Scale:
+				ImGui::DragFloat("##snapS", &gizmo.scaleSnap, 0.01f, 0.01f, 10.0f, "%.2f");
+				break;
+		}
+	}
 }
 
 void SceneTool::drawSky(EditorContext& context) {

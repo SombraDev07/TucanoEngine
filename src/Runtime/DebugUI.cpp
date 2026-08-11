@@ -1,6 +1,7 @@
 #include "Runtime/DebugUI.h"
 #include "Editor/UI/Fonts.h"
 #include "Editor/UI/Style.h"
+#include "Editor/ViewportInteraction.h"
 #include "RHI/DX12/DX12Device.h"
 #include "RHI/DX12/DX12CommandList.h"
 #include "RHI/DX12/DX12Resource.h"
@@ -160,28 +161,23 @@ bool DebugUI::drawTransformGizmo(const glm::mat4& view, const glm::mat4& proj, g
                                  uint32_t viewportWidth, uint32_t viewportHeight) {
   if (!m_ready || viewportWidth == 0 || viewportHeight == 0) return false;
 
-  ImGuizmo::OPERATION operation = ImGuizmo::TRANSLATE;
+  // Forwards to the editor's implementation rather than calling ImGuizmo again: two copies of the
+  // same call is two places for the mode and snap rules to drift apart. This entry point is the
+  // pre-viewport-panel one — the whole window is the viewport — so it draws to the background list
+  // and its rect starts at the window origin.
+  editor::GizmoOperation operation = editor::GizmoOperation::Translate;
   switch (op) {
-    case GizmoOp::Rotate: operation = ImGuizmo::ROTATE; break;
-    case GizmoOp::Scale: operation = ImGuizmo::SCALE; break;
+    case GizmoOp::Rotate: operation = editor::GizmoOperation::Rotate; break;
+    case GizmoOp::Scale: operation = editor::GizmoOperation::Scale; break;
     case GizmoOp::Translate: break;
   }
-  // Scaling is only meaningful in the object's own space; ImGuizmo ignores WORLD for SCALE anyway.
-  const ImGuizmo::MODE mode =
-      (worldSpace && op != GizmoOp::Scale) ? ImGuizmo::WORLD : ImGuizmo::LOCAL;
-
-  ImGuizmo::SetOrthographic(false);
-  // The gizmo draws to the background list so it is not clipped by (or dependent on) any window.
-  ImGuizmo::SetDrawlist(ImGui::GetBackgroundDrawList());
-  ImGuizmo::SetRect(0.0f, 0.0f, float(viewportWidth), float(viewportHeight));
-
-  const float snapValues[3] = {snap, snap, snap};
-  ImGuizmo::Manipulate(&view[0][0], &proj[0][0], operation, mode, &model[0][0], nullptr,
-                       snap > 0.0f ? snapValues : nullptr);
-  return ImGuizmo::IsUsing();
+  return editor::manipulateTransform(
+      view, proj, model, operation,
+      worldSpace ? editor::GizmoSpace::World : editor::GizmoSpace::Local, snap, 0.0f, 0.0f,
+      float(viewportWidth), float(viewportHeight), editor::GizmoLayer::BackgroundDrawList);
 }
 
-bool DebugUI::gizmoHovered() const { return m_ready && ImGuizmo::IsOver(); }
+bool DebugUI::gizmoHovered() const { return m_ready && editor::gizmoIsOver(); }
 
 bool DebugUI::wantCaptureMouse() const { return m_ready && ImGui::GetIO().WantCaptureMouse; }
 bool DebugUI::wantCaptureKeyboard() const { return m_ready && ImGui::GetIO().WantCaptureKeyboard; }

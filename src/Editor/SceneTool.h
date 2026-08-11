@@ -144,6 +144,8 @@ private:
 	// renderer still saves and loads its entities.
 	void bindEnvironment(void* environment) const;
 	void drawViewport(EditorContext& context);
+	// The strip of gizmo controls overlaid on the viewport image.
+	void drawGizmoToolbar(EditorContext& context);
 	void drawSky(EditorContext& context);
 	void drawRendering(EditorContext& context);
 	void drawWater(EditorContext& context);

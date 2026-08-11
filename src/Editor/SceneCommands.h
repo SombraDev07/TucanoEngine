@@ -23,6 +23,7 @@
 
 namespace tucano::ecs {
 class World;
+struct TransformComponent;
 }
 
 namespace tucano::editor {
@@ -54,6 +55,19 @@ bool addComponent(ecs::World& world, UndoStack* undo, ecs::Entity entity,
 // exact bytes it had.
 bool removeComponent(ecs::World& world, UndoStack* undo, ecs::Entity entity,
                      const ecs::AuthoringComponentInfo& info);
+
+// Records a transform change that has **already been applied**, which is what a gizmo drag is: the
+// value is written every frame so the object follows the mouse, and the step is one per gesture.
+// `before` is the transform as it was when the drag started.
+//
+// False when nothing actually moved — clicking a handle without dragging must not push a step that
+// does nothing, because the user then presses Ctrl+Z and watches nothing happen.
+//
+// The action re-looks-up the component from the entity id instead of holding a pointer to it:
+// `EntityManager` moves components between archetypes with memcpy when one is added or removed, so
+// a pointer into a chunk is only valid until the next Add Component.
+bool pushTransformEdit(ecs::World& world, UndoStack* undo, ecs::Entity entity,
+                       const ecs::TransformComponent& before, const char* what);
 
 // Same operations, but taking the context so the selection follows what happened — a new entity
 // becomes selected, and a deleted one stops being.
