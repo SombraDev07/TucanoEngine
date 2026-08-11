@@ -14,6 +14,7 @@
 #include "Renderer/Weather/CloudSystem.h"
 #include "Renderer/Weather/WaterSystem.h"
 #include "Renderer/Weather/FogSystem.h"
+#include "Renderer/PostFX/PostFxParams.h"
 #include "Renderer/Sky/Celestial.h"
 #include "Renderer/Sky/SkyParams.h"
 #include "Renderer/Texture.h"
@@ -75,31 +76,18 @@ struct TUCANO_TYPE() RendererSettings {
   TUCANO_FIELD(.label = "ESM exponent", .category = "Shadows", .minValue = 1.0f, .maxValue = 200.0f, .step = 1.0f, .advanced = true)
   float esmExponent = 80.0f;
 
-  // ── Post processing ──────────────────────────────────────────────────────
-  TUCANO_FIELD(.label = "Tonemap", .tooltip = "HDR to display. Off shows raw linear values and looks blown out — a debugging view", .category = "Post processing")
-  bool enableTonemap = true;
-  TUCANO_FIELD(.label = "Bloom", .category = "Post processing")
-  bool enableBloom = true;
-  TUCANO_FIELD(.label = "Bloom strength", .category = "Post processing", .minValue = 0.0f, .maxValue = 2.0f, .step = 0.01f)
-  float bloomStrength = 0.28f;
-  TUCANO_FIELD(.label = "Ambient occlusion", .tooltip = "GTAO", .category = "Post processing")
-  bool enableAO = true;
-  TUCANO_FIELD(.label = "AO radius", .tooltip = "World-space metres sampled around each pixel", .category = "Post processing", .minValue = 0.1f, .maxValue = 4.0f, .step = 0.05f)
-  float aoRadius = 0.9f;
-  TUCANO_FIELD(.label = "AO intensity", .category = "Post processing", .minValue = 0.0f, .maxValue = 3.0f, .step = 0.05f)
-  float aoIntensity = 1.0f;
-  TUCANO_FIELD(.label = "Auto exposure", .tooltip = "Adapts to scene brightness, as an eye does. Off holds a fixed exposure", .category = "Exposure")
-  bool enableAutoExposure = true;
-  TUCANO_FIELD(.label = "Target", .tooltip = "Middle-grey the auto exposure aims for. 0.18 is the photographic standard", .category = "Exposure", .minValue = 0.01f, .maxValue = 1.0f, .step = 0.01f)
-  float exposureTarget = 0.18f;
-  TUCANO_FIELD(.label = "Adaptation", .tooltip = "How fast the eye adjusts. Low is slow and cinematic, high snaps", .category = "Exposure", .minValue = 0.01f, .maxValue = 1.0f, .step = 0.01f)
-  float exposureAdapt = 0.1f;
-  TUCANO_FIELD(.label = "Minimum", .tooltip = "Floor on auto exposure; stops a dark room from being lifted to daylight", .category = "Exposure", .minValue = 0.001f, .maxValue = 4.0f, .step = 0.01f)
-  float exposureMin = 0.08f;
-  TUCANO_FIELD(.label = "Maximum", .tooltip = "Ceiling on auto exposure; stops a bright sky from being crushed", .category = "Exposure", .minValue = 0.01f, .maxValue = 32.0f, .step = 0.05f)
-  float exposureMax = 4.0f;
+  // Deliberately not annotated, exactly like `sky` above: PostFxParams has its own panel and its
+  // own block in a scene file (E-04). Reflecting it here as well would draw every grading field a
+  // second time, nested inside Rendering, and give the look of the game two places to be edited
+  // from — which is the bug E-05 had to undo for the clouds.
+  PostFxParams postFx;
 
   // ── Global illumination and reflections ──────────────────────────────────
+  //
+  // These stay. Every one of them is a property of the machine drawing the scene rather than of the
+  // scene: RT is "auto-enabled when the device has it", and `giTier` is how much budget to spend.
+  // Writing them into a `.tuscene` would make a scene authored on a DXR machine ask for ray tracing
+  // on one that has none.
   TUCANO_FIELD(.label = "Image-based lighting", .tooltip = "Environment light from the sky or an HDRI", .category = "Global illumination")
   bool enableIBL = true;
   TUCANO_FIELD(.label = "Screen-space reflections", .category = "Global illumination")
@@ -193,6 +181,8 @@ public:
   uint64_t rgAliasedBytes() const { return m_graph.aliasedBytes(); }
   SkyParams& sky() { return m_settings.sky; }
   const SkyParams& sky() const { return m_settings.sky; }
+  PostFxParams& postFx() { return m_settings.postFx; }
+  const PostFxParams& postFx() const { return m_settings.postFx; }
   RainParams& rain() { return m_rain.params(); }
   const RainParams& rain() const { return m_rain.params(); }
   WaterParams& water() { return m_water.params(); }

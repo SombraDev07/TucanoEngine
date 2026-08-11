@@ -39,6 +39,7 @@ struct FogParams;
 struct CloudParams;
 struct RainParams;
 struct SkyParams;
+struct PostFxParams;
 } // namespace tucano
 
 namespace tucano::ecs {
@@ -48,18 +49,19 @@ class World;
 // Everything in a scene that is not an entity. Held by pointer so a caller that has no renderer
 // (a test, a headless cook) can still save and load the entity half.
 //
-// **`RendererSettings` is deliberately absent** (E-02). A scene wants to save what time of day it
-// is; it does not want to save whether meshlets are on — that is a property of the machine drawing
-// the scene, not of the scene. Splitting the two is exactly what E-01 was for, and putting the
-// struct back here would undo it. The authoring-side keys still living in `RendererSettings`
-// (bloom strength, exposure target) therefore do **not** survive closing the editor yet; moving
-// them out, or teaching the serialiser to write only the non-advanced half, is its own task.
+// **`RendererSettings` is deliberately absent.** A scene wants to save what time of day it is and
+// how it is graded; it does not want to save whether meshlets are on, how big the shadow map is, or
+// whether ray tracing is available — those are properties of the machine drawing the scene. The
+// fields that genuinely belonged here were moved out into structs of their own instead (E-01 for
+// the sky, E-05 for the clouds, E-04 for the grading), which is why every pointer below names a
+// specific block rather than a filtered view of one big one.
 struct SceneEnvironment {
 	WaterParams* water = nullptr;
 	FogParams* fog = nullptr;
 	CloudParams* clouds = nullptr;
 	RainParams* rain = nullptr;
 	SkyParams* sky = nullptr;
+	PostFxParams* postFx = nullptr;
 
 	// The HDRI the scene is lit by. Not one of the blocks above because it is a path, and applying
 	// one means re-cooking the image-based lighting — which takes real time, can fail, and has to

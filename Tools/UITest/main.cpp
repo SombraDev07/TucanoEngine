@@ -957,12 +957,19 @@ int main(int argc, char** argv) {
 			CloudParams clouds;
 			clouds.coverage = 0.99f;
 			clouds.storminess = 0.77f;
+			// E-04: como a cena e graduada. Morria com o processo enquanto estava na mesma struct
+			// que `enableMeshShaders`.
+			PostFxParams postFx;
+			postFx.bloomStrength = 1.75f;
+			postFx.exposureTarget = 0.42f;
+			postFx.enableAO = false;
 			std::string hdri = "IBL/noite.hdr";
 			SceneEnvironment environment;
 			environment.water = &water;
 			environment.fog = &fog;
 			environment.sky = &sky;
 			environment.clouds = &clouds;
+			environment.postFx = &postFx;
 			environment.hdriPath = &hdri;
 
 			const std::string text = sceneToJson(world, environment);
@@ -982,6 +989,7 @@ int main(int argc, char** argv) {
 			FogParams fog2;
 			SkyParams sky2;
 			CloudParams clouds2;
+			PostFxParams postFx2;
 			// O que o editor teria carregado antes de abrir a cena. Tem que ser diferente do que
 			// esta no arquivo, senao o teste nao distingue "aplicou" de "ja estava assim".
 			std::string hdri2 = "IBL/default.hdr";
@@ -992,6 +1000,7 @@ int main(int argc, char** argv) {
 			environment2.fog = &fog2;
 			environment2.sky = &sky2;
 			environment2.clouds = &clouds2;
+			environment2.postFx = &postFx2;
 			environment2.hdriPath = &hdri2;
 			environment2.applyHdri = [&](const std::string& path) {
 				++hdriApplied;
@@ -1042,6 +1051,9 @@ int main(int argc, char** argv) {
 			check(sky2.timeOfDay == 0.8125f, "a hora do dia sobrevive a salvar e reabrir");
 			check(clouds2.coverage == 0.99f && clouds2.storminess == 0.77f,
 			      "e a camada de nuvem tambem (E-05: agora ela tem um dono so)");
+			check(postFx2.bloomStrength == 1.75f && postFx2.exposureTarget == 0.42f &&
+			          postFx2.enableAO == false,
+			      "e o grading da cena — bloom, exposicao e AO (E-04)");
 			check(sky2.useBrunetonAtmosphere == false,
 			      "e o modelo de atmosfera tambem, nao so os floats");
 			check(hdriApplied == 1, "o HDRI da cena foi aplicado uma vez, nao a cada bloco lido");
@@ -2272,9 +2284,19 @@ int main(int argc, char** argv) {
 			check(isAdvanced(render, "enableMeshlets") && isAdvanced(render, "enableVisibilityBuffer") &&
 			          isAdvanced(render, "enableShaderHotReload"),
 			      "as chaves de engenharia estao marcadas como avancadas");
-			check(!isAdvanced(render, "enableShadows") && !isAdvanced(render, "bloomStrength") &&
-			          !isAdvanced(render, "exposureTarget"),
-			      "e as de autoria nao estao");
+			// `bloomStrength` e `exposureTarget` saem daqui na E-04, e este check passaria a valer
+			// nada se continuasse apontando para eles: `findProperty` devolve null, `isAdvanced` da
+			// false, e `!false` e verdadeiro. Um check que passa porque o campo nao existe e pior que
+			// nenhum. Entao ele afirma a existencia primeiro, e sobre o tipo certo.
+			const TypeInfo* postFx = TypeRegistry::instance().find(TypeID{"PostFxParams"});
+			check(findProperty(render, "enableShadows") != nullptr && !isAdvanced(render, "enableShadows"),
+			      "e as de autoria que ficaram nao estao");
+			check(postFx != nullptr && findProperty(postFx, "bloomStrength") != nullptr &&
+			          findProperty(postFx, "exposureTarget") != nullptr,
+			      "as chaves de grading estao em PostFxParams, que e o que a cena grava");
+			check(findProperty(render, "bloomStrength") == nullptr &&
+			          findProperty(render, "exposureTarget") == nullptr,
+			      "e nao sobraram em RendererSettings (mudaram de casa, nao foram copiadas)");
 			size_t advancedInSky = 0;
 			for (size_t i = 0; sky != nullptr && i < sky->propertyCount; ++i) {
 				if (sky->properties[i].meta.advanced) ++advancedInSky;
@@ -2300,12 +2322,14 @@ int main(int argc, char** argv) {
 
 			// O tamanho do que ficou alcancavel. O numero exato nao importa; que ele nao encolha
 			// sem alguem perceber, sim — e foi exatamente assim que este check fez o seu trabalho na
-			// E-05: caiu de 44 para 33 quando os onze campos de nuvem sairam daqui, e a queda teve
-			// de ser justificada em vez de passar batido. Eles nao sumiram: viraram os campos de
-			// `CloudParams`, que e quem sempre desenhou as nuvens.
+			// E-05: caiu de 44 para 33 quando os onze campos de nuvem sairam daqui, e de novo para 22
+			// na E-04, quando os onze de grading sairam. Duas vezes a queda teve de ser justificada
+			// em vez de passar batido — que e exatamente o servico deste check. Nenhum campo sumiu:
+			// viraram `CloudParams` e `PostFxParams`, que e onde a cena os grava.
 			check(sky != nullptr && sky->propertyCount == 20, "SkyParams expoe 20 campos");
-			check(render != nullptr && render->propertyCount >= 33,
-			      "RendererSettings expoe o resto (>=33, era 44 antes da nuvem mudar de casa)");
+			check(postFx != nullptr && postFx->propertyCount == 11, "PostFxParams expoe os 11 de grading");
+			check(render != nullptr && render->propertyCount >= 22,
+			      "RendererSettings expoe so o que e da maquina (>=22, era 44)");
 		}
 
 		// ── C-08: dar um mesh a uma entidade faz geometria aparecer ──────────
@@ -3457,7 +3481,10 @@ int main(int argc, char** argv) {
 			                          "Environment", "Tools",  "Animation",       "Stats"};
 			// Sky e Rendering entraram na D-01/E-01: o painel de Environment escrito a mao deixou de
 			// ser o unico caminho, e passou a cobrir so o que um grid nao consegue expressar.
-			const char* generated[] = {"Sky", "Rendering", "Water", "Fog", "Clouds", "Rain"};
+			// "Post FX" entrou na E-04, pelo mesmo motivo que Sky entrou na E-01: os campos de
+			// grading viraram uma struct propria para poderem ser gravados na cena, e uma struct
+			// refletida ganha painel sem ninguem escrever UI para ela.
+			const char* generated[] = {"Sky", "Rendering", "Post FX", "Water", "Fog", "Clouds", "Rain"};
 
 			int found = 0;
 			for (const char* name : migrated) {
@@ -3469,13 +3496,13 @@ int main(int argc, char** argv) {
 			for (const char* name : generated) {
 				if (tool.findWindow(name) != nullptr) ++generatedFound;
 			}
-			check(generatedFound == 6, "as 6 janelas geradas por reflection existem (" +
-			                               std::to_string(generatedFound) + "/6)");
+			check(generatedFound == 7, "as 7 janelas geradas por reflection existem (" +
+			                               std::to_string(generatedFound) + "/7)");
 			// Viewport entrou junto: a cena virou um painel, ancorado no no central que o layout
 			// deixa vazio de proposito.
 			check(tool.findWindow("Viewport") != nullptr, "a janela de Viewport existe");
-			check(tool.windows().size() == 15,
-			      "SceneTool declara 15 janelas (" + std::to_string(tool.windows().size()) + ")");
+			check(tool.windows().size() == 16,
+			      "SceneTool declara 16 janelas (" + std::to_string(tool.windows().size()) + ")");
 
 			// A tool with no context must not crash: the panels report "no scene" instead.
 			check(tool.context() == nullptr, "contexto comeca nulo e e tolerado");

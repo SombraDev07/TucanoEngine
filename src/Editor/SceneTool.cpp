@@ -47,6 +47,7 @@ struct SceneTool::Panels {
 	// when they narrow one panel and not the other.
 	PropertyGrid skyGrid;
 	PropertyGrid renderGrid;
+	PropertyGrid postFxGrid;
 	PropertyGrid waterGrid;
 	PropertyGrid fogGrid;
 	PropertyGrid cloudGrid;
@@ -106,6 +107,7 @@ void SceneTool::onInitialize() {
 	// P3 was for: adding a setting to WaterParams makes it appear here with its range and tooltip.
 	addWindow("Sky", withContext([this](EditorContext& c) { drawSky(c); }));
 	addWindow("Rendering", withContext([this](EditorContext& c) { drawRendering(c); }));
+	addWindow("Post FX", withContext([this](EditorContext& c) { drawPostFx(c); }));
 	addWindow("Water", withContext([this](EditorContext& c) { drawWater(c); }));
 	addWindow("Fog", withContext([this](EditorContext& c) { drawFog(c); }));
 	addWindow("Clouds", withContext([this](EditorContext& c) { drawClouds(c); }));
@@ -257,6 +259,16 @@ void SceneTool::drawRendering(EditorContext& context) {
 	m_panels->renderGrid.setUndoStack(&undoStack());
 	m_panels->renderGrid.drawFilterBox();
 	if (m_panels->renderGrid.draw(context.renderer->settings())) markDirty();
+}
+
+void SceneTool::drawPostFx(EditorContext& context) {
+	if (context.renderer == nullptr) {
+		ImGui::TextDisabled("No renderer bound.");
+		return;
+	}
+	m_panels->postFxGrid.setUndoStack(&undoStack());
+	m_panels->postFxGrid.drawFilterBox();
+	if (m_panels->postFxGrid.draw(context.renderer->postFx())) markDirty();
 }
 
 void SceneTool::drawWater(EditorContext& context) {
@@ -504,6 +516,7 @@ void SceneTool::bindEnvironment(void* environmentPtr) const {
 	environment.clouds = &m_context->renderer->clouds();
 	environment.rain = &m_context->renderer->rain();
 	environment.sky = &m_context->renderer->sky();
+	environment.postFx = &m_context->renderer->postFx();
 	// The HDRI is the one environment value that costs something to apply, so it travels as a value
 	// plus the operation. `reloadIBL` already keeps the previous lighting when the file cannot be
 	// used, which is exactly the contract the loader wants.

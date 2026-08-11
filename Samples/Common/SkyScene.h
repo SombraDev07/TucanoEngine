@@ -118,10 +118,10 @@ inline void configureCleanRenderer(Renderer& renderer) {
 
   s.enableShadows = true;
   s.enableIBL = true;
-  s.enableBloom = true;
-  s.enableAO = true;
-  s.enableTonemap = true;
-  s.enableAutoExposure = true;
+  s.postFx.enableBloom = true;
+  s.postFx.enableAO = true;
+  s.postFx.enableTonemap = true;
+  s.postFx.enableAutoExposure = true;
   s.enableSSR = false;
   s.enableContactShadows = false;
   s.enableRTShadows = false;

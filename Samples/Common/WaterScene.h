@@ -28,10 +28,10 @@ inline void configureWaterRenderer(Renderer& renderer) {
   clouds.driveRain = false;
   s.enableShadows = true;
   s.enableIBL = true;
-  s.enableBloom = true;
-  s.enableAO = true;
-  s.enableTonemap = true;
-  s.enableAutoExposure = true;
+  s.postFx.enableBloom = true;
+  s.postFx.enableAO = true;
+  s.postFx.enableTonemap = true;
+  s.postFx.enableAutoExposure = true;
   s.enableSSR = true;
   s.enableContactShadows = true;
   s.enableRTShadows = false;

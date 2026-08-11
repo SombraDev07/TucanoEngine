@@ -14,4 +14,5 @@ ECS/AuthoringComponents.h
 ECS/Components.h
 Renderer/MaterialAsset.h
 Renderer/Sky/SkyParams.h
+Renderer/PostFX/PostFxParams.h
 Renderer/Renderer.h

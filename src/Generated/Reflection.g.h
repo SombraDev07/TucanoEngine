@@ -18,6 +18,7 @@
 #include "ECS/Components.h"
 #include "Renderer/MaterialAsset.h"
 #include "Renderer/Sky/SkyParams.h"
+#include "Renderer/PostFX/PostFxParams.h"
 #include "Renderer/Renderer.h"
 
 TUCANO_REFLECT_ENUM_BEGIN(LightType)
@@ -230,17 +231,7 @@ TUCANO_REFLECT_TYPE_BEGIN(SkyParams)
 	TUCANO_PROPERTY(starCatalogPath, String, .label = "Star catalogue", .tooltip = "Bright-star list, relative to the engine assets directory. Falls back " "to the procedural star field when it cannot be read", .category = "Stars", .assetKind = "text")
 TUCANO_REFLECT_TYPE_END(SkyParams)
 
-TUCANO_REFLECT_TYPE_BEGIN(RendererSettings)
-	TUCANO_PROPERTY(enableShadows, Bool, .label = "Enabled", .tooltip = "Master switch for every shadow pass", .category = "Shadows")
-	TUCANO_PROPERTY(enablePCSS, Bool, .label = "Soft shadows (PCSS)", .tooltip = "Contact-hardening penumbra that widens with distance from the caster", .category = "Shadows")
-	TUCANO_PROPERTY(pcssLightSize, Float, .label = "Light size", .tooltip = "Apparent size of the sun for PCSS. Bigger means softer, blurrier penumbras", .category = "Shadows", .minValue = 0.0f, .maxValue = 0.2f, .step = 0.001f)
-	TUCANO_PROPERTY(enableContactShadows, Bool, .label = "Contact shadows", .tooltip = "Short screen-space rays that recover the tiny contact darkening shadow maps miss", .category = "Shadows")
-	TUCANO_PROPERTY(shadowMapSize, UInt32, .label = "Shadow map size", .tooltip = "Pixels per cascade face. Doubling this costs four times the memory", .category = "Shadows", .minValue = 512.0f, .maxValue = 8192.0f, .step = 512.0f)
-	TUCANO_PROPERTY(enableToroidalShadows, Bool, .label = "Toroidal CSM", .tooltip = "Scrolls cascades instead of redrawing them when the camera moves", .category = "Shadows", .advanced = true)
-	TUCANO_PROPERTY(enableOctahedralPointShadows, Bool, .label = "Octahedral point shadows", .tooltip = "Single-texture point-light shadows instead of a cube of six", .category = "Shadows", .advanced = true)
-	TUCANO_PROPERTY(enableVSM, Bool, .label = "Virtual shadow maps", .category = "Shadows", .advanced = true)
-	TUCANO_PROPERTY(enableESM, Bool, .label = "Exponential (ESM)", .tooltip = "Alternative filtering; leaks light through thin geometry", .category = "Shadows", .advanced = true)
-	TUCANO_PROPERTY(esmExponent, Float, .label = "ESM exponent", .category = "Shadows", .minValue = 1.0f, .maxValue = 200.0f, .step = 1.0f, .advanced = true)
+TUCANO_REFLECT_TYPE_BEGIN(PostFxParams)
 	TUCANO_PROPERTY(enableTonemap, Bool, .label = "Tonemap", .tooltip = "HDR to display. Off shows raw linear values and looks blown out — a debugging view", .category = "Post processing")
 	TUCANO_PROPERTY(enableBloom, Bool, .label = "Bloom", .category = "Post processing")
 	TUCANO_PROPERTY(bloomStrength, Float, .label = "Bloom strength", .category = "Post processing", .minValue = 0.0f, .maxValue = 2.0f, .step = 0.01f)
@@ -252,6 +243,19 @@ TUCANO_REFLECT_TYPE_BEGIN(RendererSettings)
 	TUCANO_PROPERTY(exposureAdapt, Float, .label = "Adaptation", .tooltip = "How fast the eye adjusts. Low is slow and cinematic, high snaps", .category = "Exposure", .minValue = 0.01f, .maxValue = 1.0f, .step = 0.01f)
 	TUCANO_PROPERTY(exposureMin, Float, .label = "Minimum", .tooltip = "Floor on auto exposure; stops a dark room from being lifted to daylight", .category = "Exposure", .minValue = 0.001f, .maxValue = 4.0f, .step = 0.01f)
 	TUCANO_PROPERTY(exposureMax, Float, .label = "Maximum", .tooltip = "Ceiling on auto exposure; stops a bright sky from being crushed", .category = "Exposure", .minValue = 0.01f, .maxValue = 32.0f, .step = 0.05f)
+TUCANO_REFLECT_TYPE_END(PostFxParams)
+
+TUCANO_REFLECT_TYPE_BEGIN(RendererSettings)
+	TUCANO_PROPERTY(enableShadows, Bool, .label = "Enabled", .tooltip = "Master switch for every shadow pass", .category = "Shadows")
+	TUCANO_PROPERTY(enablePCSS, Bool, .label = "Soft shadows (PCSS)", .tooltip = "Contact-hardening penumbra that widens with distance from the caster", .category = "Shadows")
+	TUCANO_PROPERTY(pcssLightSize, Float, .label = "Light size", .tooltip = "Apparent size of the sun for PCSS. Bigger means softer, blurrier penumbras", .category = "Shadows", .minValue = 0.0f, .maxValue = 0.2f, .step = 0.001f)
+	TUCANO_PROPERTY(enableContactShadows, Bool, .label = "Contact shadows", .tooltip = "Short screen-space rays that recover the tiny contact darkening shadow maps miss", .category = "Shadows")
+	TUCANO_PROPERTY(shadowMapSize, UInt32, .label = "Shadow map size", .tooltip = "Pixels per cascade face. Doubling this costs four times the memory", .category = "Shadows", .minValue = 512.0f, .maxValue = 8192.0f, .step = 512.0f)
+	TUCANO_PROPERTY(enableToroidalShadows, Bool, .label = "Toroidal CSM", .tooltip = "Scrolls cascades instead of redrawing them when the camera moves", .category = "Shadows", .advanced = true)
+	TUCANO_PROPERTY(enableOctahedralPointShadows, Bool, .label = "Octahedral point shadows", .tooltip = "Single-texture point-light shadows instead of a cube of six", .category = "Shadows", .advanced = true)
+	TUCANO_PROPERTY(enableVSM, Bool, .label = "Virtual shadow maps", .category = "Shadows", .advanced = true)
+	TUCANO_PROPERTY(enableESM, Bool, .label = "Exponential (ESM)", .tooltip = "Alternative filtering; leaks light through thin geometry", .category = "Shadows", .advanced = true)
+	TUCANO_PROPERTY(esmExponent, Float, .label = "ESM exponent", .category = "Shadows", .minValue = 1.0f, .maxValue = 200.0f, .step = 1.0f, .advanced = true)
 	TUCANO_PROPERTY(enableIBL, Bool, .label = "Image-based lighting", .tooltip = "Environment light from the sky or an HDRI", .category = "Global illumination")
 	TUCANO_PROPERTY(enableSSR, Bool, .label = "Screen-space reflections", .category = "Global illumination")
 	TUCANO_PROPERTY(enableVoxelGI, Bool, .label = "Voxel GI", .tooltip = "Bounced light from a voxelised scene", .category = "Global illumination")

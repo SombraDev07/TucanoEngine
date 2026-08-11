@@ -262,9 +262,9 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene&
     if (ImGui::CollapsingHeader("Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
       ImGui::Checkbox("Shadows", &settings.enableShadows);
       ImGui::Checkbox("IBL", &settings.enableIBL);
-      ImGui::Checkbox("Bloom", &settings.enableBloom);
-      ImGui::Checkbox("AO (GTAO)", &settings.enableAO);
-      ImGui::Checkbox("Auto Exposure", &settings.enableAutoExposure);
+      ImGui::Checkbox("Bloom", &settings.postFx.enableBloom);
+      ImGui::Checkbox("AO (GTAO)", &settings.postFx.enableAO);
+      ImGui::Checkbox("Auto Exposure", &settings.postFx.enableAutoExposure);
       ImGui::Checkbox("Contact shadows", &settings.enableContactShadows);
       ImGui::Checkbox("SSR", &settings.enableSSR);
       ImGui::Checkbox("RT shadows (Ray Query)", &settings.enableRTShadows);
@@ -280,12 +280,12 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene&
       if (settings.enableESM) {
         ImGui::SliderFloat("ESM exponent", &settings.esmExponent, 20.0f, 200.0f);
       }
-      if (settings.enableAO) {
-        ImGui::SliderFloat("AO Intensity", &settings.aoIntensity, 0.0f, 2.0f);
-        ImGui::SliderFloat("AO Radius", &settings.aoRadius, 0.2f, 2.5f);
+      if (settings.postFx.enableAO) {
+        ImGui::SliderFloat("AO Intensity", &settings.postFx.aoIntensity, 0.0f, 2.0f);
+        ImGui::SliderFloat("AO Radius", &settings.postFx.aoRadius, 0.2f, 2.5f);
       }
-      if (settings.enableBloom) {
-        ImGui::SliderFloat("Bloom Strength", &settings.bloomStrength, 0.0f, 1.0f);
+      if (settings.postFx.enableBloom) {
+        ImGui::SliderFloat("Bloom Strength", &settings.postFx.bloomStrength, 0.0f, 1.0f);
       }
       int gi = static_cast<int>(settings.giTier);
       if (ImGui::SliderInt("GI tier", &gi, 0, 3)) {

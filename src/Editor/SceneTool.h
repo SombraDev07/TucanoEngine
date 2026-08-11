@@ -148,6 +148,7 @@ private:
 	void drawGizmoToolbar(EditorContext& context);
 	void drawSky(EditorContext& context);
 	void drawRendering(EditorContext& context);
+	void drawPostFx(EditorContext& context);
 	void drawWater(EditorContext& context);
 	void drawFog(EditorContext& context);
 	void drawClouds(EditorContext& context);

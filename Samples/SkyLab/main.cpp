@@ -66,7 +66,7 @@ int main(int argc, char** argv) {
     auto renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
     skylab::configureCleanRenderer(*renderer);
     if (noBloom) {
-      renderer->settings().enableBloom = false;
+      renderer->settings().postFx.enableBloom = false;
     }
     if (noClouds) {
       renderer->clouds().enabled = false;

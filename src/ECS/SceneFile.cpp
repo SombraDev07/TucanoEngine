@@ -7,6 +7,7 @@
 #include "ECS/Components.h"
 #include "ECS/EntityManager.h"
 #include "ECS/World.h"
+#include "Renderer/PostFX/PostFxParams.h"
 #include "Renderer/Sky/SkyParams.h"
 #include "Renderer/Weather/CloudSystem.h"
 #include "Renderer/Weather/FogParams.h"
@@ -62,6 +63,7 @@ void appendEnvironment(std::string& out, const SceneEnvironment& environment) {
 	// Sky first because it is the one a person recognises: time of day is what makes a saved scene
 	// look like the scene they saved.
 	block("SkyParams", registry.find(TypeID{"SkyParams"}), environment.sky, first);
+	block("PostFxParams", registry.find(TypeID{"PostFxParams"}), environment.postFx, first);
 	block("WaterParams", registry.find(TypeID{"WaterParams"}), environment.water, first);
 	block("FogParams", registry.find(TypeID{"FogParams"}), environment.fog, first);
 	block("CloudParams", registry.find(TypeID{"CloudParams"}), environment.clouds, first);
@@ -97,6 +99,7 @@ void readEnvironment(const core::JsonValue& node, const SceneEnvironment& enviro
 	};
 
 	block("SkyParams", environment.sky);
+	block("PostFxParams", environment.postFx);
 	block("WaterParams", environment.water);
 	block("FogParams", environment.fog);
 	block("CloudParams", environment.clouds);

@@ -588,10 +588,10 @@ int main(int argc, char** argv) {
           renderer->settings().enableIBL = !renderer->settings().enableIBL;
         }
         if (input.keyPressed(GLFW_KEY_3)) {
-          renderer->settings().enableBloom = !renderer->settings().enableBloom;
+          renderer->settings().postFx.enableBloom = !renderer->settings().postFx.enableBloom;
         }
         if (input.keyPressed(GLFW_KEY_4)) {
-          renderer->settings().enableAO = !renderer->settings().enableAO;
+          renderer->settings().postFx.enableAO = !renderer->settings().postFx.enableAO;
         }
         if (input.keyPressed(GLFW_KEY_5)) {
           auto& t = renderer->settings().giTier;

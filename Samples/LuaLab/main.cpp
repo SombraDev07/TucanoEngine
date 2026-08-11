@@ -50,10 +50,10 @@ int main() {
     renderer->settings().enableShadows = true;
     renderer->settings().enableSSR = false;
     renderer->settings().enableIBL = true;
-    renderer->settings().enableBloom = true;
-    renderer->settings().enableAO = true;
-    renderer->settings().enableTonemap = true;
-    renderer->settings().enableAutoExposure = true;
+    renderer->settings().postFx.enableBloom = true;
+    renderer->settings().postFx.enableAO = true;
+    renderer->settings().postFx.enableTonemap = true;
+    renderer->settings().postFx.enableAutoExposure = true;
     renderer->settings().enableContactShadows = true;
     renderer->settings().enableVisibilityBuffer = false;
     if (device->supportsRaytracing()) {

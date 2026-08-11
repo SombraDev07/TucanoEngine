@@ -1006,7 +1006,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         b.read(hDepthColor);
         b.read(hNormal);
         b.write(hAo, RGUsage::RenderTarget);
-        b.enabled = m_settings.enableAO;
+        b.enabled = m_settings.postFx.enableAO;
       },
       [&](rhi::CommandList& c, RenderGraph&) {
         if (rgAO) {
@@ -1167,7 +1167,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         b.read(hHdr);
         b.read(hCompose);
         b.write(hBloom0, RGUsage::RenderTarget);
-        b.enabled = m_settings.enableBloom;
+        b.enabled = m_settings.postFx.enableBloom;
       },
       [&](rhi::CommandList& c, RenderGraph&) {
         if (rgBloom) {
@@ -1181,7 +1181,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         b.read(hCompose);
         b.write(hHist, RGUsage::UnorderedAccess);
         b.write(hExposure, RGUsage::UnorderedAccess);
-        b.enabled = m_settings.enableAutoExposure;
+        b.enabled = m_settings.postFx.enableAutoExposure;
       },
       [&](rhi::CommandList& c, RenderGraph&) {
         if (rgExposure) {
@@ -1332,7 +1332,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   }
   frame.cascadeSplits = glm::vec4(splits[0], splits[1], splits[2], splits[3]);
   frame.flags = glm::vec4(m_settings.enableShadows ? 1.f : 0.f, m_settings.enableIBL ? 1.f : 0.f,
-                          m_settings.enableAO ? 1.f : 0.f, m_settings.enableESM ? 1.f : 0.f);
+                          m_settings.postFx.enableAO ? 1.f : 0.f, m_settings.enableESM ? 1.f : 0.f);
 
   if (m_settings.enableVoxelGI) {
     m_voxelGI.update(m_device, scene, 0.25f);
@@ -2302,10 +2302,10 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   // ---- AO (GTAO + bilateral) ----
   rgAO = [&](rhi::CommandList& c) {
     cmd = &c;
-  if (m_settings.enableAO) {
+  if (m_settings.postFx.enableAO) {
     AOPassContext aoCtx{
         m_device, *cmd, *m_rootFS, *m_aoPSO, *m_aoBlurPSO, *m_postCB, m_postCBBump, *m_ao, *m_aoTemp, *m_depthColor,
-        *m_normal, *m_samplerLinear, m_width, m_height, m_settings.aoIntensity, m_settings.aoRadius, 0.25f, 1.4f};
+        *m_normal, *m_samplerLinear, m_width, m_height, m_settings.postFx.aoIntensity, m_settings.postFx.aoRadius, 0.25f, 1.4f};
     executeAOPass(aoCtx);
   }
   }; // rgAO
@@ -2866,15 +2866,15 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                              *m_samplerLinear,
                              m_width,
                              m_height,
-                             m_settings.exposureMin * m_skyLightScale,
+                             m_settings.postFx.exposureMin * m_skyLightScale,
                              // Cap how far the eye is allowed to adapt back. Auto-exposure pulls
                              // any scene toward mid-grey, so without this a midnight frame comes
                              // out as bright as noon and the whole night sky is pointless. Real
                              // adaptation works the same way: it recovers a lot of a dark scene,
                              // but never all of it.
-                             m_settings.exposureMax * glm::mix(0.05f, 1.0f, m_skyLightScale),
-                             m_settings.exposureAdapt,
-                             m_settings.exposureTarget};
+                             m_settings.postFx.exposureMax * glm::mix(0.05f, 1.0f, m_skyLightScale),
+                             m_settings.postFx.exposureAdapt,
+                             m_settings.postFx.exposureTarget};
     executeExposurePass(ectx);
   };
 
@@ -2923,11 +2923,11 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
                             *m_postCB,
                             m_postCBBump,
                             *postHdr,
-                            m_settings.enableBloom ? *m_bloomMips[0] : *postHdr,
-                            m_settings.enableAutoExposure ? m_exposureTex.get() : nullptr,
+                            m_settings.postFx.enableBloom ? *m_bloomMips[0] : *postHdr,
+                            m_settings.postFx.enableAutoExposure ? m_exposureTex.get() : nullptr,
                             swapChainRT,
                             *m_samplerLinear,
-                            m_settings.enableBloom ? m_settings.bloomStrength : 0.0f,
+                            m_settings.postFx.enableBloom ? m_settings.postFx.bloomStrength : 0.0f,
                             1.0f,
                             // Only ramp in the night-vision response once the sun is actually down;
                             // during the day it would wash out shadowed corners.
