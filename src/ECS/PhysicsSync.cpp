@@ -45,16 +45,19 @@ void syncTransformsToScene(World& world, tucano::Scene& scene, float alpha) {
     auto* transforms = acc.column<TransformComponent>();
     auto* renders = acc.column<RenderObjectComponent>();
     for (uint32_t i = 0; i < acc.count(); ++i) {
-      const uint32_t idx = renders[i].sceneIndex;
-      if (idx >= scene.objects.size()) {
+      // Null means the object was removed or its slot reused (C-09). Before handles this was an
+      // index test, which only caught the object being *past the end* — an index that had come to
+      // name a different object passed it, and the entity moved somebody else's geometry.
+      RenderObject* object = scene.resolve(renders[i].handle);
+      if (object == nullptr) {
         continue;
       }
       const auto& t = transforms[i];
       // Interpolate between the previous and current fixed-step states for smooth motion.
       const glm::vec3 pos = glm::mix(t.prevPosition, t.position, alpha);
       const glm::quat rot = glm::slerp(t.prevRotation, t.rotation, alpha);
-      scene.objects[idx].worldMatrix = glm::translate(glm::mat4(1.0f), pos) * glm::mat4_cast(rot) *
-                                       glm::scale(glm::mat4(1.0f), t.scale);
+      object->worldMatrix = glm::translate(glm::mat4(1.0f), pos) * glm::mat4_cast(rot) *
+                            glm::scale(glm::mat4(1.0f), t.scale);
     }
   });
 }

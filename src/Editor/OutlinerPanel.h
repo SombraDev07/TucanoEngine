@@ -162,9 +162,14 @@ private:
 		ImGui::BeginChild("OutlinerTree", ImVec2(0, 0), false);
 
 		auto& objects = ctx.scene->objects;
+		int shown = 0;
 		for (size_t i = 0; i < objects.size(); ++i) {
+			// Freed slots are still in the vector — that is what makes indices stable (C-09) — but
+			// they are not rows: an empty slot would list as an unnamed object nobody can act on.
+			if (!ctx.scene->objectAlive(static_cast<uint32_t>(i))) continue;
 			const auto& obj = objects[i];
 			if (m_filter.IsActive() && !m_filter.PassFilter(obj.name.c_str())) continue;
+			++shown;
 
 			const bool selected = (static_cast<int>(i) == ctx.selectedObject);
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_SpanAvailWidth;
@@ -181,8 +186,11 @@ private:
 				if (ImGui::Selectable("Rename")) {}
 				ImGui::Separator();
 				if (ImGui::MenuItem("Delete", "Del")) {
-					objects.erase(objects.begin() + i);
-					if (ctx.selectedObject >= static_cast<int>(objects.size())) ctx.selectedObject = -1;
+					// Frees the slot instead of erasing (C-09). Erasing here shifted every index above
+					// this row, which was the loudest of the four ways the array got compacted under
+					// whoever was holding an index.
+					ctx.scene->removeObjectAt(static_cast<uint32_t>(i));
+					if (ctx.selectedObject == static_cast<int>(i)) ctx.selectedObject = -1;
 					ImGui::CloseCurrentPopup();
 					if (!obj.visible) ImGui::PopStyleColor();
 					ImGui::TreePop(); ImGui::PopID(); ImGui::EndChild(); return;
@@ -193,7 +201,7 @@ private:
 			if (!obj.visible) ImGui::PopStyleColor();
 			ImGui::PopID();
 		}
-		if (objects.empty()) ImGui::TextDisabled("Scene is empty.");
+		if (shown == 0) ImGui::TextDisabled("Scene is empty.");
 		ImGui::EndChild();
 	}
 

@@ -15,6 +15,7 @@
 // entities twice to save nothing.
 
 #include "Core/AssetGuid.h"
+#include "Renderer/RenderObjectHandle.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -42,12 +43,16 @@ class World;
 // replaced. Without this, unassigning would silently leave the overridden material in place — the
 // UI lying again, in the opposite direction.
 struct RenderSyncState {
-	// Scene index → every material slot the mesh was imported with, captured the first time an
+	// Object **handle** → every material slot the mesh was imported with, captured the first time an
 	// override replaced them. A whole vector because the renderer indexes materials per submesh
 	// (`materials[sub.materialIndex]`) while `MeshComponent` carries a single assignment: one
 	// override therefore has to stand in for all of the object's slots, and restoring has to put
 	// all of them back. When per-slot assignment exists, this becomes per-slot too.
-	std::unordered_map<uint32_t, std::vector<std::shared_ptr<Material>>> originals;
+	//
+	// Keyed by handle rather than by index since C-09: an index key meant that removing one object
+	// re-pointed every entry above it at somebody else's materials, and "clear the override" would
+	// then install the wrong originals.
+	std::unordered_map<RenderObjectHandle, std::vector<std::shared_ptr<Material>>> originals;
 
 	// GUIDs that failed to load, so a mesh that cannot be read is not retried sixty times a second.
 	// Deliberately *not* applied to materials: a material is cheap to re-read and appearing the
@@ -57,19 +62,16 @@ struct RenderSyncState {
 	// when a previously missing asset might have arrived.
 	std::unordered_set<uint64_t> failedMeshes;
 
-	// Scene indices `spawnMeshObjects` created, so an object whose entity is gone can be reused
-	// instead of leaked.
+	// The objects `spawnMeshObjects` created, so one whose entity is gone can be released instead of
+	// leaked — and so this sync only ever releases objects it made, never a streamed or terrain one.
 	//
 	// The counterweight this feature would otherwise lack. **Play → Stop destroys every entity and
 	// rebuilds them from JSON** (PlayMode.cpp:64 → SceneFile.cpp:238-240), and
 	// `RenderObjectComponent` is runtime state that no file carries — so the rebuilt entities come
-	// back with no link to their objects. Without reuse, every Play/Stop cycle would append a
+	// back with no link to their objects. Without release, every Play/Stop cycle would append a
 	// duplicate set of the whole scene, doubling draws and shadow work until `Renderer.cpp` runs out
 	// of object slots. Deleting an entity leaves the same orphan.
-	//
-	// Reuse rather than erase, because erasing compacts the array and every other entity's
-	// `sceneIndex` would shift under it.
-	std::vector<uint32_t> spawned;
+	std::vector<RenderObjectHandle> spawned;
 
 	void clear() {
 		originals.clear();
@@ -108,11 +110,11 @@ size_t spawnMeshObjects(World& world, tucano::Scene& scene, AssetResolver& resol
 
 // Rebuilds `scene.lights` from the entities that have a `LightComponent` (D-02).
 //
-// **Rebuild, not patch.** Meshes are synced through an index (`RenderObjectComponent::sceneIndex`)
+// **Rebuild, not patch.** Meshes are synced through a handle (`RenderObjectComponent::handle`)
 // because the render scene owns the mesh resources and an entity only points at one. Lights own
 // nothing: a `Light` is nine numbers. So the entities can simply *be* the list, which removes the
-// whole class of bugs an index invites — deleting one light would otherwise have to compact the
-// array and fix up every other entity's index, and getting that wrong is silent.
+// whole class of bugs a reference invites — and is why lights never needed the slot map that C-09
+// gave the objects.
 //
 // **This makes the ECS the owner of lights.** Whoever calls this is declaring that anything else
 // appending to `scene.lights` will be discarded on the next frame; a caller with no light entities

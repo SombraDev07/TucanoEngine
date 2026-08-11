@@ -473,8 +473,10 @@ void SceneCellProvider::release(const CellId& id, WorldLayer layer, CellContent&
       const uint64_t id = idFromName(ro.name);
       return id != 0 && std::binary_search(ids.begin(), ids.end(), id);
     };
-    m_scene.objects.erase(std::remove_if(m_scene.objects.begin(), m_scene.objects.end(), owned),
-                          m_scene.objects.end());
+    // Frees the slots instead of compacting the array (C-09). Compacting used to shift every index
+    // above the removed ones, and anything holding one — an entity's `RenderObjectComponent` — began
+    // driving a different object without a word.
+    m_scene.removeObjectsIf(owned);
   }
 
   // A merged mesh is owned by this cell alone. Retire it rather than letting the last reference die
@@ -657,13 +659,10 @@ void SceneCellProvider::applyDelta(const CellId&, WorldLayer, CellContent& conte
 
   if (!destroyed.empty()) {
     std::sort(destroyed.begin(), destroyed.end());
-    m_scene.objects.erase(
-        std::remove_if(m_scene.objects.begin(), m_scene.objects.end(),
-                       [&destroyed](const RenderObject& ro) {
-                         const uint64_t rid = idFromName(ro.name);
-                         return rid != 0 && std::binary_search(destroyed.begin(), destroyed.end(), rid);
-                       }),
-        m_scene.objects.end());
+    m_scene.removeObjectsIf([&destroyed](const RenderObject& ro) {
+      const uint64_t rid = idFromName(ro.name);
+      return rid != 0 && std::binary_search(destroyed.begin(), destroyed.end(), rid);
+    });
   }
 }
 

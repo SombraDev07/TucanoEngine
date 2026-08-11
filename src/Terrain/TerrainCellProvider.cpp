@@ -317,11 +317,10 @@ void TerrainCellProvider::release(const world::CellId& id, world::WorldLayer /*l
   }
 
   const uint64_t target = tile.objectId;
-  m_scene.objects.erase(std::remove_if(m_scene.objects.begin(), m_scene.objects.end(),
-                                       [target](const RenderObject& ro) {
-                                         return nameStamp(ro.name) == target;
-                                       }),
-                        m_scene.objects.end());
+  // Frees the slot rather than compacting the array (C-09): compacting shifted every index above
+  // this tile, and an entity holding one would silently start driving another object.
+  m_scene.removeObjectsIf(
+      [target](const RenderObject& ro) { return nameStamp(ro.name) == target; });
 
   m_residentVerts -= std::min<uint64_t>(m_residentVerts, tile.mesh ? tile.mesh->vertexCount() : 0);
 

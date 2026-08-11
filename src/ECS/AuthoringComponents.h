@@ -3,13 +3,13 @@
 #include "Renderer/LightType.h"
 
 // Components a person authors in the editor, as opposed to the ones the simulation keeps for
-// itself (`PhysicsBodyComponent` holds a Jolt body id; `RenderObjectComponent` holds an index into
+// itself (`PhysicsBodyComponent` holds a Jolt body id; `RenderObjectComponent` holds a handle into
 // the render scene — neither means anything in a file).
 //
 // C-02a of the roadmap. The decision behind it (section 8): the entity is the unit of authoring
 // *and* of runtime, and `Scene` is render data derived from it. That is the shape Unity, Unreal,
 // O3DE and Esoterica all use, and the engine had already committed to it —
-// `RenderObjectComponent::sceneIndex` plus `syncTransformsToScene` were already the bridge. Only
+// `RenderObjectComponent::handle` plus `syncTransformsToScene` were already the bridge. Only
 // the editor had not followed.
 //
 // Every component here is reflected, which buys three things at once: it appears in the Inspector
@@ -109,7 +109,7 @@ class World;
 // is quiet: a component that saves but cannot be seen, or vice versa.
 //
 // Runtime-only components are absent on purpose. `PhysicsBodyComponent` holds a Jolt body id and
-// `RenderObjectComponent` an index into the render scene; neither means anything in a file, and
+// `RenderObjectComponent` a handle into the render scene; neither means anything in a file, and
 // neither is something a person authors.
 struct AuthoringComponentInfo {
 	// Key in the scene file. Stable — renaming it breaks every saved scene.

@@ -3,6 +3,7 @@
 #include "Core/AssetGuid.h"
 #include "Core/TypeSystem/ReflectionMacros.h"
 #include "ECS/ComponentTypes.h"
+#include "Renderer/RenderObjectHandle.h"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
@@ -39,7 +40,16 @@ struct PhysicsBodyComponent {
 };
 
 struct RenderObjectComponent {
-  uint32_t sceneIndex = 0;
+  // A handle, not an index (C-09). An index was a promise the render scene could not keep: it is
+  // compacted by streaming cell unloads, terrain tile releases and the Outliner's delete, and after
+  // any of those every index above the removed one names a different object. The syncs only
+  // `continue` on an out-of-range index, so the entity would silently start driving somebody else's
+  // geometry. A handle that no longer resolves reads as "gone", and `spawnMeshObjects` gives the
+  // entity a new object.
+  //
+  // Invalid by default rather than 0: a zeroed component used to mean "object number zero", so any
+  // path that produced one aimed the entity at the first object in the scene.
+  RenderObjectHandle handle = kInvalidRenderObject;
 
   // Which material override is currently applied to that scene object. Runtime state, never
   // serialised: it exists so the sync can tell "nothing changed" from "not applied yet" and skip

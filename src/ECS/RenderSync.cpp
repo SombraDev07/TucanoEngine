@@ -31,11 +31,12 @@ void syncMeshComponentsToScene(World& world, tucano::Scene& scene, AssetResolver
 		auto* renders = acc.column<RenderObjectComponent>();
 		auto* meshes = acc.column<MeshComponent>();
 		for (uint32_t i = 0; i < acc.count(); ++i) {
-			const uint32_t idx = renders[i].sceneIndex;
-			if (idx >= scene.objects.size()) {
+			const RenderObjectHandle handle = renders[i].handle;
+			RenderObject* resolved = scene.resolve(handle);
+			if (resolved == nullptr) {
 				continue;
 			}
-			RenderObject& object = scene.objects[idx];
+			RenderObject& object = *resolved;
 
 			// Unconditional, like worldMatrix above it: the entity is the source of truth and the
 			// scene is derived from it, so an edit made straight on the RenderObject does not
@@ -59,8 +60,8 @@ void syncMeshComponentsToScene(World& world, tucano::Scene& scene, AssetResolver
 				}
 				// Remember what was there the first time an override lands. This is the only moment
 				// the originals are still in place and still known to be the originals.
-				if (state.originals.find(idx) == state.originals.end()) {
-					state.originals.emplace(idx, object.materials);
+				if (state.originals.find(handle) == state.originals.end()) {
+					state.originals.emplace(handle, object.materials);
 				}
 				// Every slot, not just the first: the renderer picks materials[sub.materialIndex],
 				// so overriding only slot 0 would leave most of a multi-material mesh untouched
@@ -77,7 +78,7 @@ void syncMeshComponentsToScene(World& world, tucano::Scene& scene, AssetResolver
 			}
 
 			// Cleared: put the imported materials back, all of them.
-			if (const auto found = state.originals.find(idx); found != state.originals.end()) {
+			if (const auto found = state.originals.find(handle); found != state.originals.end()) {
 				object.materials = std::move(found->second);
 				state.originals.erase(found);
 			}
@@ -132,42 +133,50 @@ size_t spawnMeshObjects(World& world, tucano::Scene& scene, AssetResolver& resol
 		}
 	});
 
-	// Entities whose object is *gone*. `scene.objects` is compacted by streaming cell unloads
-	// (SceneCellProvider.cpp:476), terrain tile releases (TerrainCellProvider.cpp:320) and the
-	// Outliner's delete (OutlinerPanel.h:184), and cleared outright on a scene reload. Without this
-	// pass, an entity that lost its object would keep its component, so the creation path would
-	// never fire again and the thing would be invisible for the rest of the session with no way
-	// back. The syncs merely `continue` on an out-of-range index, so nothing else would report it.
+	// Entities whose object is *gone*: removed by a streaming cell unload, a terrain tile release,
+	// the Outliner's delete, or a scene reload. Without this pass an entity that lost its object
+	// would keep its component, so the creation path would never fire again and the thing would be
+	// invisible for the rest of the session with no way back — silently, because the syncs merely
+	// `continue` on a handle that does not resolve.
 	const QueryDesc orphaned{{}, {"mesh", "mesh_ref"}, {}, {}};
 	world.queries().performQueryChunks(world.queries().registerQuery(orphaned),
 	                                   [&](ComponentAccessor& acc) {
 		const auto* renders = acc.column<RenderObjectComponent>();
 		const auto* meshes = acc.column<MeshComponent>();
 		for (uint32_t i = 0; i < acc.count(); ++i) {
-			if (renders[i].sceneIndex < scene.objects.size()) continue;
+			if (scene.resolve(renders[i].handle) != nullptr) continue;
 			if (!wanted(meshes[i].mesh)) continue;
 			pending.emplace_back(acc.entities()[i], meshes[i].mesh);
 		}
 	});
 
 	// Which of the objects this sync created still have an entity pointing at them. Everything else
-	// it made is abandoned and can be handed to a new entity.
-	std::unordered_set<uint32_t> referenced;
+	// it made is abandoned, and its slot goes back to the scene's free list to be handed out again.
+	//
+	// The counterweight that keeps Play → Stop from doubling the scene: that path destroys every
+	// entity and rebuilds it from JSON, and `RenderObjectComponent` is runtime state no file carries,
+	// so the rebuilt entities come back with no link to their objects.
+	std::unordered_set<RenderObjectHandle> referenced;
 	const QueryDesc linked{{}, {"mesh"}, {}, {}};
 	world.queries().performQueryChunks(world.queries().registerQuery(linked),
 	                                   [&](ComponentAccessor& acc) {
 		const auto* renders = acc.column<RenderObjectComponent>();
-		for (uint32_t i = 0; i < acc.count(); ++i) referenced.insert(renders[i].sceneIndex);
+		for (uint32_t i = 0; i < acc.count(); ++i) referenced.insert(renders[i].handle);
 	});
 
-	std::vector<uint32_t> reusable;
-	for (const uint32_t index : state.spawned) {
-		if (index >= scene.objects.size() || referenced.count(index) != 0) continue;
-		reusable.push_back(index);
-		// Hidden immediately: an abandoned object with nobody to move it would otherwise keep
-		// drawing at the last place its entity happened to be.
-		scene.objects[index].visible = false;
+	// Freed rather than hidden-and-remembered, which is what this had to do while removal meant
+	// erasing: the scene now owns the recycling, so releasing the slot is the whole operation.
+	std::vector<RenderObjectHandle> stillOurs;
+	stillOurs.reserve(state.spawned.size());
+	for (const RenderObjectHandle handle : state.spawned) {
+		if (scene.resolve(handle) == nullptr) continue; // already gone; forget it
+		if (referenced.count(handle) != 0) {
+			stillOurs.push_back(handle);
+			continue;
+		}
+		scene.removeObject(handle);
 	}
+	state.spawned = std::move(stillOurs);
 
 	size_t created = 0;
 	for (const auto& [entity, guid] : pending) {
@@ -197,24 +206,14 @@ size_t spawnMeshObjects(World& world, tucano::Scene& scene, AssetResolver& resol
 			                     glm::scale(glm::mat4(1.0f), t->scale);
 		}
 
-		uint32_t index;
-		if (!reusable.empty()) {
-			index = reusable.back();
-			reusable.pop_back();
-			// Whole-object assignment, not a field-by-field patch: the previous occupant's materials,
-			// name and skinning palette all have to go, and forgetting one is a bug that only shows
-			// on the second Play.
-			scene.objects[index] = std::move(object);
-		} else {
-			index = static_cast<uint32_t>(scene.objects.size());
-			scene.objects.push_back(std::move(object));
-			state.spawned.push_back(index);
-		}
+		// The scene decides whether this reuses a freed slot or grows the vector.
+		const RenderObjectHandle handle = scene.addObject(std::move(object));
+		state.spawned.push_back(handle);
 
 		// `add` on an entity that already has the component returns the existing one, which is
 		// exactly right for the re-created case: the same component is repointed at the new object.
 		auto* render = world.add<RenderObjectComponent>(entity);
-		render->sceneIndex = index;
+		render->handle = handle;
 		render->appliedMesh = guid;
 		++created;
 	}

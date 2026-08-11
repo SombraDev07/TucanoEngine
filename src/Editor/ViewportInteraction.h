@@ -56,9 +56,9 @@ bool rayHitsAabb(const glm::vec3& origin, const glm::vec3& dir, const glm::vec3&
 // would be selectable from where they visibly are not.
 int pickSceneObject(const Scene& scene, const glm::vec3& origin, const glm::vec3& dir);
 
-// The entity that owns a render object — the inverse of `RenderObjectComponent::sceneIndex`.
+// The entity that owns a render object — the inverse of `RenderObjectComponent::handle`.
 // `kInvalidEntity` when nothing claims it, which is what a streamed cell or a terrain tile is.
-ecs::Entity entityForSceneObject(ecs::World& world, int sceneIndex);
+ecs::Entity entityForSceneObject(ecs::World& world, RenderObjectHandle handle);
 
 // ── Transform maths ──────────────────────────────────────────────────────────
 

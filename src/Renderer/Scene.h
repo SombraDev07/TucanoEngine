@@ -5,6 +5,7 @@
 #include "Renderer/LightType.h"
 #include "Renderer/Material.h"
 #include "Renderer/Mesh.h"
+#include "Renderer/RenderObjectHandle.h"
 
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
@@ -96,6 +97,13 @@ struct Light {
 
 class Scene {
 public:
+  // Still public, and still a dense vector the renderer walks start to finish. What changed is that
+  // **nothing removes from the middle of it any more**: a removed object becomes a dead slot that
+  // `addObject` reuses. Every draw loop already skips objects with no mesh, so a dead slot costs one
+  // branch it was paying anyway.
+  //
+  // `push_back` straight onto this still works — the slot table catches up lazily. `erase` does not:
+  // see the note on `removeObjectAt`.
   std::vector<RenderObject> objects;
   std::vector<Light> lights;
   /// GPU-driven instance clouds to draw this frame (WM-6). Empty for scenes that use none.
@@ -109,6 +117,79 @@ public:
   void addPoint(const glm::vec3& pos, const glm::vec3& color, float intensity, float range);
   void addSpot(const glm::vec3& pos, const glm::vec3& dir, const glm::vec3& color, float intensity, float range,
                float innerDeg, float outerDeg);
+
+  // ── Object lifetime (C-09) ──────────────────────────────────────────────────
+
+  /// Takes a free slot when there is one, otherwise appends. The handle stays valid until the object
+  /// is removed, whatever happens to the objects around it.
+  RenderObjectHandle addObject(RenderObject object);
+
+  /// Empties the slot and bumps its generation, so every handle to it stops resolving. The slot is
+  /// **not** erased: erasing shifts every index above it, which is the bug this replaces. The
+  /// emptied object has no mesh and is invisible, so every draw loop already skips it.
+  /// False when the index is out of range or the slot is already free.
+  bool removeObjectAt(uint32_t index);
+  bool removeObject(RenderObjectHandle handle);
+
+  /// Removes every live object the predicate accepts, and returns how many. This is what the
+  /// streaming providers want: they match on the id stamped into the object's name.
+  template <typename Predicate>
+  size_t removeObjectsIf(Predicate predicate) {
+    size_t removed = 0;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(objects.size()); ++i) {
+      if (!objectAlive(i) || !predicate(objects[i])) continue;
+      if (removeObjectAt(i)) ++removed;
+    }
+    return removed;
+  }
+
+  /// Drops every object and invalidates every handle. What a scene reload wants — and what a bare
+  /// `objects.clear()` does *not* do, because it leaves the generations behind.
+  void clearObjects();
+
+  /// The object, or null when the handle refers to a slot that has since been freed or reused. This
+  /// is the whole point: a stale handle reads as "gone", not as somebody else's object.
+  RenderObject* resolve(RenderObjectHandle handle);
+  const RenderObject* resolve(RenderObjectHandle handle) const;
+
+  /// A handle for a live slot, `kInvalidRenderObject` otherwise. For the paths that still work in
+  /// raw indices — picking returns one, and the pre-ECS Outliner selects with one.
+  RenderObjectHandle handleAt(uint32_t index) const;
+  bool objectAlive(uint32_t index) const;
+  /// How many slots are occupied. Differs from `objects.size()`, which counts dead slots too.
+  size_t liveObjectCount() const;
+
+private:
+  struct ObjectSlot {
+    uint32_t generation = 1;
+    bool alive = true;
+  };
+
+  /// Brings the slot table back in line with `objects` for code that appends (or clears) the vector
+  /// directly, which most of the engine still does.
+  ///
+  /// Growing is trivial — the new slots are live at generation 0. **Shrinking is the interesting
+  /// case**: it means somebody erased or cleared behind our back, so every index may now mean
+  /// something else. Rather than guess which, every surviving slot's generation is bumped, which
+  /// invalidates every outstanding handle at once. Callers see their objects as gone and recreate
+  /// them — a visible, recoverable failure instead of a silent mix-up.
+  void syncSlots() const;
+
+  mutable std::vector<ObjectSlot> m_objectSlots;
+  mutable std::vector<uint32_t> m_freeObjects;
+
+  /// The generation a brand-new slot starts at.
+  ///
+  /// Starts at 1, not 0, so a **zero-initialised handle never resolves**: `EntityManager` hands out
+  /// zeroed memory for a component created with `createWith`, and with generation 0 in use that
+  /// zeroed `RenderObjectComponent` would be a valid handle to object number zero — the same silent
+  /// mis-aim this whole change is about, arriving through the back door.
+  ///
+  /// It also survives `clearObjects`, which is what makes a reload safe. Bumping the generations and
+  /// then dropping the table (the first thing tried here, and caught by the gate) does nothing: the
+  /// table is what held them, so slot 0 came back at the same generation and a handle from before
+  /// the reload resolved against whatever was loaded into that index.
+  mutable uint32_t m_generationFloor = 1;
 };
 
 } // namespace tucano

@@ -40,8 +40,12 @@ void applyTransform(void* dst, const core::JsonValue& props) {
 
 void applyRenderObject(void* dst, const core::JsonValue& props) {
   auto* r = static_cast<RenderObjectComponent*>(dst);
-  if (const auto* i = props.find("sceneIndex")) {
-    r->sceneIndex = uint32_t(i->asInt(int(r->sceneIndex)));
+  // Renamed from "sceneIndex" with C-09: the value is a packed handle now, not a position in the
+  // array, and a template carrying the old key would have been read as a handle with generation 0 —
+  // which is a valid handle to whatever occupies that slot. Better that an outdated template leaves
+  // the component invalid, so `spawnMeshObjects` gives the entity its own object.
+  if (const auto* h = props.find("sceneHandle")) {
+    r->handle = RenderObjectHandle(h->asInt(int(r->handle)));
   }
 }
 

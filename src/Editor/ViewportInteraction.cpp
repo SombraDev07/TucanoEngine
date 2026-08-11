@@ -76,7 +76,8 @@ int pickSceneObject(const Scene& scene, const glm::vec3& origin, const glm::vec3
 	for (size_t i = 0; i < scene.objects.size(); ++i) {
 		const RenderObject& object = scene.objects[i];
 		// Hidden objects are skipped by every render pass, so clicking where one would have been
-		// must not select it — the user is looking at what is behind it.
+		// must not select it — the user is looking at what is behind it. A freed slot (C-09) has no
+		// mesh and fails the same test, so it needs no separate check.
 		if (!object.visible || object.mesh == nullptr) continue;
 
 		const glm::mat4 inverse = glm::inverse(object.worldMatrix);
@@ -97,9 +98,8 @@ int pickSceneObject(const Scene& scene, const glm::vec3& origin, const glm::vec3
 	return best;
 }
 
-ecs::Entity entityForSceneObject(ecs::World& world, int sceneIndex) {
-	if (sceneIndex < 0) return ecs::kInvalidEntity;
-	const uint32_t wanted = static_cast<uint32_t>(sceneIndex);
+ecs::Entity entityForSceneObject(ecs::World& world, RenderObjectHandle handle) {
+	if (handle == kInvalidRenderObject) return ecs::kInvalidEntity;
 
 	// Walked directly rather than through a query: this runs once per click, and registering a query
 	// for it would add an archetype mask to the manager for the rest of the session.
@@ -108,7 +108,7 @@ ecs::Entity entityForSceneObject(ecs::World& world, int sceneIndex) {
 			for (uint32_t i = 0; i < chunk.count; ++i) {
 				const ecs::Entity entity = chunk.entities[i];
 				const auto* render = world.get<ecs::RenderObjectComponent>(entity);
-				if (render != nullptr && render->sceneIndex == wanted) return entity;
+				if (render != nullptr && render->handle == handle) return entity;
 			}
 		}
 	}
@@ -249,7 +249,10 @@ bool pickAtViewportPosition(EditorContext& context, float localX, float localY, 
 
 	context.selectedObject = picked;
 	context.selectedEntity =
-	    context.world != nullptr ? entityForSceneObject(*context.world, picked) : ecs::kInvalidEntity;
+	    context.world != nullptr
+	        ? entityForSceneObject(*context.world,
+	                               context.scene->handleAt(static_cast<uint32_t>(picked)))
+	        : ecs::kInvalidEntity;
 	return true;
 }
 

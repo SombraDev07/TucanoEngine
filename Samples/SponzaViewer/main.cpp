@@ -286,10 +286,12 @@ int main(int argc, char** argv) {
     ecs::RenderSyncState renderSync;
 
     auto reloadScene = [&]() {
-      scene.objects.clear();
-      // Both halves matter. `originals` maps a scene index to the materials that were there before
-      // an override; after a reload those indices belong to other objects. `failedMeshes` is a
-      // cache of "this did not load", and a reload is exactly when that might have changed.
+      // `clearObjects`, not `objects.clear()`: it bumps every slot's generation, so a handle held
+      // across a reload reads as "gone" instead of resolving against whatever lands in that index.
+      scene.clearObjects();
+      // Both halves matter. `originals` maps an object to the materials that were there before an
+      // override, and after a reload none of those objects exist. `failedMeshes` is a cache of
+      // "this did not load", and a reload is exactly when that might have changed.
       renderSync.clear();
       if (!loadGLTFScene(*device, scenePath, scene)) {
         std::cerr << "Failed to load scene: " << scenePath << "\n";
@@ -304,8 +306,8 @@ int main(int argc, char** argv) {
 
     // C-02c: the editor authors entities, and `Scene` is the render view fed from them. The glTF
     // loader still produces RenderObjects, so one entity is created per object and linked to it by
-    // RenderObjectComponent::sceneIndex — the bridge the engine already had. Moving an entity in
-    // the Inspector therefore moves what is drawn.
+    // RenderObjectComponent::handle — the bridge the engine already had. Moving an entity in the
+    // Inspector therefore moves what is drawn.
     ecs::World world;
     const auto populateWorldFromScene = [&]() {
       for (size_t i = 0; i < scene.objects.size(); ++i) {
@@ -329,7 +331,8 @@ int main(int argc, char** argv) {
           }
         }
         meshRef->visible = object.visible;
-        world.add<ecs::RenderObjectComponent>(entity)->sceneIndex = static_cast<uint32_t>(i);
+        world.add<ecs::RenderObjectComponent>(entity)->handle =
+            scene.handleAt(static_cast<uint32_t>(i));
       }
       for (const Light& light : scene.lights) {
         const ecs::Entity entity = world.create();

@@ -124,7 +124,7 @@ int main() {
     World w;
     const char* json = R"([
       {"name":"base","components":{"transform":{"scale":2.0}}},
-      {"name":"cube","parent":"base","components":{"transform":{"position":[1,5,3]},"mesh":{"sceneIndex":7}}}
+      {"name":"cube","parent":"base","components":{"transform":{"position":[1,5,3]},"mesh":{"sceneHandle":7}}}
     ])";
     std::string err;
     bool ok = w.templates().loadFromString(json, &err);
@@ -135,7 +135,7 @@ int main() {
     auto* t = w.get<TransformComponent>(e);
     check(t && t->position.y == 5.0f, "child overrides position");
     check(t && t->scale.x == 2.0f, "inherited scale from parent");
-    check(w.get<RenderObjectComponent>(e)->sceneIndex == 7u, "mesh sceneIndex applied");
+    check(w.get<RenderObjectComponent>(e)->handle == 7u, "mesh sceneHandle applied");
   }
 
   std::printf("\n== Performance == (best of 8 runs — algorithmic cost, not scheduler noise)\n");

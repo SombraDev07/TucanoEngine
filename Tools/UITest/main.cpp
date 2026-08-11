@@ -1988,7 +1988,7 @@ int main(int argc, char** argv) {
 				ecs::World world;
 				const ecs::Entity parede = world.create();
 				world.add<ecs::NameComponent>(parede)->name = "Parede";
-				world.add<ecs::RenderObjectComponent>(parede)->sceneIndex = 0;
+				world.add<ecs::RenderObjectComponent>(parede)->handle = scene.handleAt(0);
 				auto* ref = world.add<ecs::MeshComponent>(parede);
 				MaterialSyncState sync;
 
@@ -2048,19 +2048,19 @@ int main(int argc, char** argv) {
 
 				// Objeto sem material nenhum: o override tem que criar o slot.
 				const ecs::Entity chao = world.create();
-				world.add<ecs::RenderObjectComponent>(chao)->sceneIndex = 1;
+				world.add<ecs::RenderObjectComponent>(chao)->handle = scene.handleAt(1);
 				world.add<ecs::MeshComponent>(chao)->material = materialGuid;
 				syncMeshComponentsToScene(world, scene, resolver, sync);
 				check(scene.objects[1].materials.size() == 1,
 				      "um objeto sem material ganha o slot ao receber um override");
 
-				// sceneIndex apontando para fora da cena acontece de verdade (deletar objeto,
-				// recarregar cena menor) e nao pode derrubar o editor.
+				// Um handle que nao resolve acontece de verdade (deletar objeto, recarregar cena) e
+				// nao pode derrubar o editor.
 				const ecs::Entity orfa = world.create();
-				world.add<ecs::RenderObjectComponent>(orfa)->sceneIndex = 999;
+				world.add<ecs::RenderObjectComponent>(orfa)->handle = 999u;
 				world.add<ecs::MeshComponent>(orfa)->material = materialGuid;
 				syncMeshComponentsToScene(world, scene, resolver, sync);
-				check(true, "sceneIndex fora da cena e ignorado sem crash");
+				check(true, "handle que nao resolve e ignorado sem crash");
 			}
 
 			resolver.clearCache();
@@ -2272,7 +2272,8 @@ int main(int argc, char** argv) {
 			check(world.entities().has(e, ecs::kCompRenderObject),
 			      "e a entidade ganhou o componente que a liga a ele");
 			const auto* render = world.get<ecs::RenderObjectComponent>(e);
-			check(render != nullptr && render->sceneIndex == 0, "apontando para o indice certo");
+			check(render != nullptr && scene.resolve(render->handle) == &scene.objects[0],
+			      "apontando para o objeto certo");
 			check(render != nullptr && render->appliedMesh == meshGuid,
 			      "e lembrando qual malha ja foi aplicada");
 			check(!scene.objects[0].name.empty() && scene.objects[0].name == "Caixa",
@@ -2284,19 +2285,17 @@ int main(int argc, char** argv) {
 			      "o frame seguinte nao cria um segundo objeto para a mesma entidade");
 			check(scene.objects.size() == 1, "a cena continua com um");
 
-			// Perder o objeto nao pode ser permanente. `scene.objects` e compactado por descarga de
-			// celula (SceneCellProvider.cpp:476), por liberacao de tile de terreno
-			// (TerrainCellProvider.cpp:320) e pelo delete do Outliner, e zerado num reload de cena.
-			// Sem esta segunda passada a entidade guardaria o componente com um indice morto, a
-			// criacao nunca dispararia de novo, e a coisa ficaria invisivel pelo resto da sessao —
-			// em silencio, porque os syncs so fazem `continue` num indice fora de faixa.
-			scene.objects.clear();
+			// Perder o objeto nao pode ser permanente: um reload de cena zera tudo, e sem esta
+			// segunda passada a entidade guardaria um handle morto, a criacao nunca dispararia de
+			// novo, e a coisa ficaria invisivel pelo resto da sessao — em silencio, porque os syncs
+			// so fazem `continue` num handle que nao resolve.
+			scene.clearObjects();
 			check(ecs::spawnMeshObjects(world, scene, resolver, syncState) == 1,
 			      "uma entidade que perdeu seu objeto ganha outro");
 			check(scene.objects.size() == 1 && scene.objects[0].mesh != nullptr,
 			      "com geometria de novo");
 			const auto* repointed = world.get<ecs::RenderObjectComponent>(e);
-			check(repointed != nullptr && repointed->sceneIndex == 0,
+			check(repointed != nullptr && scene.resolve(repointed->handle) == &scene.objects[0],
 			      "e o componente foi reapontado, nao duplicado");
 
 			// Play -> Stop destroi toda entidade e a recria do JSON (PlayMode.cpp:64 ->
@@ -2314,11 +2313,10 @@ int main(int argc, char** argv) {
 				check(scene.objects.size() == before,
 				      "reaproveitando o objeto orfao em vez de acrescentar outro");
 				const auto* r = world.get<ecs::RenderObjectComponent>(revivida);
-				check(r != nullptr && r->sceneIndex < scene.objects.size(),
-				      "e aponta para dentro da cena");
-				check(r != nullptr && scene.objects[r->sceneIndex].visible,
-				      "o objeto reaproveitado volta visivel");
-				check(r != nullptr && scene.objects[r->sceneIndex].name == "Caixa",
+				const RenderObject* revived = r != nullptr ? scene.resolve(r->handle) : nullptr;
+				check(revived != nullptr, "e o handle novo resolve");
+				check(revived != nullptr && revived->visible, "o objeto reaproveitado volta visivel");
+				check(revived != nullptr && revived->name == "Caixa",
 				      "e nao carrega sobras do ocupante anterior");
 			}
 
@@ -2328,6 +2326,160 @@ int main(int argc, char** argv) {
 			      "e o transform da entidade recriada chega ao objeto");
 
 			fs::remove_all(root, ec);
+		}
+
+		// ── C-09: handles estaveis para Scene::objects ───────────────────────
+		// `RenderObjectComponent` guardava um **indice** num vetor que era compactado em quatro
+		// lugares (descarga de celula, liberacao de tile de terreno, delete do Outliner, reload de
+		// cena). Depois de qualquer um deles, todo indice acima do removido nomeava outro objeto — e
+		// os syncs so testavam "fora de faixa", que um indice trocado passa. O resultado era uma
+		// entidade dirigindo a geometria de outra, em silencio. Handle = indice | geracao.
+		{
+			const auto cube = makeUnitCube(*device);
+
+			Scene scene;
+			RenderObject a;
+			a.mesh = cube;
+			a.name = "A";
+			RenderObject b;
+			b.mesh = cube;
+			b.name = "B";
+			RenderObject c;
+			c.mesh = cube;
+			c.name = "C";
+			const RenderObjectHandle ha = scene.addObject(std::move(a));
+			const RenderObjectHandle hb = scene.addObject(std::move(b));
+			const RenderObjectHandle hc = scene.addObject(std::move(c));
+
+			check(scene.resolve(ha) != nullptr && scene.resolve(ha)->name == "A",
+			      "um handle recem-criado resolve para o seu objeto");
+			check(scene.liveObjectCount() == 3, "tres objetos vivos");
+
+			// **O bug inteiro, num check.** Remover o do meio nao pode fazer o handle de C nomear
+			// outra coisa. Com indices crus, C passava a ser B.
+			check(scene.removeObject(hb), "remover o do meio funciona");
+			check(scene.resolve(hc) != nullptr && scene.resolve(hc)->name == "C",
+			      "e o handle de quem estava acima continua no MESMO objeto");
+			check(scene.resolve(ha) != nullptr && scene.resolve(ha)->name == "A",
+			      "e o de quem estava abaixo tambem");
+
+			// O removido le como "sumiu", nao como o objeto do vizinho.
+			check(scene.resolve(hb) == nullptr, "o handle do removido nao resolve para nada");
+			check(!scene.removeObject(hb), "e remover de novo e recusado em vez de liberar o slot duas vezes");
+			check(scene.liveObjectCount() == 2 && scene.objects.size() == 3,
+			      "o vetor nao encolhe — e isso que mantem os indices no lugar");
+
+			// O slot vazio nao pode desenhar: todo laco do renderer testa mesh e visible.
+			check(scene.objects[1].mesh == nullptr && !scene.objects[1].visible,
+			      "o slot liberado fica sem malha e invisivel, entao nenhum passe o desenha");
+
+			// ABA: o slot volta a ser usado, e o handle antigo **nao** pode ressuscitar apontando
+			// para o novo dono. E para isso que serve a geracao.
+			RenderObject d;
+			d.mesh = cube;
+			d.name = "D";
+			const RenderObjectHandle hd = scene.addObject(std::move(d));
+			check(renderObjectIndex(hd) == 1, "o objeto novo reaproveita o slot liberado");
+			check(scene.resolve(hd) != nullptr && scene.resolve(hd)->name == "D", "e o handle novo resolve");
+			check(scene.resolve(hb) == nullptr,
+			      "enquanto o handle antigo do mesmo slot continua morto (geracao)");
+
+			// Um componente zerado. `EntityManager::create` devolve memoria zerada, entao um
+			// RenderObjectComponent nascido de `createWith` tem handle 0 — que com geracao comecando
+			// em 0 seria um handle valido para o objeto zero, exatamente o erro que isto conserta.
+			check(scene.resolve(0u) == nullptr, "um handle zero-inicializado nao resolve para o objeto 0");
+			check(scene.resolve(kInvalidRenderObject) == nullptr, "e o handle invalido tambem nao");
+
+			// Reload: tudo morre, inclusive o que vier a ocupar o mesmo indice.
+			const RenderObjectHandle antes = ha;
+			scene.clearObjects();
+			check(scene.objects.empty() && scene.liveObjectCount() == 0, "clearObjects esvazia");
+			RenderObject reposto;
+			reposto.mesh = cube;
+			reposto.name = "Reposto";
+			scene.addObject(std::move(reposto));
+			check(scene.resolve(antes) == nullptr,
+			      "um handle guardado antes do reload nao resolve para quem ocupou o indice depois");
+
+			// Rede de seguranca para o codigo que ainda mexe no vetor direto. Encolher por fora e
+			// indistinguivel de "os indices agora significam outra coisa", entao **todo** handle e
+			// invalidado — falha visivel e recuperavel em vez de troca silenciosa.
+			{
+				Scene raw;
+				RenderObject um;
+				um.mesh = cube;
+				um.name = "Um";
+				RenderObject dois;
+				dois.mesh = cube;
+				dois.name = "Dois";
+				const RenderObjectHandle h1 = raw.addObject(std::move(um));
+				const RenderObjectHandle h2 = raw.addObject(std::move(dois));
+				check(raw.resolve(h1) != nullptr && raw.resolve(h2) != nullptr, "dois handles vivos");
+				raw.objects.erase(raw.objects.begin());  // o que o codigo legado fazia
+				check(raw.resolve(h1) == nullptr && raw.resolve(h2) == nullptr,
+				      "um erase por fora invalida todos os handles, em vez de deixar um apontar para o vizinho");
+
+				// E crescer por fora continua funcionando, que e como boa parte da engine ainda
+				// popula a cena.
+				RenderObject solto;
+				solto.mesh = cube;
+				solto.name = "Solto";
+				raw.objects.push_back(std::move(solto));
+				const RenderObjectHandle depois = raw.handleAt(uint32_t(raw.objects.size() - 1));
+				check(depois != kInvalidRenderObject && raw.resolve(depois) != nullptr &&
+				          raw.resolve(depois)->name == "Solto",
+				      "um push_back direto continua ganhando handle utilizavel");
+			}
+
+			// removeObjectsIf: o que os providers de streaming chamam.
+			{
+				Scene streamed;
+				for (int i = 0; i < 4; ++i) {
+					RenderObject object;
+					object.mesh = cube;
+					object.name = (i % 2 == 0) ? "cell#7" : "outro";
+					streamed.addObject(std::move(object));
+				}
+				const RenderObjectHandle sobrevivente = streamed.handleAt(1);
+				check(streamed.removeObjectsIf(
+				          [](const RenderObject& ro) { return ro.name == "cell#7"; }) == 2,
+				      "removeObjectsIf devolve quantos saiu");
+				check(streamed.liveObjectCount() == 2, "e so os que casaram sairam");
+				check(streamed.resolve(sobrevivente) != nullptr &&
+				          streamed.resolve(sobrevivente)->name == "outro",
+				      "quem nao casou fica onde estava, com o handle valendo");
+			}
+
+			// E a ponta que importa: duas entidades, uma perde o objeto, e a outra **nao** passa a
+			// dirigir geometria alheia. Este e o cenario que acontecia de verdade a cada descarga de
+			// celula de streaming.
+			{
+				Scene twin;
+				ecs::World world;
+				RenderObject primeiro;
+				primeiro.mesh = cube;
+				primeiro.name = "Descarregado";
+				RenderObject segundo;
+				segundo.mesh = cube;
+				segundo.name = "Sobrevivente";
+				const RenderObjectHandle hFirst = twin.addObject(std::move(primeiro));
+				const RenderObjectHandle hSecond = twin.addObject(std::move(segundo));
+
+				const ecs::Entity vitima = world.create();
+				world.add<ecs::TransformComponent>(vitima);
+				world.add<ecs::RenderObjectComponent>(vitima)->handle = hFirst;
+				const ecs::Entity vizinha = world.create();
+				world.add<ecs::TransformComponent>(vizinha)->position = glm::vec3(9.0f, 0.0f, 0.0f);
+				world.add<ecs::RenderObjectComponent>(vizinha)->handle = hSecond;
+
+				twin.removeObject(hFirst);
+				ecs::syncTransformsToScene(world, twin, 1.0f);
+
+				check(twin.objects[0].worldMatrix[3][0] == 0.0f,
+				      "o objeto do slot liberado nao e movido por ninguem");
+				check(twin.objects[1].worldMatrix[3][0] == 9.0f,
+				      "e a entidade vizinha move o SEU objeto, nao o do vizinho");
+			}
 		}
 
 		// ── Gizmo e picking no viewport (fecha o passo 4 da DoD) ─────────────
@@ -2418,9 +2570,12 @@ int main(int argc, char** argv) {
 			const ecs::Entity dono = world.create();
 			world.add<ecs::NameComponent>(dono)->name = "Dono";
 			world.add<ecs::TransformComponent>(dono);
-			world.add<ecs::RenderObjectComponent>(dono)->sceneIndex = static_cast<uint32_t>(far_);
-			check(entityForSceneObject(world, far_) == dono, "o objeto de render encontra sua entidade");
-			check(entityForSceneObject(world, near_) == ecs::kInvalidEntity,
+			world.add<ecs::RenderObjectComponent>(dono)->handle =
+			    scene.handleAt(static_cast<uint32_t>(far_));
+			check(entityForSceneObject(world, scene.handleAt(static_cast<uint32_t>(far_))) == dono,
+			      "o objeto de render encontra sua entidade");
+			check(entityForSceneObject(world, scene.handleAt(static_cast<uint32_t>(near_))) ==
+			          ecs::kInvalidEntity,
 			      "e um objeto sem dono (celula, terreno) nao inventa uma");
 
 			// Decompor: o que o gizmo devolve e uma matriz, e o que a entidade guarda sao tres campos.
@@ -2530,7 +2685,7 @@ int main(int argc, char** argv) {
 				const ecs::Entity e = w.create();
 				w.add<ecs::NameComponent>(e)->name = "Alvo";
 				w.add<ecs::TransformComponent>(e);
-				w.add<ecs::RenderObjectComponent>(e)->sceneIndex = 0;
+				w.add<ecs::RenderObjectComponent>(e)->handle = viewScene.handleAt(0);
 
 				context.scene = &viewScene;
 				context.world = &w;
