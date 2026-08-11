@@ -30,7 +30,9 @@ int vectorComponents(const PropertyInfo& property) {
 
 void indentBy(std::string& out, int depth) { out.append(static_cast<size_t>(depth) * 2, ' '); }
 
-void appendEscaped(std::string& out, const std::string& text) {
+} // namespace
+
+void appendJsonString(std::string& out, std::string_view text) {
 	out += '"';
 	for (const char c : text) {
 		switch (c) {
@@ -51,6 +53,8 @@ void appendEscaped(std::string& out, const std::string& text) {
 	}
 	out += '"';
 }
+
+namespace {
 
 // %.9g and %.17g are the shortest forms that round-trip a float and a double exactly. Anything
 // shorter means saving and loading a value changes it, which shows up as a scene that drifts every
@@ -88,16 +92,16 @@ void writeScalar(std::string& out, const PropertyInfo& property, const void* ins
 			break;
 		case CoreType::Float: appendFloat(out, property.valueIn<float>(instance)); break;
 		case CoreType::Double: appendDouble(out, property.valueIn<double>(instance)); break;
-		case CoreType::String: appendEscaped(out, property.valueIn<std::string>(instance)); break;
+		case CoreType::String: appendJsonString(out,property.valueIn<std::string>(instance)); break;
 		case CoreType::FixedString:
 			// FixedString::assign always null-terminates, so reading it as a C string cannot run
 			// past the property.
-			appendEscaped(out, std::string(static_cast<const char*>(property.addressIn(instance))));
+			appendJsonString(out,std::string(static_cast<const char*>(property.addressIn(instance))));
 			break;
 		case CoreType::AssetRef:
 			// Hex text rather than two numbers: a reference ends up in a file people read and diff,
 			// and one token is easier to grep than a pair.
-			appendEscaped(out, property.valueIn<asset::AssetGuid>(instance).toString());
+			appendJsonString(out,property.valueIn<asset::AssetGuid>(instance).toString());
 			break;
 		default: out += "null"; break;
 	}
@@ -112,7 +116,7 @@ void writeEnum(std::string& out, const PropertyInfo& property, const void* insta
 	// By name when the constant is known, by number when it is not. A value with no constant is
 	// still worth keeping — dropping it would lose data the caller put there deliberately.
 	if (constant != nullptr) {
-		appendEscaped(out, constant->name);
+		appendJsonString(out,constant->name);
 	} else {
 		appendInt(out, value);
 	}
@@ -179,7 +183,7 @@ void writeStructBody(std::string& out, const TypeInfo& type, const void* instanc
 		if (!first) out += ",\n";
 		first = false;
 		indentBy(out, depth + 1);
-		appendEscaped(out, property.name);
+		appendJsonString(out,property.name);
 		out += ": ";
 		writeValue(out, property, instance, depth + 1);
 	}

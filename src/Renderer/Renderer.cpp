@@ -310,7 +310,11 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
       if (auto found = findAnyHdriIn(joinPath(TUCANO_ENGINE_ASSETS_DIR, "IBL")); !found.empty()) {
         std::cout << "[IBL] '" << m_settings.hdriPath << "' missing — using " << found << "\n";
         hdri = found;
-        m_settings.hdriPath = found;
+        // The setting keeps the **relative** form, even though the cook above uses the absolute
+        // one. This value is written into a `.tuscene` since E-02, and an absolute path makes a
+        // scene that opens correctly on exactly one machine. The file came from this folder, so the
+        // relative form always exists.
+        m_settings.hdriPath = "IBL/" + std::filesystem::path(found).filename().generic_string();
       }
     }
     IBLTextures ibl = createIBLFromHDRIFile(m_device, hdri, 512);

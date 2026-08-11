@@ -503,6 +503,13 @@ void SceneTool::bindEnvironment(void* environmentPtr) const {
 	environment.fog = &m_context->renderer->fog();
 	environment.clouds = &m_context->renderer->clouds();
 	environment.rain = &m_context->renderer->rain();
+	environment.sky = &m_context->renderer->sky();
+	// The HDRI is the one environment value that costs something to apply, so it travels as a value
+	// plus the operation. `reloadIBL` already keeps the previous lighting when the file cannot be
+	// used, which is exactly the contract the loader wants.
+	environment.hdriPath = &m_context->renderer->settings().hdriPath;
+	Renderer* renderer = m_context->renderer;
+	environment.applyHdri = [renderer](const std::string& path) { return renderer->reloadIBL(path); };
 }
 
 void SceneTool::newScene() {
@@ -550,6 +557,15 @@ bool SceneTool::openSceneFrom(const std::string& path) {
 	ecs::SceneEnvironment environment;
 	bindEnvironment(&environment);
 	if (!ecs::loadScene(path, *m_context->world, environment, &m_error)) return false;
+
+	// A load can succeed *and* have something to say: a component the file could not fit, or an HDRI
+	// that would not open. Those are warnings, not failures — the scene is loaded either way — so
+	// they go to the Console instead of into `error()`, which means "why this did not happen".
+	// Without this the report goes nowhere and the scene quietly opens lit by the wrong sky.
+	if (!m_error.empty()) {
+		m_context->logWarn("Scene loaded with warnings: " + m_error);
+		m_error.clear();
+	}
 
 	// The old selection pointed into the world that was just replaced.
 	m_context->clearSelection();

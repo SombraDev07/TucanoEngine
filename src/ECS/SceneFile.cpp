@@ -7,6 +7,7 @@
 #include "ECS/Components.h"
 #include "ECS/EntityManager.h"
 #include "ECS/World.h"
+#include "Renderer/Sky/SkyParams.h"
 #include "Renderer/Weather/CloudSystem.h"
 #include "Renderer/Weather/FogParams.h"
 #include "Renderer/Weather/RainParams.h"
@@ -58,10 +59,22 @@ void appendEnvironment(std::string& out, const SceneEnvironment& environment) {
 	const auto& registry = TypeRegistry::instance();
 	out += "  \"environment\": {\n";
 	bool first = true;
+	// Sky first because it is the one a person recognises: time of day is what makes a saved scene
+	// look like the scene they saved.
+	block("SkyParams", registry.find(TypeID{"SkyParams"}), environment.sky, first);
 	block("WaterParams", registry.find(TypeID{"WaterParams"}), environment.water, first);
 	block("FogParams", registry.find(TypeID{"FogParams"}), environment.fog, first);
 	block("CloudParams", registry.find(TypeID{"CloudParams"}), environment.clouds, first);
 	block("RainParams", registry.find(TypeID{"RainParams"}), environment.rain, first);
+
+	// A plain string rather than a reflected block: it is one value, and what makes it interesting
+	// is the operation on the reading side, not its shape.
+	if (environment.hdriPath != nullptr) {
+		if (!first) out += ",\n";
+		first = false;
+		out += "    \"hdri\": ";
+		appendJsonString(out, *environment.hdriPath);
+	}
 	out += "\n  }";
 }
 
@@ -83,10 +96,29 @@ void readEnvironment(const core::JsonValue& node, const SceneEnvironment& enviro
 		}
 	};
 
+	block("SkyParams", environment.sky);
 	block("WaterParams", environment.water);
 	block("FogParams", environment.fog);
 	block("CloudParams", environment.clouds);
 	block("RainParams", environment.rain);
+
+	// The HDRI, which is an operation rather than an assignment: applying it re-cooks the
+	// image-based lighting, so it is only attempted when the path actually differs from what is
+	// loaded — that keeps opening a scene lit by the HDRI already in memory free, and keeps
+	// Play → Stop (which restores this block from a snapshot) from re-cooking on every stop.
+	if (environment.hdriPath != nullptr && environment.applyHdri) {
+		const core::JsonValue* value = node.find("hdri");
+		if (value != nullptr && value->isString() && value->str != *environment.hdriPath) {
+			if (environment.applyHdri(value->str)) {
+				*environment.hdriPath = value->str;
+			} else if (err != nullptr) {
+				// Reported, not fatal: the running lighting is kept, so the scene opens lit by what
+				// you had rather than black.
+				if (!err->empty()) *err += "; ";
+				*err += "could not load HDRI '" + value->str + "'";
+			}
+		}
+	}
 }
 
 // Writes one entity's components as a JSON object. Shared by the scene writer and by

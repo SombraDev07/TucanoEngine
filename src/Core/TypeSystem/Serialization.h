@@ -79,6 +79,12 @@ bool deserializeFromJson(std::string_view json, T& instance, std::string* err = 
 void readStructInto(const core::JsonValue& node, const TypeInfo& type, void* instance,
                     std::string* err = nullptr);
 
+// Appends `text` as a quoted, escaped JSON string. Exposed for the same reason as the above: a
+// container format that writes one loose string of its own (a `.tuscene` writes the scene's HDRI
+// path) must escape it the same way reflection does. A Windows path is full of backslashes, so a
+// second, simpler copy of this would produce a file that does not parse.
+void appendJsonString(std::string& out, std::string_view text);
+
 // ── Files ───────────────────────────────────────────────────────────────────
 
 // Writes through a temporary and renames over the target, so a crash mid-write leaves the previous

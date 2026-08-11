@@ -20,7 +20,31 @@
 
 #include <imgui.h>
 
+#include <filesystem>
+#include <string>
+
 namespace tucano::editor {
+
+// An absolute path under the engine assets folder, back in the relative form the settings are meant
+// to hold. Anything outside comes back unchanged.
+//
+// This matters because `hdriPath` is written into a `.tuscene` since E-02: an absolute path makes a
+// scene that opens correctly on exactly one machine. `Renderer::reloadIBL` resolves a relative path
+// against the same root, so nothing downstream has to know which form it got.
+inline std::string engineRelativePath(const std::string& path) {
+	std::error_code ec;
+	const std::filesystem::path root = std::filesystem::weakly_canonical(TUCANO_ENGINE_ASSETS_DIR, ec);
+	if (ec) return path;
+	const std::filesystem::path file = std::filesystem::weakly_canonical(path, ec);
+	if (ec) return path;
+	const std::filesystem::path relative = std::filesystem::relative(file, root, ec);
+	if (ec || relative.empty()) return path;
+	// Forward slashes, and never a path that climbs out of the root: "../.." is not relative to the
+	// engine in any useful sense, it is just an absolute path in disguise.
+	const std::string generic = relative.generic_string();
+	if (generic.rfind("..", 0) == 0) return path;
+	return generic;
+}
 
 class EnvironmentPanel {
 public:
@@ -86,7 +110,13 @@ public:
 			if (m_hdriPicker.draw("##hdri")) {
 				const std::string previous = s.hdriPath;
 				if (ctx.renderer->reloadIBL(m_hdriPicker.path())) {
-					s.hdriPath = m_hdriPicker.path();
+					// Stored relative to the engine assets folder when it lives under it (E-02). The
+					// picker deals in absolute paths, and this value is now written into `.tuscene`:
+					// an absolute one would make the scene open correctly on exactly one machine.
+					// `reloadIBL` resolves a relative path against the same root, so nothing else
+					// changes. A file the user picked from outside stays absolute, because there is
+					// no project root to make it relative to yet (J-01).
+					s.hdriPath = engineRelativePath(m_hdriPicker.path());
 					ctx.logInfo("IBL reloaded from " + s.hdriPath);
 				} else {
 					m_hdriPicker.setPath(previous);

@@ -10,7 +10,7 @@
 //   {
 //     "format": "tuscene", "version": 1,
 //     "entities": [ { "name": {...}, "transform": {...}, "light": {...} } ],
-//     "environment": { "WaterParams": {...}, "FogParams": {...}, ... }
+//     "environment": { "SkyParams": {...}, "WaterParams": {...}, ..., "hdri": "IBL/x.hdr" }
 //   }
 //
 // The *container* — the entity list and which components each one has — is written by this file.
@@ -26,6 +26,7 @@
 // Unknown component keys are skipped rather than failing the load: a scene saved by a build that
 // has a component this one does not should still open, minus what it cannot represent.
 
+#include <functional>
 #include <string>
 #include <string_view>
 
@@ -37,6 +38,7 @@ struct WaterParams;
 struct FogParams;
 struct CloudParams;
 struct RainParams;
+struct SkyParams;
 } // namespace tucano
 
 namespace tucano::ecs {
@@ -45,11 +47,34 @@ class World;
 
 // Everything in a scene that is not an entity. Held by pointer so a caller that has no renderer
 // (a test, a headless cook) can still save and load the entity half.
+//
+// **`RendererSettings` is deliberately absent** (E-02). A scene wants to save what time of day it
+// is; it does not want to save whether meshlets are on — that is a property of the machine drawing
+// the scene, not of the scene. Splitting the two is exactly what E-01 was for, and putting the
+// struct back here would undo it. The authoring-side keys still living in `RendererSettings`
+// (bloom strength, exposure target) therefore do **not** survive closing the editor yet; moving
+// them out, or teaching the serialiser to write only the non-advanced half, is its own task.
 struct SceneEnvironment {
 	WaterParams* water = nullptr;
 	FogParams* fog = nullptr;
 	CloudParams* clouds = nullptr;
 	RainParams* rain = nullptr;
+	SkyParams* sky = nullptr;
+
+	// The HDRI the scene is lit by. Not one of the blocks above because it is a path, and applying
+	// one means re-cooking the image-based lighting — which takes real time, can fail, and has to
+	// leave the previous lighting in place when it does. So it travels as the value plus the one
+	// operation the host knows how to perform on it.
+	std::string* hdriPath = nullptr;
+
+	// Applies a path that was just read; false means it could not be used. Called **only when the
+	// path differs** from what is loaded, so opening a scene that names the HDRI already in memory
+	// costs nothing — and so Play → Stop, which restores this block from a snapshot, does not
+	// re-cook the IBL on every stop.
+	//
+	// On failure the running lighting is kept and `hdriPath` is left alone: a scene naming a missing
+	// HDRI opens lit by whatever you had, not black.
+	std::function<bool(const std::string&)> applyHdri;
 };
 
 // Serialises every live entity that carries at least one authoring component. Entities that only

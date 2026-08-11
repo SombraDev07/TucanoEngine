@@ -946,9 +946,17 @@ int main(int argc, char** argv) {
 			water.enabled = false;
 			FogParams fog;
 			fog.density = 0.0375f;
+			// E-02: a atmosfera e o passo 7 da Definition of Done, e ate agora a hora do dia morria
+			// com o processo. `SkyParams` so existe separado de `RendererSettings` para isto (E-01).
+			SkyParams sky;
+			sky.timeOfDay = 0.8125f;
+			sky.useBrunetonAtmosphere = false;
+			std::string hdri = "IBL/noite.hdr";
 			SceneEnvironment environment;
 			environment.water = &water;
 			environment.fog = &fog;
+			environment.sky = &sky;
+			environment.hdriPath = &hdri;
 
 			const std::string text = sceneToJson(world, environment);
 			check(text.find("\"format\": \"tuscene\"") != std::string::npos,
@@ -965,9 +973,22 @@ int main(int argc, char** argv) {
 			World reopened;
 			WaterParams water2;
 			FogParams fog2;
+			SkyParams sky2;
+			// O que o editor teria carregado antes de abrir a cena. Tem que ser diferente do que
+			// esta no arquivo, senao o teste nao distingue "aplicou" de "ja estava assim".
+			std::string hdri2 = "IBL/default.hdr";
+			int hdriApplied = 0;
+			std::string hdriAsked;
 			SceneEnvironment environment2;
 			environment2.water = &water2;
 			environment2.fog = &fog2;
+			environment2.sky = &sky2;
+			environment2.hdriPath = &hdri2;
+			environment2.applyHdri = [&](const std::string& path) {
+				++hdriApplied;
+				hdriAsked = path;
+				return true;
+			};
 
 			std::string sceneErr;
 			check(sceneFromJson(text, reopened, environment2, &sceneErr),
@@ -1007,6 +1028,57 @@ int main(int argc, char** argv) {
 			check(water2.waterLevel == 7.25f && water2.enabled == false,
 			      "o bloco de ambiente (agua) voltou identico");
 			check(fog2.density == 0.0375f, "o bloco de ambiente (fog) voltou identico");
+
+			// ── E-02: atmosfera e HDRI ────────────────────────────────────────
+			check(sky2.timeOfDay == 0.8125f, "a hora do dia sobrevive a salvar e reabrir");
+			check(sky2.useBrunetonAtmosphere == false,
+			      "e o modelo de atmosfera tambem, nao so os floats");
+			check(hdriApplied == 1, "o HDRI da cena foi aplicado uma vez, nao a cada bloco lido");
+			check(hdriAsked == "IBL/noite.hdr", "com o caminho que estava no arquivo");
+			check(hdri2 == "IBL/noite.hdr", "e o valor corrente passou a ser o da cena");
+
+			// Reaplicar custa recozinhar o IBL, entao carregar a mesma cena de novo — ou dar Stop
+			// no play mode, que restaura este bloco de um snapshot — nao pode disparar de novo.
+			{
+				World again;
+				check(sceneFromJson(text, again, environment2, &sceneErr), "a mesma cena carrega de novo");
+				check(hdriApplied == 1,
+				      "e o HDRI que ja esta carregado nao e recozinhado (o Stop do play mode passa aqui)");
+			}
+
+			// Um HDRI que nao carrega nao pode apagar a iluminacao: reloadIBL ja mantem a anterior,
+			// e o loader tem que respeitar isso em vez de gravar o caminho quebrado por cima.
+			{
+				World falha;
+				SkyParams sky3;
+				std::string hdri3 = "IBL/o_que_estava.hdr";
+				SceneEnvironment environment3;
+				environment3.sky = &sky3;
+				environment3.hdriPath = &hdri3;
+				environment3.applyHdri = [](const std::string&) { return false; };
+				std::string falhaErr;
+				check(sceneFromJson(text, falha, environment3, &falhaErr),
+				      "a cena carrega mesmo com o HDRI recusado");
+				check(hdri3 == "IBL/o_que_estava.hdr",
+				      "e o caminho corrente fica como estava, em vez de apontar para o que nao abriu");
+				check(falhaErr.find("HDRI") != std::string::npos,
+				      "com o problema reportado, nao engolido");
+				check(sky3.timeOfDay == 0.8125f, "e o resto do ambiente carrega assim mesmo");
+			}
+
+			// Bloco ausente mantem o que esta rodando (regra 2 da serializacao), que e o que faz uma
+			// cena salva por um build sem ceu abrir aqui sem zerar a atmosfera.
+			{
+				World antiga;
+				SkyParams skyCorrente;
+				skyCorrente.timeOfDay = 0.25f;
+				SceneEnvironment environment4;
+				environment4.sky = &skyCorrente;
+				check(sceneFromJson(R"({"format":"tuscene","version":1,"entities":[],"environment":{}})",
+				                    antiga, environment4, &sceneErr),
+				      "uma cena sem bloco de ceu carrega");
+				check(skyCorrente.timeOfDay == 0.25f, "e nao zera a atmosfera que ja estava montada");
+			}
 
 			// Arquivo em disco, que e o caminho real do editor.
 			{
@@ -1071,6 +1143,27 @@ int main(int argc, char** argv) {
 			check(!tool.isDirty(), "abrir nao deixa o documento sujo");
 			check(!context.hasSelectedEntity(),
 			      "abrir solta a selecao (ela apontava para o mundo anterior)");
+
+			// Uma cena que carrega **com ressalva** — um campo que o arquivo nao consegue entregar, ou
+			// um HDRI que nao abre (E-02). O load teve sucesso, entao `error()` fica vazio; mas o
+			// aviso nao pode se perder, senao a cena abre errada em silencio.
+			{
+				const std::string warnPath = "uitest_doc_warn.tuscene";
+				std::ofstream(warnPath) << R"({"format":"tuscene","version":1,"entities":[
+			{"name":{"name":"Aviso"},"transform":{"position":[0,0,0]},
+			 "light":{"intensity":"nao e um numero"}}]})";
+				const size_t logBefore = context.log.size();
+				check(tool.openSceneFrom(warnPath), "uma cena com um campo problematico ainda abre");
+				check(tool.error().empty(), "e nao reporta falha, porque nao falhou");
+				bool warned = false;
+				for (size_t i = logBefore; i < context.log.size(); ++i) {
+					if (context.log[i].level == editor::LogEntry::Level::Warning) warned = true;
+				}
+				check(warned, "mas o aviso chega ao Console em vez de sumir junto com o erro limpo");
+				std::remove(warnPath.c_str());
+				// Volta ao documento que o resto do bloco assume.
+				check(tool.openSceneFrom(docPath), "e reabrir o documento anterior funciona");
+			}
 
 			// Um caminho que nao existe falha e diz por que, sem tocar no documento aberto.
 			check(!tool.openSceneFrom("nao_existe.tuscene"), "abrir arquivo inexistente falha");

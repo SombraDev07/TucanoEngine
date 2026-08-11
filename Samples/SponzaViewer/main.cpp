@@ -80,6 +80,15 @@ int main(int argc, char** argv) {
   // Same reason as --select, for the entity path: the Inspector only shows components once
   // something is selected, and an unattended screenshot has no way to click the Outliner.
   int selectEntity = -1;
+  // ── Document, without a person at the file dialog ──
+  //
+  // File > Open and File > Save As go through native modal dialogs, so the one thing a `.tuscene`
+  // exists for — save it, close the editor, open it, everything is back (step 9 of the Definition
+  // of Done) — could only ever be checked by hand. These two make that a shell command, which is
+  // what the roadmap asks every task to have. They drive the same `SceneTool` entry points the
+  // menu items do, so passing here is not a different code path from passing by hand.
+  std::string openScenePath;
+  std::string saveScenePath;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--scene" && i + 1 < argc) {
@@ -102,6 +111,15 @@ int main(int argc, char** argv) {
       // The real panels (P2-06) hosted by SceneTool, instead of the demo stand-ins.
       editorMode = true;
       sceneTool = true;
+    } else if (a == "--open-scene" && i + 1 < argc) {
+      // Implies --scene-tool: it is the tool that owns the document.
+      editorMode = true;
+      sceneTool = true;
+      openScenePath = argv[++i];
+    } else if (a == "--save-scene" && i + 1 < argc) {
+      editorMode = true;
+      sceneTool = true;
+      saveScenePath = argv[++i];
     } else if (a == "--select" && i + 1 < argc) {
       selectObject = std::stoi(argv[++i]);
     } else if (a == "--select-entity" && i + 1 < argc) {
@@ -497,6 +515,19 @@ int main(int argc, char** argv) {
       editorContext.drawCalls = renderer->drawCalls();
       editorContext.viewportW = window.width();
       editorContext.viewportH = window.height();
+      // Not before the loop: the tool reads the environment through this context, and the renderer
+      // and world are only bound a few lines above. Frame 2 so the first frame's layout pass has
+      // run and nothing is half-built.
+      if (!openScenePath.empty() && frame == 2 && sceneToolPtr != nullptr) {
+        if (sceneToolPtr->openSceneFrom(openScenePath)) {
+          std::cout << "[SponzaViewer] opened scene " << openScenePath << "\n";
+        } else {
+          std::cerr << "[SponzaViewer] could not open scene: " << sceneToolPtr->error() << "\n";
+          return 1;
+        }
+        openScenePath.clear();
+      }
+
       // Applied every frame rather than once: --select is there to hold a selection steady for an
       // unattended screenshot, and the Outliner would otherwise be free to clear it.
       if (selectObject >= 0) editorContext.selectedObject = selectObject;
@@ -688,6 +719,18 @@ int main(int argc, char** argv) {
 
     device->waitIdle();
     std::cerr << "[trace] loop terminou\n";
+
+    // After the loop, so what is written is the state the session ended in — including whatever
+    // --open-scene loaded. Same entry point as File > Save As, minus the dialog.
+    if (!saveScenePath.empty() && sceneToolPtr != nullptr) {
+      if (sceneToolPtr->saveSceneTo(saveScenePath)) {
+        std::cout << "[SponzaViewer] saved scene to " << saveScenePath << "\n";
+      } else {
+        std::cerr << "[SponzaViewer] could not save scene: " << sceneToolPtr->error() << "\n";
+        return 1;
+      }
+    }
+
     shell.shutdown(); // flushes the layout while the ImGui context is still alive
     std::cerr << "[trace] shell.shutdown ok\n";
     ui.shutdown();
