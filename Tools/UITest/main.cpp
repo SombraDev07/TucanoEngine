@@ -951,11 +951,18 @@ int main(int argc, char** argv) {
 			SkyParams sky;
 			sky.timeOfDay = 0.8125f;
 			sky.useBrunetonAtmosphere = false;
+			// E-05: o bloco de nuvem so passou a valer alguma coisa quando `CloudParams` virou dono
+			// unico da camada — antes o renderer o sobrescrevia com o gemeo de RendererSettings no
+			// frame seguinte ao load.
+			CloudParams clouds;
+			clouds.coverage = 0.99f;
+			clouds.storminess = 0.77f;
 			std::string hdri = "IBL/noite.hdr";
 			SceneEnvironment environment;
 			environment.water = &water;
 			environment.fog = &fog;
 			environment.sky = &sky;
+			environment.clouds = &clouds;
 			environment.hdriPath = &hdri;
 
 			const std::string text = sceneToJson(world, environment);
@@ -974,6 +981,7 @@ int main(int argc, char** argv) {
 			WaterParams water2;
 			FogParams fog2;
 			SkyParams sky2;
+			CloudParams clouds2;
 			// O que o editor teria carregado antes de abrir a cena. Tem que ser diferente do que
 			// esta no arquivo, senao o teste nao distingue "aplicou" de "ja estava assim".
 			std::string hdri2 = "IBL/default.hdr";
@@ -983,6 +991,7 @@ int main(int argc, char** argv) {
 			environment2.water = &water2;
 			environment2.fog = &fog2;
 			environment2.sky = &sky2;
+			environment2.clouds = &clouds2;
 			environment2.hdriPath = &hdri2;
 			environment2.applyHdri = [&](const std::string& path) {
 				++hdriApplied;
@@ -1031,6 +1040,8 @@ int main(int argc, char** argv) {
 
 			// ── E-02: atmosfera e HDRI ────────────────────────────────────────
 			check(sky2.timeOfDay == 0.8125f, "a hora do dia sobrevive a salvar e reabrir");
+			check(clouds2.coverage == 0.99f && clouds2.storminess == 0.77f,
+			      "e a camada de nuvem tambem (E-05: agora ela tem um dono so)");
 			check(sky2.useBrunetonAtmosphere == false,
 			      "e o modelo de atmosfera tambem, nao so os floats");
 			check(hdriApplied == 1, "o HDRI da cena foi aplicado uma vez, nao a cada bloco lido");
@@ -2199,6 +2210,35 @@ int main(int argc, char** argv) {
 			check(inSky == std::size(kMoved), "os 20 campos de ceu estao em SkyParams");
 			check(stillInRenderer == 0, "e nenhum deles sobrou em RendererSettings (mudou de casa, nao foi copiado)");
 
+			// ── E-05: uma nuvem, um dono ──────────────────────────────────────
+			// `RendererSettings` carregava um gemeo de cada campo de `CloudParams`, e o
+			// `Renderer::render` copiava um sobre o outro **todo frame**. Efeito: o painel Clouds do
+			// editor nao mudava nada, e o bloco CloudParams que o `.tuscene` grava era sobrescrito no
+			// frame seguinte ao load. Este check e sobre a causa: se os campos voltarem a existir nos
+			// dois lugares, alguem vai copiar de novo.
+			{
+				const TypeInfo* cloud = TypeRegistry::instance().find(TypeID{"CloudParams"});
+				check(cloud != nullptr, "CloudParams esta registrado");
+				check(cloud != nullptr && findProperty(cloud, "coverage") != nullptr &&
+				          findProperty(cloud, "storminess") != nullptr &&
+				          findProperty(cloud, "driveRain") != nullptr,
+				      "e e ele que descreve a camada de nuvem");
+
+				// Nenhum campo de nuvem sobrou do outro lado. Por nome, porque foi assim que o gemeo
+				// nasceu: alguem precisou de "coverage" perto das outras chaves de render e criou
+				// `cloudCoverage` em vez de alcancar o CloudParams.
+				size_t cloudFieldsInRenderer = 0;
+				for (size_t i = 0; render != nullptr && i < render->propertyCount; ++i) {
+					const std::string_view name(render->properties[i].name);
+					if (name.find("cloud") != std::string_view::npos ||
+					    name.find("Cloud") != std::string_view::npos) {
+						++cloudFieldsInRenderer;
+					}
+				}
+				check(cloudFieldsInRenderer == 0,
+				      "e RendererSettings nao tem mais nenhum campo de nuvem para discordar dele");
+			}
+
 			// Tipos, nao so nomes: `wind` como Float em vez de Vec3 daria tres linhas erradas.
 			const PropertyInfo* wind = findProperty(sky, "wind");
 			check(wind != nullptr && wind->coreType == CoreType::Vec3, "wind e um Vec3");
@@ -2259,10 +2299,13 @@ int main(int argc, char** argv) {
 			grid.filter().setText("");
 
 			// O tamanho do que ficou alcancavel. O numero exato nao importa; que ele nao encolha
-			// sem alguem perceber, sim.
+			// sem alguem perceber, sim — e foi exatamente assim que este check fez o seu trabalho na
+			// E-05: caiu de 44 para 33 quando os onze campos de nuvem sairam daqui, e a queda teve
+			// de ser justificada em vez de passar batido. Eles nao sumiram: viraram os campos de
+			// `CloudParams`, que e quem sempre desenhou as nuvens.
 			check(sky != nullptr && sky->propertyCount == 20, "SkyParams expoe 20 campos");
-			check(render != nullptr && render->propertyCount >= 44,
-			      "RendererSettings expoe o resto (>=44)");
+			check(render != nullptr && render->propertyCount >= 33,
+			      "RendererSettings expoe o resto (>=33, era 44 antes da nuvem mudar de casa)");
 		}
 
 		// ── C-08: dar um mesh a uma entidade faz geometria aparecer ──────────

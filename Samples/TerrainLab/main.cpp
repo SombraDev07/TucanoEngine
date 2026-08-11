@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
 
 		{
 			auto& s = renderer->settings();
-			s.enableClouds = false;
+			renderer->clouds().enabled = false;
 			s.enableVSM = false;
 			s.enableAsyncCompute = false;
 			s.enableVoxelGI = false;
@@ -314,7 +314,7 @@ int main(int argc, char** argv) {
 
 			float fps = renderer->lastFrameMs() > 0.0f ? 1000.0f / renderer->lastFrameMs() : 0.0f;
 			ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
-			ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+			ui.drawWeatherAndLights(renderer->rain(), renderer->clouds(), scene, renderer->settings());
 
 			if (frame % 120 == 0) {
 				window.setTitle("Tucano TerrainLab | " + std::to_string(int(fps)) +

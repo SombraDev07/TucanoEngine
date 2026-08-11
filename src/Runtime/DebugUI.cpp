@@ -201,7 +201,8 @@ void DebugUI::drawPerfHud(float frameMs, uint32_t drawCalls, uint32_t width, uin
   ImGui::End();
 }
 
-void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSettings& settings,
+void DebugUI::drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene& scene,
+                                   RendererSettings& settings,
                                    bool lightsOwnedByEcs) {
   if (!m_ready) {
     return;
@@ -303,22 +304,22 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
       ImGui::SliderFloat("Fog height", &settings.sky.fogHeight, 5.0f, 200.0f);
       ImGui::SliderFloat3("Wind", &settings.sky.wind.x, -2.0f, 2.0f);
       ImGui::Separator();
-      ImGui::Checkbox("Volumetric clouds", &settings.enableClouds);
-      if (settings.enableClouds) {
-        ImGui::SliderFloat("Coverage", &settings.cloudCoverage, 0.0f, 1.0f);
-        ImGui::SliderFloat("Density", &settings.cloudDensity, 0.1f, 3.0f);
-        ImGui::SliderFloat("Altitude", &settings.cloudAltitude, 200.0f, 4000.0f);
-        ImGui::SliderFloat("Thickness", &settings.cloudThickness, 200.0f, 6000.0f);
-        ImGui::SliderFloat("Storminess", &settings.cloudStorminess, 0.0f, 1.0f);
-        ImGui::Checkbox("Cloud shadows", &settings.enableCloudShadows);
-        if (settings.enableCloudShadows) {
-          ImGui::SliderFloat("Shadow strength", &settings.cloudShadowStrength, 0.0f, 1.0f);
+      ImGui::Checkbox("Volumetric clouds", &clouds.enabled);
+      if (clouds.enabled) {
+        ImGui::SliderFloat("Coverage", &clouds.coverage, 0.0f, 1.0f);
+        ImGui::SliderFloat("Density", &clouds.density, 0.1f, 3.0f);
+        ImGui::SliderFloat("Altitude", &clouds.altitude, 200.0f, 4000.0f);
+        ImGui::SliderFloat("Thickness", &clouds.thickness, 200.0f, 6000.0f);
+        ImGui::SliderFloat("Storminess", &clouds.storminess, 0.0f, 1.0f);
+        ImGui::Checkbox("Cloud shadows", &clouds.enableShadows);
+        if (clouds.enableShadows) {
+          ImGui::SliderFloat("Shadow strength", &clouds.shadowStrength, 0.0f, 1.0f);
         }
-        ImGui::Checkbox("God rays", &settings.enableCloudGodRays);
-        if (settings.enableCloudGodRays) {
-          ImGui::SliderFloat("God ray strength", &settings.cloudGodRayStrength, 0.0f, 1.5f);
+        ImGui::Checkbox("God rays", &clouds.enableGodRays);
+        if (clouds.enableGodRays) {
+          ImGui::SliderFloat("God ray strength", &clouds.godRayStrength, 0.0f, 1.5f);
         }
-        ImGui::Checkbox("Clouds drive rain amount", &settings.cloudsDriveRain);
+        ImGui::Checkbox("Clouds drive rain amount", &clouds.driveRain);
       }
       if (ImGui::Button("Preset: Clear noon")) {
         settings.sky.enableAtmosphere = true;
@@ -327,12 +328,12 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
         settings.sky.turbidity = 2.0f;
         settings.sky.fogDensity = 0.004f;
         settings.sky.fogHeight = 60.0f;
-        settings.enableClouds = true;
-        settings.cloudCoverage = 0.28f;
-        settings.cloudDensity = 0.9f;
-        settings.cloudAltitude = 1800.0f;
-        settings.cloudThickness = 1600.0f;
-        settings.cloudStorminess = 0.1f;
+        clouds.enabled = true;
+        clouds.coverage = 0.28f;
+        clouds.density = 0.9f;
+        clouds.altitude = 1800.0f;
+        clouds.thickness = 1600.0f;
+        clouds.storminess = 0.1f;
       }
       ImGui::SameLine();
       if (ImGui::Button("Preset: Golden hour")) {
@@ -342,13 +343,13 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
         settings.sky.turbidity = 3.5f;
         settings.sky.fogDensity = 0.018f;
         settings.sky.fogHeight = 35.0f;
-        settings.enableClouds = true;
-        settings.cloudCoverage = 0.55f;
-        settings.cloudDensity = 1.2f;
-        settings.cloudAltitude = 1300.0f;
-        settings.cloudThickness = 2600.0f;
-        settings.cloudStorminess = 0.35f;
-        settings.enableCloudGodRays = true;
+        clouds.enabled = true;
+        clouds.coverage = 0.55f;
+        clouds.density = 1.2f;
+        clouds.altitude = 1300.0f;
+        clouds.thickness = 2600.0f;
+        clouds.storminess = 0.35f;
+        clouds.enableGodRays = true;
       }
       ImGui::SameLine();
       if (ImGui::Button("Preset: Overcast")) {
@@ -358,13 +359,13 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSetti
         settings.sky.turbidity = 6.5f;
         settings.sky.fogDensity = 0.035f;
         settings.sky.fogHeight = 25.0f;
-        settings.enableClouds = true;
-        settings.cloudCoverage = 0.88f;
-        settings.cloudDensity = 1.6f;
-        settings.cloudAltitude = 700.0f;
-        settings.cloudThickness = 3200.0f;
-        settings.cloudStorminess = 0.85f;
-        settings.enableCloudShadows = true;
+        clouds.enabled = true;
+        clouds.coverage = 0.88f;
+        clouds.density = 1.6f;
+        clouds.altitude = 700.0f;
+        clouds.thickness = 3200.0f;
+        clouds.storminess = 0.85f;
+        clouds.enableShadows = true;
       }
     }
 

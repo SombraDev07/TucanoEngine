@@ -95,22 +95,25 @@ inline std::shared_ptr<Mesh> makeMarkerSphere(rhi::Device& device, float radius,
 
 inline void configureCleanRenderer(Renderer& renderer) {
   auto& s = renderer.settings();
+  // The cloud layer lives in CloudParams alone since E-05; RendererSettings no longer carries a
+  // duplicate that silently won.
+  auto& clouds = renderer.clouds();
   // Keep the lab light: sky / atmosphere / clouds only.
   s.sky.enableAtmosphere = true;
   s.sky.atmosphereDrivesSun = true;
-  s.enableClouds = true;
-  s.enableCloudShadows = true;
-  s.enableCloudGodRays = true;
-  s.cloudsDriveRain = false;
+  clouds.enabled = true;
+  clouds.enableShadows = true;
+  clouds.enableGodRays = true;
+  clouds.driveRain = false;
   s.sky.timeOfDay = 0.42f;
   s.sky.turbidity = 2.6f;
   s.sky.fogDensity = 0.006f;
   s.sky.fogHeight = 80.0f;
-  s.cloudCoverage = 0.52f;
-  s.cloudDensity = 1.2f;
-  s.cloudAltitude = 1400.0f;
-  s.cloudThickness = 2400.0f;
-  s.cloudStorminess = 0.3f;
+  clouds.coverage = 0.52f;
+  clouds.density = 1.2f;
+  clouds.altitude = 1400.0f;
+  clouds.thickness = 2400.0f;
+  clouds.storminess = 0.3f;
   s.sky.wind = {0.25f, 0.0f, 0.08f};
 
   s.enableShadows = true;

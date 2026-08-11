@@ -151,14 +151,14 @@ void registerRendererSettings(lua_State* L) {
 
 	lua_pushcclosure(L, [](lua_State* Ls) -> int {
 		auto* r = getRenderer(Ls);
-		if (r) r->settings().enableClouds = lua_toboolean(Ls, 1);
+		if (r) r->clouds().enabled = lua_toboolean(Ls, 1);
 		return 0;
 	}, 0);
 	lua_setfield(L, -2, "set_clouds");
 
 	lua_pushcclosure(L, [](lua_State* Ls) -> int {
 		auto* r = getRenderer(Ls);
-		if (r) r->settings().cloudCoverage = (float)luaL_checknumber(Ls, 1);
+		if (r) r->clouds().coverage = (float)luaL_checknumber(Ls, 1);
 		return 0;
 	}, 0);
 	lua_setfield(L, -2, "set_cloud_coverage");

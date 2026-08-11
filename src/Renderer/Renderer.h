@@ -112,28 +112,16 @@ struct TUCANO_TYPE() RendererSettings {
   bool enableRTShadows = false;
 
   // ── Clouds ───────────────────────────────────────────────────────────────
-  TUCANO_FIELD(.label = "Enabled", .category = "Clouds")
-  bool enableClouds = true;
-  TUCANO_FIELD(.label = "Coverage", .tooltip = "0 = clear sky, 1 = overcast", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
-  float cloudCoverage = 0.48f;
-  TUCANO_FIELD(.label = "Density", .tooltip = "How thick the cloud material is, independent of how much sky it covers", .category = "Clouds", .minValue = 0.1f, .maxValue = 3.0f, .step = 0.01f)
-  float cloudDensity = 1.15f;
-  TUCANO_FIELD(.label = "Altitude", .tooltip = "Metres to the cloud base", .category = "Clouds", .minValue = 200.0f, .maxValue = 8000.0f, .step = 10.0f)
-  float cloudAltitude = 1500.0f;
-  TUCANO_FIELD(.label = "Thickness", .tooltip = "Metres from base to top", .category = "Clouds", .minValue = 100.0f, .maxValue = 6000.0f, .step = 10.0f)
-  float cloudThickness = 2400.0f;
-  TUCANO_FIELD(.label = "Storminess", .tooltip = "Pushes the cloud shape toward towering, dark cumulonimbus", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
-  float cloudStorminess = 0.35f;
-  TUCANO_FIELD(.label = "Cast shadows", .tooltip = "Clouds darken the ground under them", .category = "Clouds")
-  bool enableCloudShadows = true;
-  TUCANO_FIELD(.label = "Shadow strength", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
-  float cloudShadowStrength = 0.7f;
-  TUCANO_FIELD(.label = "God rays", .tooltip = "Shafts of light through gaps in the cloud deck", .category = "Clouds")
-  bool enableCloudGodRays = true;
-  TUCANO_FIELD(.label = "God ray strength", .category = "Clouds", .minValue = 0.0f, .maxValue = 1.0f, .step = 0.01f)
-  float cloudGodRayStrength = 0.55f;
-  TUCANO_FIELD(.label = "Clouds drive rain", .tooltip = "Storminess raises the rain amount by itself, so weather stays consistent", .category = "Clouds")
-  bool cloudsDriveRain = true;
+  //
+  // Gone, and deliberately (E-05). Every one of these eleven fields had a twin in `CloudParams`,
+  // and `Renderer::render` copied this struct over that one **every frame** — so the Clouds panel,
+  // which edits `CloudParams`, changed nothing, and the `CloudParams` block a `.tuscene` saves was
+  // overwritten on the frame after it loaded. Two places to edit the same weather, one of which
+  // silently lost.
+  //
+  // `CloudParams` won because it is the superset (it also carries the weather map and the temporal
+  // filter) and because it is the one the scene file already stores. Same move E-01 made with the
+  // sky: one owner, and the panel that edits it is the one that means something.
 
   // ── Geometry pipeline ────────────────────────────────────────────────────
   // Every one of these is a different way of drawing the same triangles. They belong to whoever is

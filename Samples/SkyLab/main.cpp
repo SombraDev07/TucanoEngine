@@ -69,16 +69,16 @@ int main(int argc, char** argv) {
       renderer->settings().enableBloom = false;
     }
     if (noClouds) {
-      renderer->settings().enableClouds = false;
+      renderer->clouds().enabled = false;
     }
     if (noGodRays) {
-      renderer->settings().enableCloudGodRays = false;
+      renderer->clouds().enableGodRays = false;
     }
     if (withRain) {
       renderer->rain().enabled = true;
     }
     if (coverage >= 0.0f) {
-      renderer->settings().cloudCoverage = coverage;
+      renderer->clouds().coverage = coverage;
     }
     if (toroidal) {
       renderer->settings().enableToroidalShadows = true;
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
       ui.beginFrame();
       if (!noUI) {
         ui.drawPerfHud(renderer->lastFrameMs(), renderer->drawCalls(), window.width(), window.height());
-        ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings());
+        ui.drawWeatherAndLights(renderer->rain(), renderer->clouds(), scene, renderer->settings());
       }
 
       if (!ui.wantCaptureKeyboard() && input.keyPressed(GLFW_KEY_F12) && screenshotPath.empty()) {

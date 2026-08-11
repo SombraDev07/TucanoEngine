@@ -131,7 +131,7 @@ int main(int argc, char** argv) {
     auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
     auto renderer = std::make_unique<Renderer>(*device, window.width(), window.height());
     skylab::configureCleanRenderer(*renderer);
-    renderer->settings().enableClouds = false; // the sky is not what is being tested
+    renderer->clouds().enabled = false; // the sky is not what is being tested
 
     Input input(window.handle());
     DebugUI ui;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Renderer/Weather/CloudSystem.h"
 #include "Renderer/Weather/RainParams.h"
 #include "Renderer/Scene.h"
 #include "Renderer/Renderer.h"
@@ -23,8 +24,11 @@ public:
   // frame (ecs::syncLightsToScene). It then shows them read-only and points at the Inspector,
   // because editing here would be undone before the next frame and the widget would just lie.
   // Samples with no ECS world leave it false and keep the editor they have always had.
-  void drawWeatherAndLights(RainParams& rain, Scene& scene, RendererSettings& settings,
-                            bool lightsOwnedByEcs = false);
+  // `clouds` is passed separately because `CloudParams` is the sole owner of the cloud layer since
+  // E-05 — it used to be duplicated inside `RendererSettings`, and the copy that this panel edited
+  // was the one that won, which is why the editor's Clouds panel appeared to do nothing.
+  void drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene& scene,
+                            RendererSettings& settings, bool lightsOwnedByEcs = false);
   void drawPerfHud(float frameMs, uint32_t drawCalls, uint32_t width, uint32_t height);
   bool wantCaptureMouse() const;
   bool wantCaptureKeyboard() const;

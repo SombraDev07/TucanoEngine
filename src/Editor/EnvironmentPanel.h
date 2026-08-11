@@ -56,6 +56,7 @@ public:
 		auto& s = ctx.renderer->settings();
 		auto& sky = ctx.renderer->sky();
 		auto& rain = ctx.renderer->rain();
+		auto& clouds = ctx.renderer->clouds();
 
 		ImGui::TextDisabled("Sky and Rendering have their own panels.");
 		ImGui::Separator();
@@ -68,32 +69,32 @@ public:
 				sky.timeOfDay = 0.50f;
 				sky.turbidity = 2.0f;
 				sky.fogDensity = 0.005f;
-				s.cloudCoverage = 0.15f;
-				s.cloudStorminess = 0.05f;
+				clouds.coverage = 0.15f;
+				clouds.storminess = 0.05f;
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Sunset")) {
 				sky.timeOfDay = 0.75f;
 				sky.turbidity = 4.0f;
 				sky.fogDensity = 0.008f;
-				s.cloudCoverage = 0.30f;
-				s.cloudStorminess = 0.05f;
+				clouds.coverage = 0.30f;
+				clouds.storminess = 0.05f;
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Midnight")) {
 				sky.timeOfDay = 0.0f;
 				sky.turbidity = 1.5f;
 				sky.fogDensity = 0.002f;
-				s.cloudCoverage = 0.10f;
-				s.cloudStorminess = 0.05f;
+				clouds.coverage = 0.10f;
+				clouds.storminess = 0.05f;
 			}
 			ImGui::SameLine();
 			if (ImGui::Button("Storm")) {
 				sky.timeOfDay = 0.40f;
 				sky.turbidity = 6.0f;
 				sky.fogDensity = 0.03f;
-				s.cloudCoverage = 0.92f;
-				s.cloudStorminess = 0.90f;
+				clouds.coverage = 0.92f;
+				clouds.storminess = 0.90f;
 				rain.amount = 0.8f;
 			}
 		}

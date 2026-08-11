@@ -499,7 +499,7 @@ int main(int argc, char** argv) {
       // The weather panel is a viewer control; with a tool open the Environment tool window covers
       // the same ground and this would just float over it.
       if (!toolsDemo && !sceneTool) {
-        ui.drawWeatherAndLights(renderer->rain(), scene, renderer->settings(),
+        ui.drawWeatherAndLights(renderer->rain(), renderer->clouds(), scene, renderer->settings(),
                                 /*lightsOwnedByEcs=*/true);
       }
       if (closeDirtyAtFrame >= 0 && frame == closeDirtyAtFrame && dirtyDemoTool != nullptr) {

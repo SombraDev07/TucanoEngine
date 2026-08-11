@@ -1051,7 +1051,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         b.read(hHdr);
         b.write(hHdr, RGUsage::RenderTarget);
         b.write(hCompose, RGUsage::RenderTarget);
-        b.enabled = m_settings.enableClouds;
+        b.enabled = m_clouds.params().enabled;
       },
       [&](rhi::CommandList& c, RenderGraph&) {
         if (rgClouds) {
@@ -2486,7 +2486,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     cmd->setRootSignature(*m_rootFS);
     cmd->setGraphicsRootSrvTable(3, 0);
     cmd->setGraphicsRootSamplerTable(4, sampTable);
-    rhi::Texture* weather = m_settings.enableClouds ? m_clouds.weatherMap() : nullptr;
+    rhi::Texture* weather = m_clouds.params().enabled ? m_clouds.weatherMap() : nullptr;
     uint32_t depthIdx = bindlessOf(*m_depthColor);
     uint32_t hdrIdx = bindlessOf(*waterSrc);
     uint32_t weatherIdx = weather ? bindlessOf(*weather) : 0;
@@ -2503,17 +2503,12 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   rgClouds = [&](rhi::CommandList& c) {
     cmd = &c;
     auto& cp = m_clouds.params();
-    cp.enabled = m_settings.enableClouds;
-    cp.coverage = m_settings.cloudCoverage;
-    cp.density = m_settings.cloudDensity;
-    cp.altitude = m_settings.cloudAltitude;
-    cp.thickness = m_settings.cloudThickness;
-    cp.shadowStrength = m_settings.cloudShadowStrength;
-    cp.godRayStrength = m_settings.cloudGodRayStrength;
-    cp.storminess = m_settings.cloudStorminess;
-    cp.enableShadows = m_settings.enableCloudShadows;
-    cp.enableGodRays = m_settings.enableCloudGodRays;
-    cp.driveRain = m_settings.cloudsDriveRain;
+    // Eleven assignments used to sit here, copying RendererSettings over this struct every frame —
+    // which is what made the Clouds panel and the scene file's CloudParams block both pointless
+    // (E-05). `CloudParams` is now the only owner; nothing overwrites it.
+    //
+    // Wind is the exception and stays: it belongs to the sky, and clouds are carried by it. One
+    // value, one owner, read here rather than duplicated.
     cp.wind = m_settings.sky.wind;
 
     rhi::Texture* src = postHdr;
@@ -2526,7 +2521,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       postHdr = out;
       m_drawCalls += 4;
     }
-    if (m_settings.cloudsDriveRain && m_rain.params().enabled) {
+    if (cp.driveRain && m_rain.params().enabled) {
       const float scale = m_clouds.weatherRainScale();
       m_rain.params().amount = std::clamp(0.55f * scale, 0.15f, 1.6f);
     }
@@ -2825,9 +2820,9 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     // Real camera FOV for streak parallax; sun for backscatter; cloud weather map for local density.
     const glm::mat4 proj = frame.viewProj * glm::inverse(frame.view);
     const float tanHalfFovY = 1.0f / std::max(std::abs(proj[1][1]), 1e-3f);
-    rhi::Texture* weather = m_settings.enableClouds ? m_clouds.weatherMap() : nullptr;
+    rhi::Texture* weather = m_clouds.params().enabled ? m_clouds.weatherMap() : nullptr;
     m_rain.setLighting(frame.sunDirectionIntensity, glm::vec3(frame.sunColor), tanHalfFovY, weather,
-                       m_settings.cloudCoverage);
+                       m_clouds.params().coverage);
     rhi::Texture* rainOut = m_rain.executePost(
         *cmd, m_device, *rainSrc, *rainTmp, *m_depthColor, *m_normal, *rainSrc, *m_rainCB, *m_samplerLinear,
         frame.invViewProj, frame.viewProj, frame.view, eye, m_timeSeconds, m_width, m_height, m_ssr.get());
