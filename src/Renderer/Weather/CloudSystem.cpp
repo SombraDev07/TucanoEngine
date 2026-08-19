@@ -1,7 +1,5 @@
 #include "Renderer/Weather/CloudSystem.h"
 #include "Renderer/Weather/CloudNoise.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -34,8 +32,6 @@ struct CloudCBData {
   glm::vec4 ambientSky;
 };
 static_assert(sizeof(CloudCBData) <= 512, "CloudCB must fit 512-aligned ring slot");
-
-rhi::DX12Sampler& dxSamp(rhi::Sampler& s) { return static_cast<rhi::DX12Sampler&>(s); }
 
 uint32_t bindlessOf(rhi::Texture& t) { return t.bindlessIndex(); }
 
@@ -174,9 +170,8 @@ rhi::Texture* CloudSystem::execute(rhi::CommandList& cmd, rhi::Device& device, r
     return nullptr;
   }
 
-  auto& dx = static_cast<rhi::DX12Device&>(device);
-  D3D12_CPU_DESCRIPTOR_HANDLE sampCpu[] = {dxSamp(linearSamp).cpu};
-  const uint32_t sampTable = dx.writeSamplerTable(sampCpu, 1);
+  rhi::Sampler* samplers[] = {&linearSamp};
+  const uint32_t sampTable = device.writeSamplerTable(samplers);
 
   rhi::Texture* weatherPrev = m_weatherFlip ? m_weatherB.get() : m_weatherA.get();
   rhi::Texture* weatherCurr = m_weatherFlip ? m_weatherA.get() : m_weatherB.get();

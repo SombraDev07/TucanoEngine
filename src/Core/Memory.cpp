@@ -7,6 +7,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <sys/mman.h>
 #endif
 
 namespace tucano::core {
@@ -87,12 +89,27 @@ MemoryAllocator g_allocPhysics{"Physics"};
 
 // ── Virtual memory ──
 
-void* virtualReserve(size_t size)      { return VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS); }
-void  virtualCommit(void* p, size_t s) { VirtualAlloc(p, s, MEM_COMMIT, PAGE_READWRITE); }
-void  virtualFree(void* p, size_t r, size_t c) {
-	(void)r; (void)c;
+#ifdef _WIN32
+void* virtualReserve(size_t size) { return VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS); }
+void virtualCommit(void* p, size_t s) { VirtualAlloc(p, s, MEM_COMMIT, PAGE_READWRITE); }
+void virtualFree(void* p, size_t r, size_t c) {
+	(void)r;
+	(void)c;
 	VirtualFree(p, 0, MEM_RELEASE);
 }
+#else
+void* virtualReserve(size_t size) {
+	void* p = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	return p == MAP_FAILED ? nullptr : p;
+}
+void virtualCommit(void* p, size_t s) { mprotect(p, s, PROT_READ | PROT_WRITE); }
+void virtualFree(void* p, size_t r, size_t c) {
+	(void)c;
+	if (p && r) {
+		munmap(p, r);
+	}
+}
+#endif
 
 // ── Write-combined memory ──
 

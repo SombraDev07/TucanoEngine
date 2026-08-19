@@ -1,7 +1,5 @@
 #include "Renderer/Deferred/GBufferPass.h"
 #include "Renderer/Mesh.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <cmath>
 #include <cstring>
@@ -157,10 +155,8 @@ void executeGBufferPass(GBufferPassContext& ctx) {
 
   // space1 t0: the frame's skinning palette. Bound once — every skinned draw indexes into it.
   if (ctx.skinningBuffer) {
-    auto& dx = static_cast<rhi::DX12Device&>(ctx.device);
-    D3D12_CPU_DESCRIPTOR_HANDLE skinSrv[] = {
-        static_cast<rhi::DX12Buffer&>(*ctx.skinningBuffer).srvCpu};
-    ctx.cmd.setGraphicsRootSrvTable(5, dx.writeSrvTable(skinSrv, 1));
+    rhi::Buffer* skinSrv[] = {ctx.skinningBuffer};
+    ctx.cmd.setGraphicsRootSrvTable(5, ctx.device.writeBufferSrvTable(skinSrv));
   }
 
   for (size_t objectIndex = 0; objectIndex < ctx.scene.objects.size(); ++objectIndex) {

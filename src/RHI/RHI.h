@@ -1,7 +1,10 @@
 #pragma once
 
+#include "RHI/RHIBackend.h"
 #include "RHI/RHITypes.h"
 
+#include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <span>
@@ -49,6 +52,46 @@ struct GraphicsPipelineDesc {
 struct ComputePipelineDesc {
   std::shared_ptr<RootSignature> rootSignature;
   ShaderBytecode cs;
+};
+
+/// One entry of a transient descriptor table, named by RHI resource rather than by a backend
+/// descriptor handle.
+///
+/// Most passes address resources by bindless index and need none of this. The ones that do not —
+/// meshlet culling, Hi-Z, vegetation, terrain — bind a small contiguous table at a root slot, and a
+/// table may mix kinds (the meshlet cull table is a structured buffer SRV followed by a Hi-Z
+/// texture SRV), which is why this is one variant type instead of one span per resource kind.
+struct ResourceView {
+  enum class Kind : uint8_t { TextureSrv, TextureUav, BufferSrv, BufferUav };
+
+  Kind kind = Kind::TextureSrv;
+  Texture* texture = nullptr;
+  Buffer* buffer = nullptr;
+
+  static ResourceView srv(Texture& t) { return {Kind::TextureSrv, &t, nullptr}; }
+  static ResourceView uav(Texture& t) { return {Kind::TextureUav, &t, nullptr}; }
+  static ResourceView srv(Buffer& b) { return {Kind::BufferSrv, nullptr, &b}; }
+  static ResourceView uav(Buffer& b) { return {Kind::BufferUav, nullptr, &b}; }
+};
+
+/// Upper bound on entries in a single transient table. The largest in the engine today is 5
+/// (the mesh-shader vertex-stream table); the margin is there so a new pass does not have to
+/// touch this header, and the clamp keeps an overlong table from writing past the stack array.
+inline constexpr size_t kMaxTransientTableEntries = 16;
+
+struct BlasTriangleGeometry {
+  Buffer* vertexBuffer = nullptr; // float3 or float4 positions
+  uint32_t vertexCount = 0;
+  uint32_t vertexStride = 16; // bytes
+  Buffer* indexBuffer = nullptr; // uint32 indices
+  uint32_t indexCount = 0;
+};
+
+struct TlasInstance {
+  Buffer* blas = nullptr;
+  float transform[3][4]{}; // row-major 3x4
+  uint32_t instanceId = 0;
+  uint8_t mask = 0xFF;
 };
 
 class Device {
@@ -114,6 +157,52 @@ public:
 
   virtual void* nativeDevice() const = 0;
 
+  /// Copies `views` into a contiguous transient descriptor table and returns the heap index of the
+  /// first entry — the value to hand to setGraphicsRootSrvTable / setComputeRootSrvTable /
+  /// setComputeRootUavTable.
+  ///
+  /// The result is valid for the frame it was produced in; the backend recycles the range once the
+  /// GPU is past that frame. Prefer bindlessIndex() / srvIndex() / uavIndex() wherever the shader
+  /// can take an index — this is for the root slots that are declared as tables.
+  virtual uint32_t writeResourceTable(std::span<const ResourceView> views) {
+    (void)views;
+    return 0;
+  }
+  virtual uint32_t writeSamplerTable(std::span<Sampler* const> samplers) {
+    (void)samplers;
+    return 0;
+  }
+
+  // Homogeneous shorthands. No allocation: the table is built on the stack and clamped to
+  // kMaxTransientTableEntries. A null entry becomes the backend's null descriptor, so a caller may
+  // leave a slot of a fixed-width table unfilled (the vegetation cull table is sized for the
+  // maximum LOD count and only the active LODs are written).
+  uint32_t writeTextureTable(std::span<Texture* const> textures) {
+    return writeTable(textures, [](Texture* t) { return t ? ResourceView::srv(*t) : ResourceView{}; });
+  }
+  uint32_t writeTextureUavTable(std::span<Texture* const> textures) {
+    return writeTable(textures, [](Texture* t) { return t ? ResourceView::uav(*t) : ResourceView{}; });
+  }
+  uint32_t writeBufferSrvTable(std::span<Buffer* const> buffers) {
+    return writeTable(buffers, [](Buffer* b) { return b ? ResourceView::srv(*b) : ResourceView{}; });
+  }
+  uint32_t writeBufferUavTable(std::span<Buffer* const> buffers) {
+    return writeTable(buffers, [](Buffer* b) { return b ? ResourceView::uav(*b) : ResourceView{}; });
+  }
+
+  /// Number of bytes one TLAS instance descriptor occupies in the instance buffer that
+  /// buildTopLevelAS() reads, and the packing of `instances` into `dst` (which must be at least
+  /// raytracingInstanceDescSize() * instances.size() bytes).
+  ///
+  /// The layout is the backend's — D3D12_RAYTRACING_INSTANCE_DESC, VkAccelerationStructureInstanceKHR
+  /// — so the caller allocates and fills through these two calls rather than declaring the struct.
+  /// Zero / no-op when raytracing is unsupported.
+  virtual uint32_t raytracingInstanceDescSize() const { return 0; }
+  virtual void writeRaytracingInstanceDescs(std::span<const TlasInstance> instances, void* dst) {
+    (void)instances;
+    (void)dst;
+  }
+
   // Device-removed / TDR recovery.
   virtual bool isDeviceLost() const { return false; }
   virtual bool recoverFromDeviceLost() { return false; }
@@ -171,22 +260,17 @@ public:
   }
 
 private:
+  template <class T, class MakeView>
+  uint32_t writeTable(std::span<T* const> resources, MakeView makeView) {
+    ResourceView views[kMaxTransientTableEntries];
+    const size_t n = std::min(resources.size(), kMaxTransientTableEntries);
+    for (size_t i = 0; i < n; ++i) {
+      views[i] = makeView(resources[i]);
+    }
+    return writeResourceTable({views, n});
+  }
+
   std::vector<std::function<void()>> m_releaseCallbacks;
-};
-
-struct BlasTriangleGeometry {
-  Buffer* vertexBuffer = nullptr; // float3 or float4 positions
-  uint32_t vertexCount = 0;
-  uint32_t vertexStride = 16; // bytes
-  Buffer* indexBuffer = nullptr; // uint32 indices
-  uint32_t indexCount = 0;
-};
-
-struct TlasInstance {
-  Buffer* blas = nullptr;
-  float transform[3][4]{}; // row-major 3x4
-  uint32_t instanceId = 0;
-  uint8_t mask = 0xFF;
 };
 
 class SwapChain {
@@ -264,6 +348,8 @@ public:
     (void)z;
   }
   virtual void flushBarriers() {}
+  // Ends an open render pass / dynamic rendering. Vulkan needs this before ImGui begins its own.
+  virtual void endRendering() {}
   virtual void uavBarrier(Texture* resource) { (void)resource; }
   virtual void aliasingBarrier(Texture* before, Texture* after) {
     (void)before;
@@ -325,6 +411,8 @@ struct Texture {
   virtual Format format() const = 0;
   // Bindless SRV heap index (UINT32_MAX if none).
   virtual uint32_t bindlessIndex() const { return 0u; }
+  // Bindless UAV heap index, for compute passes that write this texture.
+  virtual uint32_t bindlessUavIndex() const { return 0u; }
   TextureUsage usage = TextureUsage::ShaderResource;
   ResourceState state = ResourceState::Common;
 };

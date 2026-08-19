@@ -1,6 +1,4 @@
 #include "Renderer/Weather/WaterSystem.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 #include "Platform/FileSystem.h"
 
 #include <glm/glm.hpp>

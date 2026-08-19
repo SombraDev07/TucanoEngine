@@ -14,10 +14,6 @@
 #include "Renderer/Weather/RainSystem.h"
 #include "Terrain/ClipmapTerrain.h"
 #include "Terrain/TerrainVirtualTexture.h"
-#include "RHI/DX12/DX12Common.h"
-#include "RHI/DX12/DX12CommandList.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <algorithm>
 #include <chrono>
@@ -144,11 +140,8 @@ uint64_t pushUploadCB(rhi::Buffer& buffer, uint64_t& bump, const void* data, siz
   return off;
 }
 
-::tucano::rhi::DX12Texture& asDxTex(rhi::Texture& t) { return static_cast<::tucano::rhi::DX12Texture&>(t); }
-::tucano::rhi::DX12Buffer& asDxBuf(rhi::Buffer& b) { return static_cast<::tucano::rhi::DX12Buffer&>(b); }
 uint32_t bindlessOf(rhi::Texture& t) { return t.bindlessIndex(); }
-uint32_t uavOf(rhi::Texture& t) { return asDxTex(t).uavIndex; }
-::tucano::rhi::DX12Sampler& asDxSamp(rhi::Sampler& s) { return static_cast<::tucano::rhi::DX12Sampler&>(s); }
+uint32_t uavOf(rhi::Texture& t) { return t.bindlessUavIndex(); }
 
 glm::mat4 computeCascadeVP(const Camera& cam, const glm::vec3& lightDir, float nearD, float farD, float& outSplit) {
   outSplit = farD;
@@ -236,7 +229,7 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
     rb.debugName = "ProbeFaceReadback";
     m_probeFaceReadback = m_device.createBuffer(rb, nullptr);
   }
-  cb.size = 512;
+  cb.size = 768;
   cb.debugName = "RainCB";
   m_rainCB = m_device.createBuffer(cb, nullptr);
   cb.size = 512ull * 16ull;
@@ -269,15 +262,40 @@ Renderer::Renderer(rhi::Device& device, uint32_t width, uint32_t height)
     m_drawMaterials = m_device.createBuffer(args, nullptr);
   }
 
-  m_rain.init(m_device);
-  m_rain.resize(m_device, m_width, m_height);
+  auto tryInit = [&](const char* name, auto&& fn) {
+    try {
+      fn();
+    } catch (const std::exception& e) {
+      std::cerr << "[Renderer] " << name << " skipped: " << e.what() << "\n";
+    }
+  };
+  tryInit("rain", [&] {
+    m_rain.init(m_device);
+    m_rain.resize(m_device, m_width, m_height);
+  });
   m_rain.params().enabled = false;
-  m_clouds.init(m_device);
-  m_clouds.resize(m_device, m_width, m_height);
-  m_water.init(m_device, m_rootFS);
-  // Needs the compute root signature, which createPhase3Pipelines() sets up.
-  m_fog.init(m_device, m_rootCS);
-  m_water.resize(m_width, m_height);
+  tryInit("clouds", [&] {
+#if !TUCANO_RHI_VULKAN
+    m_clouds.init(m_device);
+    m_clouds.resize(m_device, m_width, m_height);
+#endif
+  });
+  tryInit("water", [&] {
+#if !TUCANO_RHI_VULKAN
+    m_water.init(m_device, m_rootFS);
+    m_water.resize(m_width, m_height);
+#endif
+  });
+  tryInit("fog", [&] {
+#if !TUCANO_RHI_VULKAN
+    m_fog.init(m_device, m_rootCS);
+#endif
+  });
+#if TUCANO_RHI_VULKAN
+  m_clouds.params().enabled = false;
+  m_water.params().enabled = false;
+  m_fog.params().enabled = false;
+#endif
 
   m_rtScene.init(m_device);
   if (m_device.supportsRaytracing()) {
@@ -572,6 +590,9 @@ void Renderer::createTargets() {
 void Renderer::createPipelines() {
   m_root = m_device.createRootSignature(true);
   m_rootFS = m_device.createRootSignature(false);
+  if (!m_rootCS) {
+    m_rootCS = m_device.createComputeRootSignature();
+  }
 
   auto load = [](const char* file) { return rhi::ShaderBytecode::loadFromFile(shaderPath(file)); };
 
@@ -764,7 +785,9 @@ void Renderer::createPipelines() {
 }
 
 void Renderer::createPhase3Pipelines() {
-  m_rootCS = m_device.createComputeRootSignature();
+  if (!m_rootCS) {
+    m_rootCS = m_device.createComputeRootSignature();
+  }
   auto load = [](const char* file) { return rhi::ShaderBytecode::loadFromFile(shaderPath(file)); };
 
   auto makeFS = [&](const char* ps, rhi::Format fmt) {
@@ -779,14 +802,18 @@ void Renderer::createPhase3Pipelines() {
     return m_device.createGraphicsPipeline(d);
   };
 
-  m_ssgiPSO = makeFS("Phase3_PSSSGI.cso", rhi::Format::R16G16B16A16_FLOAT);
-  m_ssrPSO = makeFS("Phase3_PSSSR.cso", rhi::Format::R16G16B16A16_FLOAT);
-  m_composePSO = makeFS("Phase3_PSCompose.cso", rhi::Format::R16G16B16A16_FLOAT);
-  m_ddgiSamplePSO = makeFS("Phase3_PSDDGI.cso", rhi::Format::R16G16B16A16_FLOAT);
-  m_visAlbedoPSO = makeFS("Phase3_PSVisAlbedo.cso", rhi::Format::R8G8B8A8_UNORM_SRGB);
-  m_visNormalPSO = makeFS("Phase3_PSVisNormal.cso", rhi::Format::R8G8B8A8_UNORM);
-  m_visOrmPSO = makeFS("Phase3_PSVisORM.cso", rhi::Format::R8G8B8A8_UNORM);
-  m_visEmissivePSO = makeFS("Phase3_PSVisEmissive.cso", rhi::Format::R8G8B8A8_UNORM);
+  try {
+    m_ssgiPSO = makeFS("Phase3_PSSSGI.cso", rhi::Format::R16G16B16A16_FLOAT);
+    m_ssrPSO = makeFS("Phase3_PSSSR.cso", rhi::Format::R16G16B16A16_FLOAT);
+    m_composePSO = makeFS("Phase3_PSCompose.cso", rhi::Format::R16G16B16A16_FLOAT);
+    m_ddgiSamplePSO = makeFS("Phase3_PSDDGI.cso", rhi::Format::R16G16B16A16_FLOAT);
+    m_visAlbedoPSO = makeFS("Phase3_PSVisAlbedo.cso", rhi::Format::R8G8B8A8_UNORM_SRGB);
+    m_visNormalPSO = makeFS("Phase3_PSVisNormal.cso", rhi::Format::R8G8B8A8_UNORM);
+    m_visOrmPSO = makeFS("Phase3_PSVisORM.cso", rhi::Format::R8G8B8A8_UNORM);
+    m_visEmissivePSO = makeFS("Phase3_PSVisEmissive.cso", rhi::Format::R8G8B8A8_UNORM);
+  } catch (const std::exception& e) {
+    std::cerr << "[Renderer] Phase3 PSOs skipped: " << e.what() << "\n";
+  }
 
   {
     rhi::GraphicsPipelineDesc d{};
@@ -841,13 +868,16 @@ void Renderer::createPhase3Pipelines() {
       m_settings.enableMeshShaders = false;
     }
   }
-  {
+  try {
     rhi::ComputePipelineDesc d{};
     d.rootSignature = m_rootCS;
     d.cs = load("DDGIUpdate_CSMain.cso");
     m_ddgiUpdatePSO = m_device.createComputePipeline(d);
+  } catch (const std::exception& e) {
+    std::cerr << "[Renderer] DDGI update skipped: " << e.what() << "\n";
+    m_ddgiUpdatePSO = nullptr;
   }
-  {
+  try {
     rhi::GraphicsPipelineDesc d{};
     d.rootSignature = m_root;
     d.vs = load("ProbeCapture_VSMain.cso");
@@ -857,12 +887,18 @@ void Renderer::createPhase3Pipelines() {
     d.depthEnable = true;
     d.cullMode = rhi::CullMode::Back;
     m_probeCapturePSO = m_device.createGraphicsPipeline(d);
+  } catch (const std::exception& e) {
+    std::cerr << "[Renderer] ProbeCapture skipped: " << e.what() << "\n";
+    m_probeCapturePSO = nullptr;
   }
-  {
+  try {
     rhi::ComputePipelineDesc d{};
     d.rootSignature = m_rootCS;
     d.cs = load("ProbeCubeToLatLong_CSMain.cso");
     m_probeConvertPSO = m_device.createComputePipeline(d);
+  } catch (const std::exception& e) {
+    std::cerr << "[Renderer] ProbeConvert skipped: " << e.what() << "\n";
+    m_probeConvertPSO = nullptr;
   }
   if (m_device.supportsRaytracing()) {
     rhi::ComputePipelineDesc d{};
@@ -874,21 +910,25 @@ void Renderer::createPhase3Pipelines() {
     d.cs = load("RTReflections_CSMain.cso");
     m_rtReflectionsPSO = m_device.createComputePipeline(d);
   }
-  {
+  try {
+#if !TUCANO_RHI_VULKAN
     rhi::ComputePipelineDesc d{};
     d.rootSignature = m_rootCS;
     d.cs = load("MeshletCull_CSMain.cso");
     m_meshletCullPSO = m_device.createComputePipeline(d);
-  }
-  {
-    rhi::ComputePipelineDesc d{};
-    d.rootSignature = m_rootCS;
     d.cs = load("MeshletCompact_CSMain.cso");
     m_meshletCompactPSO = m_device.createComputePipeline(d);
     d.cs = load("HiZPyramid_CSCopy.cso");
     m_hizCopyPSO = m_device.createComputePipeline(d);
     d.cs = load("HiZPyramid_CSReduce.cso");
     m_hizReducePSO = m_device.createComputePipeline(d);
+#endif
+  } catch (const std::exception& e) {
+    std::cerr << "[Renderer] meshlet/HiZ compute skipped: " << e.what() << "\n";
+    m_meshletCullPSO = nullptr;
+    m_meshletCompactPSO = nullptr;
+    m_hizCopyPSO = nullptr;
+    m_hizReducePSO = nullptr;
   }
   {
     rhi::ComputePipelineDesc d{};
@@ -926,7 +966,15 @@ void Renderer::resize(uint32_t width, uint32_t height) {
 void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& scene) {
   const auto t0 = std::chrono::steady_clock::now();
   m_drawCalls = 0;
-  auto& dxDevice = static_cast<::tucano::rhi::DX12Device&>(m_device);
+#if TUCANO_RHI_VULKAN
+  // UI / key 9 / Environment panel can flip these on. Rain --seconds 30 GPUVM'd
+  // 2026-08-18; clouds/water/fog are untested 3D/volume paths. Latch every frame.
+  m_rain.params().enabled = false;
+  m_rain.params().enableSceneRain = false;
+  m_clouds.params().enabled = false;
+  m_water.params().enabled = false;
+  m_fog.params().enabled = false;
+#endif
 
   // Deferred execute hooks — filled after Frame/Light CBs, invoked by m_graph.execute.
   std::function<void(rhi::CommandList&)> rgShadow;
@@ -1463,8 +1511,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     return offset;
   };
 
-  D3D12_CPU_DESCRIPTOR_HANDLE sampCpu[] = {asDxSamp(*m_samplerLinear).cpu};
-  const uint32_t sampTable = dxDevice.writeSamplerTable(sampCpu, 1);
+  rhi::Sampler* sampCpu[] = {m_samplerLinear.get()};
+  const uint32_t sampTable = m_device.writeSamplerTable(sampCpu);
   // VisResolve indexes a single frame-global material buffer.  Index zero remains
   // background, so IDs written by the visibility pass are never ambiguous.
   std::vector<DrawMaterialGPU> drawMaterials(1);
@@ -1568,8 +1616,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       cmd->setGraphicsRootSamplerTable(4, sampTable);
       {
         // space1 t0: skinning palette, same buffer the g-buffer pass reads.
-        D3D12_CPU_DESCRIPTOR_HANDLE skinSrv[] = {asDxBuf(*m_skinningBuffer).srvCpu};
-        cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(skinSrv, 1));
+        rhi::Buffer* skinSrv[] = {m_skinningBuffer.get()};
+        cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(skinSrv));
       }
       for (int cascade = 0; cascade < 4; ++cascade) {
         if (m_settings.enableToroidalShadows && !m_shadowAtlas.isDirty(cascade)) {
@@ -1660,10 +1708,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
               cmd->setGraphicsRootCBV(2, *m_objectCB, pushObjectCB(shadowOcb));
               RootXform xform{frame.lightViewProj[cascade], glm::mat4(1.0f)};
               cmd->setGraphicsRootConstants(0, &xform, 32);
-              D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {asDxBuf(*cloud.instanceBuffer).srvCpu,
-                                                    asDxBuf(*cloud.instanceBuffer).srvCpu,
-                                                    asDxBuf(*cloud.visibleBuffer).srvCpu};
-              cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(srvs, 3));
+              rhi::Buffer* srvs[] = {cloud.instanceBuffer, cloud.instanceBuffer, cloud.visibleBuffer};
+              cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(srvs));
               cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
               cmd->setVertexBuffer(cloud.mesh->vertexBuffer(), sizeof(Vertex));
               cmd->setIndexBuffer(cloud.mesh->indexBuffer(), true);
@@ -1673,8 +1719,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
             // Restore mesh shadow PSO for subsequent cascades' object loops.
             cmd->setPipeline(*m_shadowPSO);
             {
-              D3D12_CPU_DESCRIPTOR_HANDLE skinSrv[] = {asDxBuf(*m_skinningBuffer).srvCpu};
-              cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(skinSrv, 1));
+              rhi::Buffer* skinSrv[] = {m_skinningBuffer.get()};
+              cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(skinSrv));
             }
           }
         }
@@ -1826,15 +1872,13 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         ocb.worldInvTranspose = glm::transpose(glm::inverse(obj.worldMatrix));
         ocb.textureIndices = {objectMaterialBase[oi], 0, 0, 0};
         const uint64_t off = pushObjectCB(ocb);
-        D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {
-            asDxBuf(*obj.mesh->meshletGpuBuffer()).srvCpu, asDxBuf(*obj.mesh->meshPackedIndices()).srvCpu,
-            asDxBuf(*obj.mesh->meshPositions()).srvCpu, asDxBuf(*obj.mesh->meshUVs()).srvCpu,
-            asDxBuf(*obj.mesh->meshNormals()).srvCpu};
+        rhi::Buffer* srvs[] = {obj.mesh->meshletGpuBuffer(), obj.mesh->meshPackedIndices(),
+                               obj.mesh->meshPositions(), obj.mesh->meshUVs(), obj.mesh->meshNormals()};
         RootXform xform{frame.viewProj, obj.worldMatrix};
         cmd->setPipeline(*m_meshletMeshPSO);
         cmd->setGraphicsRootConstants(0, &xform, 32);
         cmd->setGraphicsRootCBV(2, *m_objectCB, off);
-        cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(srvs, 5));
+        cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(srvs));
         cmd->dispatchMesh(obj.mesh->meshletCount(), 1, 1);
         ++m_drawCalls;
         m_meshletsTotal += obj.mesh->meshletCount();
@@ -1853,25 +1897,25 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         } ccb{frame.viewProj, obj.worldMatrix, frame.cameraPos, obj.mesh->meshletCount(), 0,
               m_settings.enableHiZOcclusion ? 1u : 0u, static_cast<uint32_t>(m_hizMips.size()),
               glm::vec2(m_width, m_height), {}};
-        D3D12_CPU_DESCRIPTOR_HANDLE cullSrvs[] = {
-            asDxBuf(*obj.mesh->meshletGpuBuffer()).srvCpu, asDxTex(*m_hizMips[2]).srvCpu};
-        D3D12_CPU_DESCRIPTOR_HANDLE cullUavs[] = {asDxBuf(*m_indirectArgs).uavCpu};
+        const rhi::ResourceView cullSrvs[] = {rhi::ResourceView::srv(*obj.mesh->meshletGpuBuffer()),
+                                              rhi::ResourceView::srv(*m_hizMips[2])};
+        rhi::Buffer* cullUavs[] = {m_indirectArgs.get()};
         updateUploadCB(*m_meshletCullCB, &ccb, sizeof(ccb));
         cmd->setRootSignature(*m_rootCS);
         cmd->setPipeline(*m_meshletCullPSO);
         cmd->transition(*m_indirectArgs, rhi::ResourceState::UnorderedAccess);
         cmd->setComputeRootCBV(1, *m_meshletCullCB);
-        cmd->setComputeRootSrvTable(2, dxDevice.writeSrvTable(cullSrvs, 2));
-        cmd->setComputeRootUavTable(3, dxDevice.writeUavTable(cullUavs, 1));
+        cmd->setComputeRootSrvTable(2, m_device.writeResourceTable(cullSrvs));
+        cmd->setComputeRootUavTable(3, m_device.writeBufferUavTable(cullUavs));
         cmd->dispatch((obj.mesh->meshletCount() + 63u) / 64u, 1, 1);
         struct CompactCBData { uint32_t srcCount, srcOffset, clearOnly, pad; } compact{obj.mesh->meshletCount(), 0, 1, 0};
-        D3D12_CPU_DESCRIPTOR_HANDLE compactSrvs[] = {asDxBuf(*m_indirectArgs).srvCpu};
-        D3D12_CPU_DESCRIPTOR_HANDLE compactUavs[] = {asDxBuf(*m_compactedArgs).uavCpu, asDxBuf(*m_indirectCount).uavCpu};
+        rhi::Buffer* compactSrvs[] = {m_indirectArgs.get()};
+        rhi::Buffer* compactUavs[] = {m_compactedArgs.get(), m_indirectCount.get()};
         cmd->setPipeline(*m_meshletCompactPSO);
         updateUploadCB(*m_meshletCullCB, &compact, sizeof(compact));
         cmd->setComputeRootCBV(1, *m_meshletCullCB);
-        cmd->setComputeRootSrvTable(2, dxDevice.writeSrvTable(compactSrvs, 1));
-        cmd->setComputeRootUavTable(3, dxDevice.writeUavTable(compactUavs, 2));
+        cmd->setComputeRootSrvTable(2, m_device.writeBufferSrvTable(compactSrvs));
+        cmd->setComputeRootUavTable(3, m_device.writeBufferUavTable(compactUavs));
         cmd->dispatch(1, 1, 1);
         compact.clearOnly = 0;
         updateUploadCB(*m_meshletCullCB, &compact, sizeof(compact));
@@ -1883,12 +1927,12 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         ocb.textureIndices = {objectMaterialBase[oi], 1, 0, 0};
         const uint64_t off = pushObjectCB(ocb);
         RootXform xform{frame.viewProj, obj.worldMatrix};
-        D3D12_CPU_DESCRIPTOR_HANDLE meshletSrv[] = {asDxBuf(*obj.mesh->meshletGpuBuffer()).srvCpu};
+        rhi::Buffer* meshletSrv[] = {obj.mesh->meshletGpuBuffer()};
         cmd->setRootSignature(*m_root);
         cmd->setPipeline(*m_visBufferPSO);
         cmd->setGraphicsRootConstants(0, &xform, 32);
         cmd->setGraphicsRootCBV(2, *m_objectCB, off);
-        cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(meshletSrv, 1));
+        cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(meshletSrv));
         cmd->setGraphicsRootSamplerTable(4, sampTable);
         cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
         cmd->setVertexBuffer(obj.mesh->vertexBuffer(), sizeof(Vertex));
@@ -1955,29 +1999,28 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
               static_cast<uint32_t>(m_hizMips.size()),
               glm::vec2(float(m_width), float(m_height)),
               {}};
-        D3D12_CPU_DESCRIPTOR_HANDLE cullSrvs[] = {asDxBuf(*obj.mesh->meshletGpuBuffer()).srvCpu,
-                                                   asDxTex(*m_hizMips[2]).srvCpu};
-        D3D12_CPU_DESCRIPTOR_HANDLE cullUavs[] = {asDxBuf(*m_indirectArgs).uavCpu};
+        const rhi::ResourceView cullSrvs[] = {rhi::ResourceView::srv(*obj.mesh->meshletGpuBuffer()),
+                                              rhi::ResourceView::srv(*m_hizMips[2])};
+        rhi::Buffer* cullUavs[] = {m_indirectArgs.get()};
         updateUploadCB(*m_meshletCullCB, &ccb, sizeof(ccb));
         cmd->setRootSignature(*m_rootCS);
         cmd->setPipeline(*m_meshletCullPSO);
         cmd->transition(*m_indirectArgs, rhi::ResourceState::UnorderedAccess);
         cmd->setComputeRootCBV(1, *m_meshletCullCB);
-        cmd->setComputeRootSrvTable(2, dxDevice.writeSrvTable(cullSrvs, 2));
-        cmd->setComputeRootUavTable(3, dxDevice.writeUavTable(cullUavs, 1));
+        cmd->setComputeRootSrvTable(2, m_device.writeResourceTable(cullSrvs));
+        cmd->setComputeRootUavTable(3, m_device.writeBufferUavTable(cullUavs));
         cmd->dispatch((obj.mesh->meshletCount() + 63u) / 64u, 1, 1);
 
         struct CompactCBData {
           uint32_t srcCount, srcOffset, clearOnly, pad;
         } compact{obj.mesh->meshletCount(), 0, 1, 0};
-        D3D12_CPU_DESCRIPTOR_HANDLE compactSrvs[] = {asDxBuf(*m_indirectArgs).srvCpu};
-        D3D12_CPU_DESCRIPTOR_HANDLE compactUavs[] = {asDxBuf(*m_compactedArgs).uavCpu,
-                                                     asDxBuf(*m_indirectCount).uavCpu};
+        rhi::Buffer* compactSrvs[] = {m_indirectArgs.get()};
+        rhi::Buffer* compactUavs[] = {m_compactedArgs.get(), m_indirectCount.get()};
         cmd->setPipeline(*m_meshletCompactPSO);
         updateUploadCB(*m_meshletCullCB, &compact, sizeof(compact));
         cmd->setComputeRootCBV(1, *m_meshletCullCB);
-        cmd->setComputeRootSrvTable(2, dxDevice.writeSrvTable(compactSrvs, 1));
-        cmd->setComputeRootUavTable(3, dxDevice.writeUavTable(compactUavs, 2));
+        cmd->setComputeRootSrvTable(2, m_device.writeBufferSrvTable(compactSrvs));
+        cmd->setComputeRootUavTable(3, m_device.writeBufferUavTable(compactUavs));
         cmd->dispatch(1, 1, 1);
         compact.clearOnly = 0;
         updateUploadCB(*m_meshletCullCB, &compact, sizeof(compact));
@@ -1998,15 +2041,14 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         ocb.worldInvTranspose = glm::transpose(glm::inverse(obj.worldMatrix));
         const uint64_t off = pushObjectCB(ocb);
         RootXform xform{frame.viewProj, obj.worldMatrix};
-        D3D12_CPU_DESCRIPTOR_HANDLE space1[] = {asDxBuf(*m_drawMaterials).srvCpu,
-                                                asDxBuf(*obj.mesh->meshletGpuBuffer()).srvCpu};
+        rhi::Buffer* space1[] = {m_drawMaterials.get(), obj.mesh->meshletGpuBuffer()};
         cmd->setRootSignature(*m_root);
         cmd->setPipeline(*m_gbufferMeshletPSO);
         cmd->setGraphicsRootConstants(0, &xform, 32);
         cmd->setGraphicsRootCBV(2, *m_objectCB, off);
         cmd->setGraphicsRootSrvTable(3, 0);
         cmd->setGraphicsRootSamplerTable(4, sampTable);
-        cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(space1, 2));
+        cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(space1));
         cmd->setPrimitiveTopology(rhi::PrimitiveTopology::TriangleList);
         cmd->setVertexBuffer(obj.mesh->vertexBuffer(), sizeof(Vertex));
         cmd->setIndexBuffer(*obj.mesh->meshletIndexBuffer(), true);
@@ -2125,10 +2167,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         RootXform xform{frame.viewProj, useBillboard ? camBasis : glm::mat4(1.0f)};
         cmd->setGraphicsRootConstants(0, &xform, 32);
         cmd->setGraphicsRootCBV(2, *m_objectCB, off);
-        D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {asDxBuf(*cloud.instanceBuffer).srvCpu,
-                                              asDxBuf(*cloud.instanceBuffer).srvCpu,
-                                              asDxBuf(*cloud.visibleBuffer).srvCpu};
-        cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(srvs, 3));
+        rhi::Buffer* srvs[] = {cloud.instanceBuffer, cloud.instanceBuffer, cloud.visibleBuffer};
+        cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(srvs));
         cmd->setVertexBuffer(cloud.mesh->vertexBuffer(), sizeof(Vertex));
         cmd->setIndexBuffer(cloud.mesh->indexBuffer(), true);
         cmd->drawIndexedIndirect(*cloud.argsBuffer, 0);
@@ -2277,10 +2317,10 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     rhi::Texture* gbufferRTs[] = {m_albedo.get(), m_normal.get(), m_orm.get(), m_emissive.get(), m_depthColor.get()};
     cmd->setRenderTargets(gbufferRTs, nullptr);
     cmd->setPipeline(*m_visResolvePSO);
-    D3D12_CPU_DESCRIPTOR_HANDLE mats[] = {asDxBuf(*m_drawMaterials).srvCpu};
+    rhi::Buffer* mats[] = {m_drawMaterials.get()};
     cmd->setGraphicsRootCBV(1, *m_phase3CB, p3Off);
     cmd->setGraphicsRootSrvTable(3, 0);
-    cmd->setGraphicsRootSrvTable(5, dxDevice.writeSrvTable(mats, 1));
+    cmd->setGraphicsRootSrvTable(5, m_device.writeBufferSrvTable(mats));
     cmd->setGraphicsRootSamplerTable(4, sampTable);
     cmd->draw(3);
     ++m_drawCalls;
@@ -2585,9 +2625,14 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     p3cb.texIds2 = {bindlessOf(*m_prefiltered), bindlessOf(*m_visId), sdfId, shId};
     const uint32_t prevDepthId =
         (m_depthHistory && m_hasPrevCamera) ? bindlessOf(*m_depthHistory) : bindlessOf(*m_depthColor);
-    const uint32_t hiz0 = m_hizMips[0] ? bindlessOf(*m_hizMips[0]) : 0;
-    const uint32_t hiz2 = m_hizMips[2] ? bindlessOf(*m_hizMips[2]) : hiz0;
-    const uint32_t probeId = m_reflectionProbes.atlas() ? bindlessOf(*m_reflectionProbes.atlas()) : 0;
+    // Hi-Z / probe atlas are UAV+SRV and stay unwritten when those passes are off.
+    // Binding a live index made Phase3 sample GENERAL images through a READ_ONLY
+    // descriptor (RADV GPUVM). Only expose them after the pass has actually run.
+    const bool hizReady = m_settings.enableHiZOcclusion && m_hizCopyPSO && m_hizMips[0];
+    const uint32_t hiz0 = hizReady ? bindlessOf(*m_hizMips[0]) : 0;
+    const uint32_t hiz2 = (hizReady && m_hizMips[2]) ? bindlessOf(*m_hizMips[2]) : hiz0;
+    const uint32_t probeId =
+        (m_probeMipsSeeded && m_reflectionProbes.atlas()) ? bindlessOf(*m_reflectionProbes.atlas()) : 0;
     p3cb.texIds3 = {prevDepthId, hiz0, hiz2, probeId};
   };
   auto bindPhase3 = [&](rhi::CommandList& c, rhi::Texture& historyOrBlack, rhi::Texture& ssrOrAtlas) {
@@ -2661,12 +2706,15 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
         m_settings.enableRTReflections && m_rtScene.ready() && m_rtReflectionsPSO && m_rtCB && m_rtScene.tlas();
     if (wantSsr && !useRtRefl) {
       rhi::Texture* ssrRT = m_ssr.get();
+      cmd->transition(*m_hdr, rhi::ResourceState::ShaderResource);
+      cmd->transition(*m_depthColor, rhi::ResourceState::ShaderResource);
+      cmd->transition(*m_ssr, rhi::ResourceState::RenderTarget);
       cmd->setRenderTargets(std::span<rhi::Texture*>(&ssrRT, 1), nullptr);
       const float clearSsr[4] = {0, 0, 0, 0};
       cmd->clearRenderTarget(*m_ssr, clearSsr);
       cmd->setRootSignature(*m_rootFS);
       cmd->setPipeline(*m_ssrPSO);
-      bindPhase3(*cmd, m_defaultBlack->resource(), *m_ssr);
+      bindPhase3(*cmd, m_defaultBlack->resource(), m_defaultBlack->resource());
       cmd->draw(3);
       ++m_drawCalls;
     } else if (wantPhase3) {
@@ -2718,6 +2766,10 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     }
     rhi::Texture* giSrc = ddgiSampled ? m_ssgiHistory.get() : m_ssgi.get();
     rhi::Texture* compRT = m_hdrCompose.get();
+    cmd->transition(*m_hdr, rhi::ResourceState::ShaderResource);
+    cmd->transition(*m_ssr, rhi::ResourceState::ShaderResource);
+    cmd->transition(*giSrc, rhi::ResourceState::ShaderResource);
+    cmd->transition(*compRT, rhi::ResourceState::RenderTarget);
     cmd->setRenderTargets(std::span<rhi::Texture*>(&compRT, 1), nullptr);
     cmd->setRootSignature(*m_rootFS);
     cmd->setPipeline(*m_composePSO);
@@ -2800,6 +2852,8 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     std::memcpy(static_cast<char*>(m_postCB->mapped()) + m_postCBBump, &ccb, sizeof(ccb));
     const uint64_t ccbOff = m_postCBBump;
     m_postCBBump += ccbAligned;
+    cmd->transition(*contactSrc, rhi::ResourceState::ShaderResource);
+    cmd->transition(*contactDst, rhi::ResourceState::RenderTarget);
     cmd->setRenderTargets(std::span<rhi::Texture*>(&contactDst, 1), nullptr);
     cmd->setRootSignature(*m_rootFS);
     cmd->setPipeline(*m_contactShadowPSO);
@@ -2853,6 +2907,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
 
   rgExposure = [&](rhi::CommandList& c) {
     cmd = &c;
+    cmd->transition(*postHdr, rhi::ResourceState::ShaderResource);
     ExposurePassContext ectx{m_device,
                              *cmd,
                              *m_rootCS,
@@ -2890,13 +2945,13 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     cmd->setRootSignature(*m_rootCS);
     hiz.srcSize = {m_width, m_height};
     hiz.dstSize = hiz.srcSize;
-    D3D12_CPU_DESCRIPTOR_HANDLE src[] = {asDxTex(*m_depthColor).srvCpu};
-    D3D12_CPU_DESCRIPTOR_HANDLE dst[] = {asDxTex(*m_hizMips[0]).uavCpu};
+    rhi::Texture* src[] = {m_depthColor.get()};
+    rhi::Texture* dst[] = {m_hizMips[0].get()};
     updateUploadCB(*m_meshletCullCB, &hiz, sizeof(hiz));
     cmd->setPipeline(*m_hizCopyPSO);
     cmd->setComputeRootCBV(1, *m_meshletCullCB);
-    cmd->setComputeRootSrvTable(2, dxDevice.writeSrvTable(src, 1));
-    cmd->setComputeRootUavTable(3, dxDevice.writeUavTable(dst, 1));
+    cmd->setComputeRootSrvTable(2, m_device.writeTextureTable(src));
+    cmd->setComputeRootUavTable(3, m_device.writeTextureUavTable(dst));
     cmd->dispatch((m_width + 7u) / 8u, (m_height + 7u) / 8u, 1);
     for (uint32_t mip = 1; mip < m_hizMips.size(); ++mip) {
       cmd->transition(*m_hizMips[mip - 1], rhi::ResourceState::ShaderResource);
@@ -2904,12 +2959,12 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
       hiz.srcSize = {m_hizMips[mip - 1]->width(), m_hizMips[mip - 1]->height()};
       hiz.dstSize = {m_hizMips[mip]->width(), m_hizMips[mip]->height()};
       hiz.mip = mip;
-      D3D12_CPU_DESCRIPTOR_HANDLE mipSrc[] = {asDxTex(*m_hizMips[mip - 1]).srvCpu};
-      D3D12_CPU_DESCRIPTOR_HANDLE mipDst[] = {asDxTex(*m_hizMips[mip]).uavCpu};
+      rhi::Texture* mipSrc[] = {m_hizMips[mip - 1].get()};
+      rhi::Texture* mipDst[] = {m_hizMips[mip].get()};
       updateUploadCB(*m_meshletCullCB, &hiz, sizeof(hiz));
       cmd->setPipeline(*m_hizReducePSO);
-      cmd->setComputeRootSrvTable(2, dxDevice.writeSrvTable(mipSrc, 1));
-      cmd->setComputeRootUavTable(3, dxDevice.writeUavTable(mipDst, 1));
+      cmd->setComputeRootSrvTable(2, m_device.writeTextureTable(mipSrc));
+      cmd->setComputeRootUavTable(3, m_device.writeTextureUavTable(mipDst));
       cmd->dispatch((hiz.dstSize.x + 7u) / 8u, (hiz.dstSize.y + 7u) / 8u, 1);
     }
   };
@@ -2940,6 +2995,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
   };
 
   // ---- Reflection probe cube-face RT capture (amortized 1 probe / frame) ----
+#if !TUCANO_RHI_VULKAN
   if ((m_settings.enableSSR || m_settings.enableVoxelGI) && m_probeCapturePSO && m_reflectionProbes.ready() &&
       m_reflectionProbes.faceAtlas() && m_reflectionProbes.faceDepth()) {
     const uint32_t probeIdx = m_probeBakeCursor % ReflectionProbes::kMaxProbes;
@@ -3051,6 +3107,7 @@ void Renderer::render(rhi::CommandList*& cmd, rhi::Texture& swapChainRT, Scene& 
     cmd->transition(*m_reflectionProbes.atlas(), rhi::ResourceState::ShaderResource);
     m_probeBakeCursor++;
   }
+#endif
 
   // Build / refresh BLAS+TLAS only when a Ray Query pass is enabled.
   if (m_rtScene.supported() &&

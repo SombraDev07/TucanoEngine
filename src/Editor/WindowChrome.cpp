@@ -1,5 +1,6 @@
 #include "Editor/WindowChrome.h"
 
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -170,3 +171,19 @@ long long WindowChrome::handle(void* hwndRaw, unsigned int msg, unsigned long lo
 }
 
 } // namespace tucano::editor
+
+#else
+
+namespace tucano::editor {
+
+WindowChrome::~WindowChrome() { shutdown(); }
+bool WindowChrome::install(void*) { return false; }
+void WindowChrome::shutdown() {}
+bool WindowChrome::isMaximized() const { return false; }
+void WindowChrome::minimize() {}
+void WindowChrome::toggleMaximize() {}
+void WindowChrome::requestClose() {}
+
+} // namespace tucano::editor
+
+#endif // _WIN32

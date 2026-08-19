@@ -138,4 +138,10 @@ struct ClearValue {
   uint8_t stencil = 0;
 };
 
+// Bytes per texel, and the unaligned bytes per row. Backend-neutral: both are properties of the
+// format, not of any API. (A backend's own copy alignment — 256 B rows on D3D12 — is applied on top
+// of this inside that backend.)
+uint32_t formatStride(Format format);
+uint32_t formatRowPitch(Format format, uint32_t width);
+
 } // namespace tucano::rhi

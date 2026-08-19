@@ -1,7 +1,4 @@
 #include "Terrain/HeightmapQuery.h"
-#include "RHI/DX12/DX12Resource.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12CommandList.h"
 
 #include <cstring>
 
@@ -74,8 +71,7 @@ float HeightmapQuery::getResult(uint32_t queryIndex) const {
 void HeightmapQuery::dispatch(rhi::Device& device, rhi::CommandList& cmd, const Heightmap& hm) {
 	if (m_pendingCount == 0) return;
 
-	auto& dxDevice = static_cast<rhi::DX12Device&>(device);
-	auto& queryBuf = static_cast<rhi::DX12Buffer&>(*m_queryBuffer);
+	rhi::Buffer& queryBuf = *m_queryBuffer;
 
 	// Stage the query coordinates in the CPU-visible upload buffer, then copy them into the UAV the
 	// shader reads. Writing straight to the UAV is impossible — it lives on the default heap.
@@ -121,14 +117,14 @@ void HeightmapQuery::dispatch(rhi::Device& device, rhi::CommandList& cmd, const 
 	// through an undefined sampler — the source of the systematic height error before this.
 	cmd.setComputeRootSamplerTable(4, 0);
 	cmd.transition(queryBuf, rhi::ResourceState::UnorderedAccess);
-	D3D12_CPU_DESCRIPTOR_HANDLE uavs[] = {queryBuf.uavCpu};
-	cmd.setComputeRootUavTable(3, dxDevice.writeUavTable(uavs, 1));
+	rhi::Buffer* uavs[] = {&queryBuf};
+	cmd.setComputeRootUavTable(3, device.writeBufferUavTable(uavs));
 
 	uint32_t groups = (m_pendingCount + 63) / 64;
 	cmd.dispatch(groups, 1, 1);
 	cmd.uavBarrier(nullptr);
 
-	auto& rb = static_cast<rhi::DX12Buffer&>(*m_readbackBuffers[m_readbackFrame]);
+	rhi::Buffer& rb = *m_readbackBuffers[m_readbackFrame];
 	cmd.copyBuffer(rb, 0, queryBuf, 0, m_pendingCount * sizeof(GpuHeightQuery));
 
 	m_readbackFrame = (m_readbackFrame + 1) % kRingFrames;
@@ -137,7 +133,7 @@ void HeightmapQuery::dispatch(rhi::Device& device, rhi::CommandList& cmd, const 
 
 void HeightmapQuery::readback(rhi::Device& device) {
 	uint32_t frame = (m_readbackFrame + kRingFrames - 2) % kRingFrames;
-	auto& rb = static_cast<rhi::DX12Buffer&>(*m_readbackBuffers[frame]);
+	rhi::Buffer& rb = *m_readbackBuffers[frame];
 	GpuHeightQuery* data = static_cast<GpuHeightQuery*>(rb.mapped());
 	if (!data) return;
 

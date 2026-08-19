@@ -54,22 +54,32 @@ FetchContent_GetProperties(imgui)
 if(NOT imgui_POPULATED)
   FetchContent_Populate(imgui)
 endif()
-add_library(imgui_lib STATIC
+set(TUCANO_IMGUI_SOURCES
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
   ${imgui_SOURCE_DIR}/imgui_demo.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp
-  # ImGuizmo (MIT) — vendored, needs imgui_internal.h so it builds alongside imgui itself.
   ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo/ImGuizmo.cpp
 )
+if(TUCANO_RHI STREQUAL "dx12")
+  list(APPEND TUCANO_IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_dx12.cpp)
+elseif(TUCANO_RHI STREQUAL "vulkan")
+  list(APPEND TUCANO_IMGUI_SOURCES ${imgui_SOURCE_DIR}/backends/imgui_impl_vulkan.cpp)
+endif()
+add_library(imgui_lib STATIC ${TUCANO_IMGUI_SOURCES})
 target_include_directories(imgui_lib PUBLIC
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
   ${CMAKE_SOURCE_DIR}/third_party/ImGuizmo)
-target_link_libraries(imgui_lib PUBLIC glfw d3d12 dxgi)
+if(TUCANO_RHI STREQUAL "dx12")
+  target_link_libraries(imgui_lib PUBLIC glfw d3d12 dxgi)
+elseif(TUCANO_RHI STREQUAL "vulkan")
+  target_link_libraries(imgui_lib PUBLIC glfw Vulkan::Vulkan)
+else()
+  target_link_libraries(imgui_lib PUBLIC glfw)
+endif()
 # IMGUI_USE_WCHAR32 makes ImWchar 32-bit. The Material Design icon codepoints run past U+FFFF, and
 # with the default 16-bit index they are unreachable — icons render as nothing, silently. This must
 # stay PUBLIC: a mismatch between imgui_lib and its callers changes struct layouts.
@@ -94,6 +104,8 @@ set(TARGET_HELLO_WORLD OFF CACHE BOOL "" FORCE)
 set(TARGET_PERFORMANCE_TEST OFF CACHE BOOL "" FORCE)
 set(TARGET_SAMPLES OFF CACHE BOOL "" FORCE)
 set(TARGET_VIEWER OFF CACHE BOOL "" FORCE)
+# Jolt's optional Vulkan compute shaders need glslc; we do not use that path.
+set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 FetchContent_GetProperties(joltphysics)
 if(NOT joltphysics_POPULATED)
   FetchContent_Populate(joltphysics)
@@ -167,6 +179,17 @@ set(DRACO_JS_GLUE OFF CACHE BOOL "" FORCE)
 set(DRACO_POINT_CLOUD_COMPRESSION OFF CACHE BOOL "" FORCE)
 set(DRACO_MESH_COMPRESSION_SUPPORTED ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(draco)
+
+# ── Vulkan Memory Allocator (MIT, header-only) ────────
+if(TUCANO_RHI STREQUAL "vulkan")
+  FetchContent_Declare(vma
+    GIT_REPOSITORY https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+    GIT_TAG v3.2.1
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(vma)
+  add_library(vma_headers INTERFACE)
+  target_include_directories(vma_headers INTERFACE ${vma_SOURCE_DIR}/include)
+endif()
 
 # ── OpenFBX (FBX importer) ────────────────────────────
 
@@ -263,8 +286,14 @@ FetchContent_Declare(curl
   GIT_SHALLOW TRUE)
 set(BUILD_CURL_EXE OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
-set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+if(WIN32)
+  set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+else()
+  set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+  set(CURL_USE_SCHANNEL OFF CACHE BOOL "" FORCE)
+  set(CURL_DISABLE_SSL ON CACHE BOOL "" FORCE)
+endif()
 set(CURL_DISABLE_LDAP ON CACHE BOOL "" FORCE)
 set(CURL_DISABLE_LDAPS ON CACHE BOOL "" FORCE)
 set(HTTP_ONLY ON CACHE BOOL "" FORCE)

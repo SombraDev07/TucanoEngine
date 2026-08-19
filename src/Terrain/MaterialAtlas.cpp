@@ -1,6 +1,4 @@
 #include "Terrain/MaterialAtlas.h"
-#include "RHI/DX12/DX12Resource.h"
-#include "RHI/DX12/DX12Device.h"
 
 #include <cstring>
 

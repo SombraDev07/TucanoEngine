@@ -166,6 +166,13 @@ public:
 
   void* nativeDevice() const override { return nullptr; }
 
+  // TODO(vulkan): allocate `views.size()` slots from the frame's descriptor arena, write one
+  // VkDescriptorImageInfo / VkDescriptorBufferInfo per view, and return the first slot index.
+  // Slot 0 here means "the table base", which is what every setRootSrvTable no-op expects.
+  uint32_t writeResourceTable(std::span<const ResourceView>) override { return 0; }
+  // TODO(vulkan): same, against the sampler set (set 1).
+  uint32_t writeSamplerTable(std::span<Sampler* const>) override { return 0; }
+
 private:
   NullCommandList cmd_;
   uint64_t frame_ = 0;

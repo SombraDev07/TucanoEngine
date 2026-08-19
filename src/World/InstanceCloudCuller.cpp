@@ -1,8 +1,5 @@
 #include "World/InstanceCloudCuller.h"
 
-#include "RHI/DX12/DX12CommandList.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -20,7 +17,6 @@ struct InstanceCullCB {
   float maxDistance;
 };
 
-rhi::DX12Buffer& dxBuf(rhi::Buffer& b) { return static_cast<rhi::DX12Buffer&>(b); }
 
 } // namespace
 
@@ -115,8 +111,6 @@ void InstanceCloudCuller::writeConstants(const glm::mat4& viewProj, const glm::v
 }
 
 void InstanceCloudCuller::recordCull(rhi::CommandList& cmd) {
-  auto& dev = static_cast<rhi::DX12Device&>(m_device);
-
   // Seed the args from the template, then let the dispatch grow instanceCount in place.
   cmd.copyBuffer(*m_argsBuffer, 0, *m_argsInit, 0, sizeof(DrawIndexedArgs));
 
@@ -128,10 +122,10 @@ void InstanceCloudCuller::recordCull(rhi::CommandList& cmd) {
   cmd.setPipeline(m_cullPso);
   cmd.setComputeRootCBV(1, *m_cb);
 
-  D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {dxBuf(*m_instanceBuffer).srvCpu};
-  D3D12_CPU_DESCRIPTOR_HANDLE uavs[] = {dxBuf(*m_visibleBuffer).uavCpu, dxBuf(*m_argsBuffer).uavCpu};
-  cmd.setComputeRootSrvTable(2, dev.writeSrvTable(srvs, 1));
-  cmd.setComputeRootUavTable(3, dev.writeUavTable(uavs, 2));
+  rhi::Buffer* srvs[] = {m_instanceBuffer.get()};
+  rhi::Buffer* uavs[] = {m_visibleBuffer.get(), m_argsBuffer.get()};
+  cmd.setComputeRootSrvTable(2, m_device.writeBufferSrvTable(srvs));
+  cmd.setComputeRootUavTable(3, m_device.writeBufferUavTable(uavs));
   cmd.dispatch((m_instanceCount + 63u) / 64u, 1, 1);
 }
 

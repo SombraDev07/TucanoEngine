@@ -1,6 +1,4 @@
 #include "Renderer/PostFX/AOPass.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <cstring>
 #include <span>
@@ -8,7 +6,6 @@
 namespace tucano {
 namespace {
 
-::tucano::rhi::DX12Sampler& asDxS(rhi::Sampler& s) { return static_cast<::tucano::rhi::DX12Sampler&>(s); }
 uint32_t bindlessOf(rhi::Texture& t) { return t.bindlessIndex(); }
 
 struct PostCB {
@@ -32,9 +29,8 @@ uint64_t pushUploadCB(rhi::Buffer& buffer, uint64_t& bump, const void* data, siz
 } // namespace
 
 void executeAOPass(AOPassContext& ctx) {
-  auto& dx = static_cast<rhi::DX12Device&>(ctx.device);
-  D3D12_CPU_DESCRIPTOR_HANDLE sampCpu[] = {asDxS(ctx.linearSamp).cpu};
-  const uint32_t sampTable = dx.writeSamplerTable(sampCpu, 1);
+  rhi::Sampler* samplers[] = {&ctx.linearSamp};
+  const uint32_t sampTable = ctx.device.writeSamplerTable(samplers);
 
   auto drawGtao = [&](rhi::PipelineState& pso, rhi::Texture& dest, uint32_t srcAo, float blurDir) {
     ctx.cmd.transition(dest, rhi::ResourceState::RenderTarget);

@@ -2,21 +2,33 @@
 #include "Editor/UI/Fonts.h"
 #include "Editor/UI/Style.h"
 #include "Editor/ViewportInteraction.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12CommandList.h"
-#include "RHI/DX12/DX12Resource.h"
+#include "RHI/RHIBackend.h"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
-#include <imgui_impl_dx12.h>
 #include <ImGuizmo.h>
 
+#if TUCANO_RHI_DX12
+#include "RHI/DX12/DX12Device.h"
+#include "RHI/DX12/DX12CommandList.h"
+#include "RHI/DX12/DX12Resource.h"
+#include <imgui_impl_dx12.h>
 #include <d3d12.h>
 #include <wrl.h>
-
 using Microsoft::WRL::ComPtr;
+#endif
+
+#if TUCANO_RHI_VULKAN
+#include "RHI/Vulkan/VulkanDevice.h"
+#include "RHI/Vulkan/VulkanResources.h"
+#include <imgui_impl_vulkan.h>
+#endif
+
+#include <cstdio>
+#include <cstdlib>
 
 namespace tucano {
+#if TUCANO_RHI_DX12
 namespace {
 
 void imguiAllocSrv(ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* outCpu,
@@ -28,30 +40,43 @@ void imguiAllocSrv(ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* o
 void imguiFreeSrv(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE) {}
 
 } // namespace
+#endif
+
+#if TUCANO_RHI_VULKAN
+namespace {
+
+VkFormat s_imguiColorFormat = VK_FORMAT_R8G8B8A8_UNORM;
+
+void imguiCheckVk(VkResult err) {
+  if (err == VK_ERROR_DEVICE_LOST) {
+    std::fprintf(stderr, "[Vulkan] ImGui VK_ERROR_DEVICE_LOST — aborting\n");
+    std::fflush(stderr);
+    std::abort();
+  }
+  if (err != VK_SUCCESS) {
+    std::fprintf(stderr, "[Vulkan] ImGui VkResult %d\n", static_cast<int>(err));
+  }
+}
+
+} // namespace
+#endif
 
 void DebugUI::init(Window& window, rhi::Device& device) {
-  auto& dx = static_cast<rhi::DX12Device&>(device);
-
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
-  // Tucano palette in place of ImGui's stock dark theme.
   editor::Style::apply();
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-
-  // Before the renderer backend: it uploads whatever the atlas holds the first time it draws, so
-  // fonts added afterwards would never reach the GPU.
   editor::buildFonts();
-
   ImGui_ImplGlfw_InitForOther(window.handle(), true);
+
+#if TUCANO_RHI_DX12
+  auto& dx = static_cast<rhi::DX12Device&>(device);
 
   D3D12_DESCRIPTOR_HEAP_DESC hd{};
   hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
   hd.NumDescriptors = 64;
   hd.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  // Owned by this DebugUI, not by a static: a static's Release() runs during process teardown,
-  // long after the D3D12 device has been destroyed, and releasing a device child at that point is
-  // a use-after-free. shutdown() releases it while the device is still alive.
   ID3D12DescriptorHeap* heap = nullptr;
   if (FAILED(dx.device()->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&heap)))) {
     return;
@@ -61,9 +86,6 @@ void DebugUI::init(Window& window, rhi::Device& device) {
   ImGui_ImplDX12_InitInfo init{};
   init.Device = dx.device();
   init.CommandQueue = dx.queue();
-  // Must cover every frame the CPU can be ahead by, not just the device's frame-slot count: the
-  // backend cycles one vertex/index buffer per value here, and reusing one the GPU is still reading
-  // corrupts that frame's geometry. kBackBufferCount is the real bound.
   init.NumFramesInFlight = static_cast<int>(rhi::kBackBufferCount);
   init.RTVFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
   init.SrvDescriptorHeap = heap;
@@ -74,10 +96,54 @@ void DebugUI::init(Window& window, rhi::Device& device) {
   if (!ImGui_ImplDX12_Init(&init)) {
     return;
   }
+#elif TUCANO_RHI_VULKAN
+  auto& vk = static_cast<rhi::VulkanDevice&>(device);
+  ImGui_ImplVulkan_InitInfo init{};
+  init.Instance = vk.instance();
+  init.PhysicalDevice = vk.physicalDevice();
+  init.Device = vk.device();
+  init.QueueFamily = vk.graphicsQueueFamily();
+  init.Queue = vk.graphicsQueue();
+  init.MinImageCount = 2;
+  init.ImageCount = rhi::kMaxFramesInFlight;
+  init.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
+  init.DescriptorPoolSize = 64; // own pool — never the bindless 8192
+  init.UseDynamicRendering = true;
+  init.PipelineRenderingCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO_KHR;
+  init.PipelineRenderingCreateInfo.colorAttachmentCount = 1;
+  init.PipelineRenderingCreateInfo.pColorAttachmentFormats = &s_imguiColorFormat;
+  init.MinAllocationSize = 1024 * 1024;
+  init.CheckVkResultFn = imguiCheckVk;
+  if (!ImGui_ImplVulkan_Init(&init)) {
+    std::fprintf(stderr, "[DebugUI] ImGui_ImplVulkan_Init failed\n");
+    return;
+  }
+  VkSamplerCreateInfo samp{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+  samp.magFilter = VK_FILTER_LINEAR;
+  samp.minFilter = VK_FILTER_LINEAR;
+  samp.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  samp.addressModeU = samp.addressModeV = samp.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  samp.minLod = -1000.0f;
+  samp.maxLod = 1000.0f;
+  samp.maxAnisotropy = 1.0f;
+  VkSampler sampler = VK_NULL_HANDLE;
+  if (vkCreateSampler(vk.device(), &samp, nullptr, &sampler) == VK_SUCCESS) {
+    m_sceneSampler = sampler;
+    m_srvHeap = vk.device(); // VkDevice, for sampler destroy on shutdown
+  }
+#else
+  (void)device;
+  // Null / no GPU: build the atlas on the CPU so NewFrame does not crash.
+  unsigned char* pixels = nullptr;
+  int fontW = 0, fontH = 0;
+  io.Fonts->GetTexDataAsRGBA32(&pixels, &fontW, &fontH);
+  io.Fonts->SetTexID(static_cast<ImTextureID>(1));
+#endif
   m_ready = true;
 }
 
 uint64_t DebugUI::sceneTextureId(rhi::Device& device, rhi::Texture& texture) {
+#if TUCANO_RHI_DX12
   if (!m_ready || m_srvHeap == nullptr) return 0;
 
   auto& dx = static_cast<rhi::DX12Device&>(device);
@@ -89,10 +155,6 @@ uint64_t DebugUI::sceneTextureId(rhi::Device& device, rhi::Texture& texture) {
   const UINT stride =
       dx.device()->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-  // Rotate, and write the descriptor fresh each frame rather than caching it: the offscreen target
-  // is recreated whenever the viewport is resized, and a cache keyed by resource pointer would hand
-  // back a descriptor for a texture that no longer exists — worse, a new allocation can land on the
-  // same address, so the staleness would be invisible.
   const uint32_t slot = 1u + (m_sceneSlotCursor % rhi::kBackBufferCount);
   ++m_sceneSlotCursor;
 
@@ -109,32 +171,71 @@ uint64_t DebugUI::sceneTextureId(rhi::Device& device, rhi::Texture& texture) {
   dx.device()->CreateShaderResourceView(resource, &srv, cpu);
 
   return static_cast<uint64_t>(gpu.ptr);
+#elif TUCANO_RHI_VULKAN
+  (void)device;
+  if (!m_ready || m_sceneSampler == nullptr) {
+    return 0;
+  }
+  auto& vkTex = static_cast<rhi::VulkanTexture&>(texture);
+  const uint32_t slot = m_sceneSlotCursor % rhi::kMaxFramesInFlight;
+  ++m_sceneSlotCursor;
+  if (m_sceneSets[slot] != 0) {
+    ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(m_sceneSets[slot]));
+    m_sceneSets[slot] = 0;
+  }
+  const VkDescriptorSet set = ImGui_ImplVulkan_AddTexture(static_cast<VkSampler>(m_sceneSampler), vkTex.view,
+                                                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  m_sceneSets[slot] = reinterpret_cast<uint64_t>(set);
+  return m_sceneSets[slot];
+#else
+  (void)device;
+  (void)texture;
+  return 0;
+#endif
 }
 
 void DebugUI::shutdown() {
   if (m_ready) {
+#if TUCANO_RHI_DX12
     ImGui_ImplDX12_Shutdown();
+#elif TUCANO_RHI_VULKAN
+    for (uint64_t& set : m_sceneSets) {
+      if (set != 0) {
+        ImGui_ImplVulkan_RemoveTexture(reinterpret_cast<VkDescriptorSet>(set));
+        set = 0;
+      }
+    }
+    ImGui_ImplVulkan_Shutdown();
+#endif
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
     m_ready = false;
   }
-  // Outside the m_ready guard on purpose: init() can bail out after the heap exists, and that
-  // reference still has to go while the device is alive.
+#if TUCANO_RHI_DX12
   if (m_srvHeap) {
     static_cast<ID3D12DescriptorHeap*>(m_srvHeap)->Release();
     m_srvHeap = nullptr;
   }
+#elif TUCANO_RHI_VULKAN
+  if (m_sceneSampler && m_srvHeap) {
+    vkDestroySampler(static_cast<VkDevice>(m_srvHeap), static_cast<VkSampler>(m_sceneSampler), nullptr);
+  }
+  m_sceneSampler = nullptr;
+  m_srvHeap = nullptr;
+#endif
 }
 
 void DebugUI::beginFrame() {
   if (!m_ready) {
     return;
   }
+#if TUCANO_RHI_DX12
   ImGui_ImplDX12_NewFrame();
+#elif TUCANO_RHI_VULKAN
+  ImGui_ImplVulkan_NewFrame();
+#endif
   ImGui_ImplGlfw_NewFrame();
   ImGui::NewFrame();
-  // Must follow ImGui::NewFrame() — ImGuizmo resets its per-frame state here even when no gizmo
-  // ends up being drawn.
   ImGuizmo::BeginFrame();
 }
 
@@ -143,6 +244,7 @@ void DebugUI::endFrame(rhi::CommandList& cmd, rhi::Texture& renderTarget) {
     return;
   }
   ImGui::Render();
+#if TUCANO_RHI_DX12
   auto& dxCmd = static_cast<rhi::DX12CommandList&>(cmd);
   auto& dxTex = static_cast<rhi::DX12Texture&>(renderTarget);
   cmd.transition(renderTarget, rhi::ResourceState::RenderTarget);
@@ -154,6 +256,31 @@ void DebugUI::endFrame(rhi::CommandList& cmd, rhi::Texture& renderTarget) {
   dxCmd.get()->SetDescriptorHeaps(1, &heap);
   ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), dxCmd.get());
   cmd.setDescriptorHeap();
+#elif TUCANO_RHI_VULKAN
+  cmd.endRendering();
+  cmd.transition(renderTarget, rhi::ResourceState::RenderTarget);
+  auto& vkTex = static_cast<rhi::VulkanTexture&>(renderTarget);
+  VkCommandBuffer vkcmd = vkTex.owner ? vkTex.owner->currentCommandBuffer() : VK_NULL_HANDLE;
+  if (!vkcmd || !vkTex.view) {
+    return;
+  }
+  VkRenderingAttachmentInfo color{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+  color.imageView = vkTex.view;
+  color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  color.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+  color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+  ri.renderArea.extent = {vkTex.w, vkTex.h};
+  ri.layerCount = 1;
+  ri.colorAttachmentCount = 1;
+  ri.pColorAttachments = &color;
+  vkCmdBeginRendering(vkcmd, &ri);
+  ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), vkcmd);
+  vkCmdEndRendering(vkcmd);
+#else
+  (void)cmd;
+  (void)renderTarget;
+#endif
 }
 
 bool DebugUI::drawTransformGizmo(const glm::mat4& view, const glm::mat4& proj, glm::mat4& model,
@@ -211,7 +338,17 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene&
   ImGui::SetNextWindowSize(ImVec2(360, 520), ImGuiCond_FirstUseEver);
   if (ImGui::Begin("Tucano Tools")) {
     if (ImGui::CollapsingHeader("Rain (Cry-parity)")) {
+#if TUCANO_RHI_VULKAN
+      rain.enabled = false;
+      rain.enableSceneRain = false;
+      ImGui::BeginDisabled();
+#endif
       ImGui::Checkbox("Enable rain", &rain.enabled);
+#if TUCANO_RHI_VULKAN
+      ImGui::EndDisabled();
+      ImGui::TextDisabled("Vulkan: rain gated (GPUVM on --seconds 30).");
+      ImGui::BeginDisabled();
+#endif
       if (rain.enabled && rain.amount < 0.05f) {
         rain.amount = 0.65f; // recover if a lab zeroed amount
       }
@@ -257,6 +394,9 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene&
         rain.mistAmount = 0.7f;
         rain.streakSpeed = 2.0f;
       }
+#if TUCANO_RHI_VULKAN
+      ImGui::EndDisabled();
+#endif
     }
 
     if (ImGui::CollapsingHeader("Renderer", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -304,7 +444,16 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene&
       ImGui::SliderFloat("Fog height", &settings.sky.fogHeight, 5.0f, 200.0f);
       ImGui::SliderFloat3("Wind", &settings.sky.wind.x, -2.0f, 2.0f);
       ImGui::Separator();
+#if TUCANO_RHI_VULKAN
+      clouds.enabled = false;
+      ImGui::BeginDisabled();
+#endif
       ImGui::Checkbox("Volumetric clouds", &clouds.enabled);
+#if TUCANO_RHI_VULKAN
+      ImGui::EndDisabled();
+      ImGui::TextDisabled("Vulkan: clouds gated (3D upload untested).");
+      ImGui::BeginDisabled();
+#endif
       if (clouds.enabled) {
         ImGui::SliderFloat("Coverage", &clouds.coverage, 0.0f, 1.0f);
         ImGui::SliderFloat("Density", &clouds.density, 0.1f, 3.0f);
@@ -367,6 +516,9 @@ void DebugUI::drawWeatherAndLights(RainParams& rain, CloudParams& clouds, Scene&
         clouds.storminess = 0.85f;
         clouds.enableShadows = true;
       }
+#if TUCANO_RHI_VULKAN
+      ImGui::EndDisabled();
+#endif
     }
 
     if (ImGui::CollapsingHeader("Lights", ImGuiTreeNodeFlags_DefaultOpen)) {

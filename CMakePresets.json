@@ -21,12 +21,44 @@
         "value": "x64",
         "strategy": "external"
       }
+    },
+    {
+      "name": "linux-vulkan",
+      "displayName": "Linux Vulkan (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-vulkan",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_STANDARD": "20",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "TUCANO_RHI": "vulkan"
+      }
+    },
+    {
+      "name": "linux-null",
+      "displayName": "Linux Null RHI (Ninja)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/linux-null",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_STANDARD": "20",
+        "CMAKE_CXX_STANDARD_REQUIRED": "ON",
+        "TUCANO_RHI": "null"
+      }
     }
   ],
   "buildPresets": [
     {
       "name": "windows-release",
       "configurePreset": "windows-release"
+    },
+    {
+      "name": "linux-vulkan",
+      "configurePreset": "linux-vulkan"
+    },
+    {
+      "name": "linux-null",
+      "configurePreset": "linux-null"
     }
   ]
 }

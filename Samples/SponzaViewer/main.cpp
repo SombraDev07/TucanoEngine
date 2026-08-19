@@ -25,10 +25,12 @@
 #include "Terrain/TerrainGenerator.h"
 #include "Runtime/Screenshot.h"
 #include "Lua/LuaVM.h"
+#include "RHI/RHIBackend.h"
 
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <memory>
 
@@ -70,6 +72,7 @@ int main(int argc, char** argv) {
   std::string screenshotPath;
   std::string layoutPath = "EditorLayout.ini";
   int maxFrames = -1;
+  double maxSeconds = -1.0;
   int shotFrame = 5;
   bool editorMode = false;
   bool uiGallery = false;
@@ -100,6 +103,10 @@ int main(int argc, char** argv) {
       screenshotPath = argv[++i];
     } else if (a == "--frames" && i + 1 < argc) {
       maxFrames = std::stoi(argv[++i]);
+    } else if (a == "--seconds" && i + 1 < argc) {
+      // Wall-clock cap so a look at 70 FPS is not a 8-frame blink. Still required on Vulkan:
+      // unbounded runs have MODE1-reset this GPU.
+      maxSeconds = std::stod(argv[++i]);
     } else if (a == "--shotframe" && i + 1 < argc) {
       // Editor UI needs a few frames to settle (dock layout build, first-use sizing), so a gate
       // that screenshots the editor wants a later frame than the renderer gate does.
@@ -459,8 +466,10 @@ int main(int argc, char** argv) {
       };
     }
 
-    scene.camera.setPosition({0.0f, 2.0f, 0.0f});
-    scene.camera.lookAt({1.0f, 2.0f, 0.0f});
+    // Khronos Sponza is ~22 m along X after the glTF 0.008 node scale. Stand in the west
+    // walkway looking east so the atrium (columns, banners, far arch) fills the frame.
+    scene.camera.setPosition({-6.0f, 1.8f, 0.0f});
+    scene.camera.lookAt({4.0f, 1.6f, 0.0f});
     setupDefaultRain(renderer->rain());
 
     LuaVM::instance().init();
@@ -470,9 +479,27 @@ int main(int argc, char** argv) {
     LuaVM::instance().setCamera(&scene.camera);
     LuaVM::instance().setInput(&input);
     LuaVM::instance().registerAllBindings();
-    LuaVM::instance().loadScript("Scripts/main.lua");
-    LuaVM::instance().callSetup();
+    // Do not load Scripts/main.lua: that file is the LuaLab third-person cube demo and
+    // overrides the camera every tick. Sponza stays on the C++ fly camera.
+#if TUCANO_RHI_VULKAN
+    renderer->clouds().enabled = false;
+    renderer->water().enabled = false;
+    renderer->fog().enabled = false;
+    // --seconds 30 with rain on GPUVM'd 2026-08-18 09:10 (SQC, PERMISSION_FAULTS=3, ring
+    // reset). Short --frames 8 survived on a boot that had already MODE1'd. Keep rain off
+    // until a clean reboot + --frames 90. Cones/particles stay gated in RainSystem.
+    renderer->rain().enabled = false;
+    renderer->settings().enableVoxelGI = false;
+    renderer->settings().giTier = GITier::Off;
+    std::cout << "[SponzaViewer] Vulkan raster: CSM + AO + bloom + SSR + contact + exposure; "
+                 "rain/clouds/water/fog/probe-bake/meshlets off\n";
+    if (maxFrames < 0 && maxSeconds < 0.0) {
+      std::cerr << "[SponzaViewer] WARNING: unbounded Vulkan run. Prefer --frames N or --seconds N. "
+                   "GPUVM on this path has MODE1-reset amdgpu and taken down the session.\n";
+    }
+#endif
 
+#if !TUCANO_RHI_VULKAN
     device->setDeviceLostCallback([&]() {
       std::cerr << "[SponzaViewer] Rebuilding swapchain / renderer / scene after device recovery...\n";
       const Camera cam = scene.camera;
@@ -497,6 +524,7 @@ int main(int argc, char** argv) {
         shell.init(layoutPath);
       }
     });
+#endif
 
     window.setResizeCallback([&](uint32_t w, uint32_t h) {
       if (!swapChain || !renderer) {
@@ -518,6 +546,10 @@ int main(int argc, char** argv) {
 
     int frame = 0;
     bool shotDone = screenshotPath.empty();
+    const auto loopStart = std::chrono::steady_clock::now();
+    if (maxSeconds > 0.0) {
+      std::cout << "[SponzaViewer] will exit after " << maxSeconds << " s (--seconds)\n";
+    }
     while (!window.shouldClose() && !shell.quitRequested()) {
       window.pollEvents();
       input.beginFrame();
@@ -655,7 +687,11 @@ int main(int argc, char** argv) {
           renderer->settings().enableSSR = !renderer->settings().enableSSR;
         }
         if (input.keyPressed(GLFW_KEY_9)) {
+#if TUCANO_RHI_VULKAN
+          std::cout << "[SponzaViewer] rain is gated on Vulkan (GPUVM 2026-08-18)\n";
+#else
           renderer->rain().enabled = !renderer->rain().enabled;
+#endif
         }
       }
 
@@ -755,7 +791,7 @@ int main(int argc, char** argv) {
         finalizeScreenshot(shot, screenshotPath);
         shotDone = true;
         std::cout << "Saved " << screenshotPath << "\n";
-        if (maxFrames < 0) {
+        if (maxFrames < 0 && maxSeconds < 0.0) {
           maxFrames = frame + 1;
         }
       }
@@ -763,9 +799,16 @@ int main(int argc, char** argv) {
       if (maxFrames >= 0 && frame >= maxFrames) {
         break;
       }
+      if (maxSeconds > 0.0) {
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - loopStart).count();
+        if (elapsed >= maxSeconds) {
+          break;
+        }
+      }
     }
 
     device->waitIdle();
+    std::cout << "SponzaViewer OK (" << frame << " frames)\n";
     std::cerr << "[trace] loop terminou\n";
 
     // After the loop, so what is written is the state the session ended in — including whatever

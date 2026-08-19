@@ -1,7 +1,6 @@
 #pragma once
 
-#include "RHI/DX12/DX12Common.h"
-
+#include <cstdint>
 #include <mutex>
 #include <vector>
 

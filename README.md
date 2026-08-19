@@ -1,8 +1,8 @@
 # Tucano Engine
 
-**Greenfield real-time rendering engine** — C++20 · Direct3D 12 · CMake · glTF 2.0
+**Greenfield real-time rendering engine** — C++20 · Direct3D 12 (Windows) · Vulkan (Linux) · CMake · glTF 2.0
 
-Deferred PBR, meshlet GPU-driven pipeline, volumetric clouds, rain system, Bruneton atmosphere, virtual shadow maps, DDGI, World SDF, Jolt physics, archetype ECS, and a production-quality RHI with DXR 1.1.
+Deferred PBR, meshlet GPU-driven pipeline, volumetric clouds, rain system, Bruneton atmosphere, virtual shadow maps, DDGI, World SDF, Jolt physics, archetype ECS, and a production-quality RHI. **DX12 remains the Windows production backend.** Vulkan is a second backend (one RHI per binary) currently in Linux bring-up — see below.
 
 ---
 
@@ -10,7 +10,7 @@ Deferred PBR, meshlet GPU-driven pipeline, volumetric clouds, rain system, Brune
 
 | System | Status | Description |
 |--------|--------|-------------|
-| **RHI** | DX12 | Bindless, barrier coalescing, async compute, PSO cache, TDR recovery, DXR 1.1 |
+| **RHI** | DX12 + Vulkan | Bindless typed arrays, barriers, PSO cache. DX12 = Windows production (async compute, TDR, DXR 1.1). Vulkan = Linux bring-up (VMA, SPIR-V via DXC) |
 | **Deferred PBR** | Production | GGX + Burley + clearcoat + sheen, IBL split-sum, ACES tonemap |
 | **Shadows** | Toroidal + VSM | 4-cascade toroidal CSM, octahedral point atlas, virtual shadow maps, PCSS, ESM |
 | **GI** | DDGI + Voxel + SDF | DDGI probes, voxel GI, World SDF with GPU Jump Flooding, SSGI, reflection probes |
@@ -33,18 +33,44 @@ Deferred PBR, meshlet GPU-driven pipeline, volumetric clouds, rain system, Brune
 
 ## Quick Start
 
-### Prerequisites
-- **Windows 10/11 x64** · **MSVC 2022** · **CMake >= 3.28** · **GPU with DX12**
-
-```powershell
+```bash
 git clone https://github.com/SombraDev07/TucanoEngine.git
 cd TucanoEngine
+```
 
+Dependencies are fetched automatically via CMake FetchContent — no package manager needed.
+
+### Windows (DX12)
+
+**Windows 10/11 x64** · **MSVC 2022** · **CMake >= 3.28** · **GPU with DX12**
+
+```powershell
 cmake --preset=windows-release
 cmake --build --preset=windows-release
 ```
 
-Dependencies are fetched automatically via CMake FetchContent — no package manager needed.
+### Linux (Vulkan)
+
+**Fedora / similar** · **GCC or Clang** · **CMake >= 3.28** · **Ninja** · **DXC** (Vulkan SDK or DirectXShaderCompiler) · **Vulkan 1.3** + validation layers
+
+```bash
+cmake --preset=linux-vulkan
+cmake --build --preset=linux-vulkan --target SponzaViewer TestEditor
+```
+
+This is an **active bring-up** (phases 0–7 of `docs/Vulkan-Linux-Roadmap.md`). HelloTriangle, PBRTest deferred, Sponza raster (CSM, GTAO, bloom, SSR, contact shadows, auto-exposure, IBL + Bruneton) and TestEditor ImGui are gated green with validation 0/0. Rain, volumetric clouds/water/fog, probe bake, meshlets and DXR stay **off** on Vulkan until they pass `--frames` without RADV GPUVM.
+
+**Always cap the run.** Unbounded SponzaViewer on RADV (Navi 22) has GPUVM page-faulted, MODE1-reset the GPU, and taken down GNOME (looks like a reboot; the kernel stays up):
+
+```bash
+DISPLAY=:0 MESA_VK_ABORT_ON_DEVICE_LOSS=1 \
+  ./build/linux-vulkan/Samples/SponzaViewer/SponzaViewer --frames 8
+
+DISPLAY=:0 MESA_VK_ABORT_ON_DEVICE_LOSS=1 \
+  ./build/linux-vulkan/Samples/TestEditor/TestEditor --frames 8
+```
+
+`--seconds N` is a wall-clock cap for looking at the scene. Do not omit both flags on the desktop. After a GPUVM / MODE1, do not relaunch GPU work until a **real reboot**.
 
 ### Run a Sample
 
@@ -114,8 +140,9 @@ Sponza is not stored in this repo. Download manually:
 │  Terrain  ·  Vegetation  ·  Animation            │
 │  World Streaming  ·  Asset Pipeline              │
 ├─────────────────────────────────────────────────┤
-│  RHI (Direct3D 12)                               │
-│  Bindless · Barriers · Async Compute · RT · PSO  │
+│  RHI — one backend per binary                    │
+│  DX12 (Windows)  ·  Vulkan (Linux)  ·  Null      │
+│  Bindless · Barriers · PSO · (DXR / mesh: DX12)  │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -128,7 +155,9 @@ TucanoEngine/
 ├── Shaders/           43 HLSL shaders (DXC-compiled): GBuffer, shadows, lighting,
 │                       rain, clouds, water, fog, GI, vegetation, terrain, RT
 ├── src/
-│   ├── RHI/DX12/      Device, heaps, barriers, bindless, PSO cache, RT, crash recovery
+│   ├── RHI/            BindlessManager, factory (`TUCANO_RHI`), public `RHI.h`
+│   ├── RHI/DX12/       Windows production: heaps, barriers, PSO cache, RT, TDR
+│   ├── RHI/Vulkan/     Linux bring-up: VMA, bindless sets, dynamic rendering
 │   ├── RHI/Null/       No-op backend for headless testing
 │   ├── Renderer/       Deferred, shadows, GI, weather, atmosphere, render graph
 │   ├── ECS/            Entity manager, queries, events, templates (JSON)
@@ -154,7 +183,7 @@ TucanoEngine/
 ├── Tools/              Reflector (codegen) · UITest · RHITest · ECSTest · AssetTest
 │                       AnimationTest · InputTest · VegTest · WorldTest · WorldGpuTest
 │                       Benchmark
-├── docs/               Architecture Decision Records
+├── docs/               ADRs · Vulkan-Linux-Roadmap.md (Linux bring-up)
 ├── cmake/              Build configuration, dependency declarations
 └── test/               Unit tests
 ```
@@ -241,9 +270,11 @@ hard-codes a layout is wrong the moment anything changes packing, and wrong sile
 
 | Preset | Configuration |
 |--------|---------------|
-| `windows-release` | Release (MSVC, Ninja) |
+| `windows-release` | Release, DX12 (MSVC, Ninja) |
+| `linux-vulkan` | Release, Vulkan (GCC/Clang, Ninja, DXC → SPIR-V) |
+| `linux-null` | Headless Null RHI (no GPU) |
 
-Shaders compile automatically via DXC at build time.
+Shaders compile automatically via DXC at build time (DXIL on Windows, SPIR-V on the Vulkan preset). `TUCANO_RHI` is `dx12`, `vulkan`, or `null` — never two backends in one exe.
 
 Dependencies (fetched by CMake): `GLFW` · `glm` · `stb` · `cgltf` · `meshoptimizer` · `Dear ImGui` · `Jolt Physics` · `miniaudio` · `ZSTD` · `Lua` · `Draco` · `OpenFBX`
 
@@ -275,7 +306,8 @@ could not verify.
 | **RenderGraph over manual passes** | Automatic transient resource aliasing reduces VRAM; barrier generation eliminates manual sync bugs |
 | **Archetype SoA ECS** | Cache-friendly component iteration; bloom-filter queries avoid archetype scanning |
 | **GPU-driven meshlet pipeline** | Single culling path for meshlet/instance/VisBuffer; zero CPU culling overhead on the critical path |
-| **Bindless resource model** | All lighting, GI, and post-process shaders share a unified descriptor heap; no per-pass binding |
+| **Bindless resource model** | Typed HLSL arrays (`Texture2D bindlessHeap[]`), not SM 6.6 `ResourceDescriptorHeap`. Maps 1:1 to DX12 heaps and Vulkan `UPDATE_AFTER_BIND` descriptor arrays |
+| **One RHI per binary** | `TUCANO_RHI=dx12` or `vulkan` or `null`. Linux default is Vulkan; Windows default is DX12 |
 | **Reverse-Z depth buffer** | Maximizes precision for large outdoor scenes; standard for modern renderers |
 | **No light baking** | Entire pipeline is real-time; no offline precomputation required |
 | **Reflection by codegen, not by hand** | A hand-written reflection table drifts from the struct silently — seven live material parameters were unreachable from the editor for exactly that reason. The annotation now sits on the field itself |

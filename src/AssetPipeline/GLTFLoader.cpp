@@ -217,6 +217,23 @@ std::shared_ptr<Mesh> loadMesh(rhi::Device& device, const cgltf_data* data, cons
   return Mesh::create(device, vertices, indices, std::move(submeshes));
 }
 
+void setTransformFromWorld(Transform& t, const glm::mat4& world) {
+  t.translation = glm::vec3(world[3]);
+  glm::vec3 axisX(world[0]);
+  glm::vec3 axisY(world[1]);
+  glm::vec3 axisZ(world[2]);
+  t.scale = {glm::length(axisX), glm::length(axisY), glm::length(axisZ)};
+  // A quaternion cannot store a mirror; keep the reflection in scale.x (same as the editor gizmo).
+  if (glm::determinant(glm::mat3(world)) < 0.0f) {
+    t.scale.x = -t.scale.x;
+  }
+  constexpr float kMin = 1e-8f;
+  axisX = (t.scale.x > kMin || t.scale.x < -kMin) ? axisX / t.scale.x : glm::vec3(1, 0, 0);
+  axisY = t.scale.y > kMin ? axisY / t.scale.y : glm::vec3(0, 1, 0);
+  axisZ = t.scale.z > kMin ? axisZ / t.scale.z : glm::vec3(0, 0, 1);
+  t.rotation = glm::normalize(glm::quat_cast(glm::mat3(axisX, axisY, axisZ)));
+}
+
 void processNode(rhi::Device& device, const cgltf_data* data, const cgltf_node* node, const glm::mat4& parent,
                  const std::vector<std::shared_ptr<Material>>& materials,
                  const std::unordered_map<const cgltf_mesh*, std::shared_ptr<Mesh>>& meshes, Scene& scene) {
@@ -229,7 +246,10 @@ void processNode(rhi::Device& device, const cgltf_data* data, const cgltf_node* 
       obj.materials = materials;
       obj.name = node->name ? node->name : "node";
       obj.worldMatrix = world;
-      obj.transform.translation = glm::vec3(world[3]);
+      // ECS rebuilds worldMatrix from transform every frame. Khronos Sponza is centimetres with
+      // node scale 0.008 — if scale stays at the default 1, the camera at (0,2,0) sits 2 cm off
+      // the floor and the lighting pass fills the frame with sky.
+      setTransformFromWorld(obj.transform, world);
       scene.objects.push_back(std::move(obj));
     }
   }
@@ -283,8 +303,27 @@ bool loadGLTFScene(rhi::Device& device, const std::string& path, Scene& outScene
   // Simpler fix: bake world into mesh vertices is expensive; instead add worldMatrix to RenderObject
   cgltf_free(data);
 
+  glm::vec3 worldMin(std::numeric_limits<float>::max());
+  glm::vec3 worldMax(std::numeric_limits<float>::lowest());
+  for (const auto& obj : outScene.objects) {
+    if (!obj.mesh) {
+      continue;
+    }
+    for (const auto& sub : obj.mesh->submeshes()) {
+      const glm::vec3 a = glm::vec3(obj.worldMatrix * glm::vec4(sub.aabbMin, 1.0f));
+      const glm::vec3 b = glm::vec3(obj.worldMatrix * glm::vec4(sub.aabbMax, 1.0f));
+      worldMin = glm::min(worldMin, glm::min(a, b));
+      worldMax = glm::max(worldMax, glm::max(a, b));
+    }
+  }
   std::cout << "Loaded glTF: " << path << " (" << outScene.objects.size() << " objects, " << materials.size()
             << " materials, " << (cacheSrgb.size() + cacheLinear.size()) << " unique textures)\n";
+  if (!outScene.objects.empty()) {
+    const glm::vec3& s = outScene.objects.front().transform.scale;
+    std::cout << "  world AABB [" << worldMin.x << "," << worldMin.y << "," << worldMin.z << "] .. ["
+              << worldMax.x << "," << worldMax.y << "," << worldMax.z << "] scale=(" << s.x << "," << s.y
+              << "," << s.z << ")\n";
+  }
   return !outScene.objects.empty();
 }
 

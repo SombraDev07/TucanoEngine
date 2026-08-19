@@ -1,8 +1,6 @@
 #include "Renderer/GI/WorldSDF.h"
 
 #include "Renderer/Material.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <algorithm>
 #include <cmath>
@@ -62,7 +60,6 @@ uint32_t packRGBA8(const glm::vec3& albedo, bool inside) {
   return u8(albedo.r) | (u8(albedo.g) << 8) | (u8(albedo.b) << 16) | (uint32_t(inside ? 255 : 0) << 24);
 }
 
-rhi::DX12Texture& dxTex(rhi::Texture& t) { return static_cast<rhi::DX12Texture&>(t); }
 
 } // namespace
 
@@ -300,7 +297,6 @@ void WorldSDF::update(rhi::Device& device, rhi::CommandList& cmd, const Scene& s
                   glm::vec3(ext * 0.5f);
   }
 
-  auto& dx = static_cast<rhi::DX12Device&>(device);
   const uint32_t budget =
       std::max(1u, static_cast<uint32_t>(std::ceil(float(kCascades) * std::clamp(amortizeFraction, 0.1f, 1.0f))));
   m_updated = 0;
@@ -330,10 +326,10 @@ void WorldSDF::update(rhi::Device& device, rhi::CommandList& cmd, const Scene& s
       cmd.transition(*dst, rhi::ResourceState::UnorderedAccess);
       const uint32_t jfaConsts[4] = {step, kRes, 0, 0};
       cmd.setComputeRootConstants(0, jfaConsts, 4);
-      const D3D12_CPU_DESCRIPTOR_HANDLE srv[] = {dxTex(*src).srvCpu};
-      const D3D12_CPU_DESCRIPTOR_HANDLE uav[] = {dxTex(*dst).uavCpu};
-      cmd.setComputeRootSrvTable(2, dx.writeSrvTable(srv, 1));
-      cmd.setComputeRootUavTable(3, dx.writeUavTable(uav, 1));
+      rhi::Texture* srv[] = {src};
+      rhi::Texture* uav[] = {dst};
+      cmd.setComputeRootSrvTable(2, device.writeTextureTable(srv));
+      cmd.setComputeRootUavTable(3, device.writeTextureUavTable(uav));
       cmd.dispatch(groups, groups, groups);
       std::swap(src, dst);
     }
@@ -350,10 +346,10 @@ void WorldSDF::update(rhi::Device& device, rhi::CommandList& cmd, const Scene& s
       float voxelSize, ext;
     } fc{{sunDir.x, sunDir.y, sunDir.z, sunIntensity}, kRes, c, voxelSize, ext};
     cmd.setComputeRootConstants(0, &fc, 8);
-    const D3D12_CPU_DESCRIPTOR_HANDLE fsrv[] = {dxTex(*src).srvCpu, dxTex(*m_aux).srvCpu};
-    const D3D12_CPU_DESCRIPTOR_HANDLE fuav[] = {dxTex(*m_sdf).uavCpu, dxTex(*m_sh).uavCpu};
-    cmd.setComputeRootSrvTable(2, dx.writeSrvTable(fsrv, 2));
-    cmd.setComputeRootUavTable(3, dx.writeUavTable(fuav, 2));
+    rhi::Texture* fsrv[] = {src, m_aux.get()};
+    rhi::Texture* fuav[] = {m_sdf.get(), m_sh.get()};
+    cmd.setComputeRootSrvTable(2, device.writeTextureTable(fsrv));
+    cmd.setComputeRootUavTable(3, device.writeTextureUavTable(fuav));
     cmd.dispatch(groups, groups, groups);
 
     m_updated += kRes * kRes * kRes;

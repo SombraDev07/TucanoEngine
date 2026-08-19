@@ -78,6 +78,9 @@ EditorLayout*.ini
 # Local vcpkg clone
 /Tools/vcpkg/
 
+# Official DXC Linux tarball (downloaded at configure time for SPIR-V)
+/third_party/dxc/
+
 # Reflector compile arguments — generated at configure time from this machine's MSVC and Windows
 # SDK paths. The template (compile_args.txt.in) is what belongs in the repo.
 /Tools/Reflector/compile_args.txt
@@ -88,6 +91,10 @@ EditorLayout*.ini
 /TestPlay/*.pdb
 /TestPlay/shaders/
 /TestPlay/*.png
+/TestPlay/TestEditor
+/TestPlay/SponzaViewer
+/TestPlay/HelloTriangle
+/TestPlay/PBRTest
 !/TestPlay/README.md
 !/TestPlay/.gitkeep
 

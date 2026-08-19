@@ -1,8 +1,6 @@
 #include "Terrain/TerrainRenderer.h"
-#include "RHI/DX12/DX12Resource.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12CommandList.h"
 
+#include <cstring>
 #include <glm/gtc/matrix_transform.hpp>
 
 namespace tucano::terrain {
@@ -86,16 +84,15 @@ void TerrainRenderer::setHoleMask(uint32_t bindlessIdx) {
 }
 
 void TerrainRenderer::generateClipmap(rhi::Device& device, rhi::CommandList& cmd) {
-	auto& dxDevice = static_cast<rhi::DX12Device&>(device);
-	auto& vb = static_cast<rhi::DX12Buffer&>(m_clipmap.vertexBuffer());
+	rhi::Buffer& vb = m_clipmap.vertexBuffer();
 
 	cmd.transition(vb, rhi::ResourceState::UnorderedAccess);
 	cmd.setPipeline(m_clipmap.generatePSO());
 	cmd.setComputeRootCBV(0, m_clipmap.clipmapCB());
 	cmd.setComputeRootSrvTable(2, 0);
 
-	D3D12_CPU_DESCRIPTOR_HANDLE uavs[] = {vb.uavCpu};
-	cmd.setComputeRootUavTable(3, dxDevice.writeUavTable(uavs, 1));
+	rhi::Buffer* uavs[] = {&vb};
+	cmd.setComputeRootUavTable(3, device.writeBufferUavTable(uavs));
 
 	uint32_t groups = (kClipmapTotalVerts + 255) / 256;
 	cmd.dispatch(groups, 1, 1);

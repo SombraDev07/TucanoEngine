@@ -14,12 +14,19 @@
 
 #include <fstream>
 #include <iostream>
+
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#endif
 
 static void luaLog(const std::string& msg) {
+#ifdef _WIN32
 	OutputDebugStringA(("[Lua] " + msg + "\n").c_str());
-	std::ofstream f("C:/TucanoEngine/build/windows-release/Samples/LuaLab/lua_engine.log", std::ios::app);
-	if (f) f << msg << std::endl;
+#endif
+	std::cerr << "[Lua] " << msg << std::endl;
 }
 
 #include <iostream>

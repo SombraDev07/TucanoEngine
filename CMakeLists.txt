@@ -8,23 +8,86 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(MSVC)
   add_compile_options(/W4 /permissive- /Zc:__cplusplus /MP /wd4324)
   add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+  add_compile_options(-Wall -Wextra -Wno-unused-parameter)
+endif()
+
+# Exactly one backend per binary. Linux defaults to Vulkan; Windows to DX12.
+set(TUCANO_RHI "" CACHE STRING "RHI backend: dx12, vulkan, or null")
+if(NOT TUCANO_RHI)
+  if(WIN32)
+    set(TUCANO_RHI "dx12" CACHE STRING "RHI backend: dx12, vulkan, or null" FORCE)
+  else()
+    set(TUCANO_RHI "vulkan" CACHE STRING "RHI backend: dx12, vulkan, or null" FORCE)
+  endif()
+endif()
+string(TOLOWER "${TUCANO_RHI}" TUCANO_RHI)
+if(NOT TUCANO_RHI STREQUAL "dx12" AND NOT TUCANO_RHI STREQUAL "vulkan" AND NOT TUCANO_RHI STREQUAL "null")
+  message(FATAL_ERROR "TUCANO_RHI must be dx12, vulkan, or null (got '${TUCANO_RHI}')")
+endif()
+if(TUCANO_RHI STREQUAL "dx12" AND NOT WIN32)
+  message(FATAL_ERROR "TUCANO_RHI=dx12 requires Windows")
+endif()
+message(STATUS "Tucano RHI backend: ${TUCANO_RHI}")
+
+if(TUCANO_RHI STREQUAL "vulkan")
+  find_package(Vulkan REQUIRED)
 endif()
 
 include(cmake/Dependencies.cmake)
 
+set(TUCANO_SHADER_EXT ".cso")
+set(TUCANO_DXC_REQUIRED OFF)
+if(TUCANO_RHI STREQUAL "dx12")
+  set(TUCANO_DXC_REQUIRED ON)
+elseif(TUCANO_RHI STREQUAL "vulkan")
+  set(TUCANO_SHADER_EXT ".spv")
+  set(TUCANO_DXC_REQUIRED ON)
+endif()
+
 find_program(DXC_EXECUTABLE dxc
   HINTS
+    "$ENV{VULKAN_SDK}/bin"
+    "${CMAKE_SOURCE_DIR}/third_party/dxc/bin"
     "C:/Program Files (x86)/Windows Kits/10/bin/10.0.28000.0/x64"
-    "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64"
-  REQUIRED)
+    "C:/Program Files (x86)/Windows Kits/10/bin/10.0.26100.0/x64")
+
+if(NOT DXC_EXECUTABLE AND TUCANO_RHI STREQUAL "vulkan" AND UNIX)
+  set(_tucano_dxc_dir "${CMAKE_SOURCE_DIR}/third_party/dxc")
+  set(_tucano_dxc_archive "${CMAKE_BINARY_DIR}/linux_dxc.x86_64.tar.gz")
+  set(_tucano_dxc_url "https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.9.2602.24/linux_dxc_2026_05_26.x86_64.tar.gz")
+  if(NOT EXISTS "${_tucano_dxc_dir}/bin/dxc")
+    message(STATUS "Downloading official DXC Linux build for SPIR-V...")
+    file(DOWNLOAD "${_tucano_dxc_url}" "${_tucano_dxc_archive}" SHOW_PROGRESS STATUS _dxc_dl)
+    list(GET _dxc_dl 0 _dxc_dl_code)
+    if(_dxc_dl_code EQUAL 0)
+      file(MAKE_DIRECTORY "${_tucano_dxc_dir}")
+      execute_process(COMMAND ${CMAKE_COMMAND} -E tar xzf "${_tucano_dxc_archive}"
+        WORKING_DIRECTORY "${_tucano_dxc_dir}")
+    endif()
+  endif()
+  find_program(DXC_EXECUTABLE dxc HINTS "${_tucano_dxc_dir}/bin" "${_tucano_dxc_dir}")
+endif()
+
+if(TUCANO_DXC_REQUIRED AND NOT DXC_EXECUTABLE)
+  message(FATAL_ERROR "dxc not found. Install the DirectXShaderCompiler (Vulkan SDK or official GitHub release).")
+endif()
 
 set(TUCANO_SHADER_DIR "${CMAKE_SOURCE_DIR}/Shaders")
 set(TUCANO_SHADER_OUT "${CMAKE_BINARY_DIR}/shaders")
 file(MAKE_DIRECTORY "${TUCANO_SHADER_OUT}")
 
 function(tucano_compile_shader SHADER_FILE ENTRY PROFILE)
+  if(TUCANO_RHI STREQUAL "null")
+    return()
+  endif()
+  if(TUCANO_RHI STREQUAL "vulkan")
+    if(PROFILE MATCHES "^as_|^ms_" OR SHADER_FILE MATCHES "^RT" OR SHADER_FILE STREQUAL "MeshletMesh.hlsl")
+      return()
+    endif()
+  endif()
   get_filename_component(SHADER_NAME "${SHADER_FILE}" NAME_WE)
-  set(OUT_FILE "${TUCANO_SHADER_OUT}/${SHADER_NAME}_${ENTRY}.cso")
+  set(OUT_FILE "${TUCANO_SHADER_OUT}/${SHADER_NAME}_${ENTRY}${TUCANO_SHADER_EXT}")
   set(EXTRA_DEPS "")
   if(SHADER_FILE STREQUAL "DeferredLighting.hlsl" OR SHADER_FILE STREQUAL "Clouds.hlsl" OR SHADER_FILE STREQUAL "Water.hlsl")
     list(APPEND EXTRA_DEPS "${TUCANO_SHADER_DIR}/Atmosphere.hlsl")
@@ -32,14 +95,33 @@ function(tucano_compile_shader SHADER_FILE ENTRY PROFILE)
   if(SHADER_FILE STREQUAL "DeferredLighting.hlsl")
     list(APPEND EXTRA_DEPS "${TUCANO_SHADER_DIR}/BrunetonAtmosphere.hlsl")
   endif()
+  set(DXC_ARGS -T ${PROFILE} -E ${ENTRY} -Fo "${OUT_FILE}" -I "${TUCANO_SHADER_DIR}")
+  if(TUCANO_RHI STREQUAL "vulkan")
+    list(APPEND DXC_ARGS -spirv -fspv-target-env=vulkan1.3 -fspv-preserve-interface -fvk-use-dx-layout -DTUCANO_SPIRV=1)
+    # Explicit set/binding map (DXC defaults collide t0/s0/b0 on set 0 binding 0).
+    # set 0: t* space0 bindless 2D    set 1: s0-s7
+    # set 2: t* space1 storage        set 3: b0-b2 UBO
+    # set 4: u* space0 storage images set 5: t0 space2 3D
+    foreach(_i RANGE 0 15)
+      list(APPEND DXC_ARGS -fvk-bind-register t${_i} 0 ${_i} 0)
+      list(APPEND DXC_ARGS -fvk-bind-register t${_i} 1 ${_i} 2)
+    endforeach()
+    foreach(_i RANGE 0 7)
+      list(APPEND DXC_ARGS -fvk-bind-register s${_i} 0 ${_i} 1)
+      list(APPEND DXC_ARGS -fvk-bind-register u${_i} 0 ${_i} 4)
+    endforeach()
+    list(APPEND DXC_ARGS
+      -fvk-bind-register b0 0 0 3
+      -fvk-bind-register b1 0 1 3
+      -fvk-bind-register b2 0 2 3
+      -fvk-bind-register t0 2 0 5
+      -fvk-bind-register u0 1 0 2
+      -fvk-bind-register u1 1 1 2
+      -fvk-bind-register u2 1 2 2)
+  endif()
   add_custom_command(
     OUTPUT "${OUT_FILE}"
-    COMMAND "${DXC_EXECUTABLE}"
-      -T ${PROFILE}
-      -E ${ENTRY}
-      -Fo "${OUT_FILE}"
-      -I "${TUCANO_SHADER_DIR}"
-      "${TUCANO_SHADER_DIR}/${SHADER_FILE}"
+    COMMAND "${DXC_EXECUTABLE}" ${DXC_ARGS} "${TUCANO_SHADER_DIR}/${SHADER_FILE}"
     DEPENDS "${TUCANO_SHADER_DIR}/${SHADER_FILE}" "${TUCANO_SHADER_DIR}/Common.hlsl" ${EXTRA_DEPS}
     COMMENT "DXC ${SHADER_FILE}:${ENTRY}"
     VERBATIM)
@@ -50,6 +132,7 @@ endfunction()
 set(TUCANO_COMPILED_SHADERS "")
 tucano_compile_shader(Triangle.hlsl VSMain vs_6_0)
 tucano_compile_shader(Triangle.hlsl PSMain ps_6_0)
+tucano_compile_shader(BindlessFill.hlsl CSMain cs_6_0)
 tucano_compile_shader(GBuffer.hlsl VSMain vs_6_0)
 tucano_compile_shader(GBuffer.hlsl PSMain ps_6_0)
 tucano_compile_shader(Shadow.hlsl VSMain vs_6_0)
@@ -146,7 +229,11 @@ tucano_compile_shader(OITCollect.hlsl OITCollectVS vs_6_0)
 tucano_compile_shader(OITCollect.hlsl OITCollectPS ps_6_0)
 tucano_compile_shader(OITResolve.hlsl OITResolveCS cs_6_0)
 
-add_custom_target(TucanoShaders ALL DEPENDS ${TUCANO_COMPILED_SHADERS})
+if(TUCANO_COMPILED_SHADERS)
+  add_custom_target(TucanoShaders ALL DEPENDS ${TUCANO_COMPILED_SHADERS})
+else()
+  add_custom_target(TucanoShaders)
+endif()
 
 # Deploy selected test exes into repo TestPlay/ (clean sky lab + editor only).
 set(TUCANO_TESTPLAY_DIR "${CMAKE_SOURCE_DIR}/TestPlay")

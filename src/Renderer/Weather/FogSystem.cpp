@@ -1,6 +1,4 @@
 #include "Renderer/Weather/FogSystem.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -123,9 +121,6 @@ uint32_t FogSystem::integratedBindless() const {
 void FogSystem::execute(rhi::Device& device, rhi::CommandList& cmd, const FrameContext& ctx) {
   if (!active()) return;
 
-  auto& dx = static_cast<rhi::DX12Device&>(device);
-  auto asTex = [](rhi::Texture& t) -> rhi::DX12Texture& { return static_cast<rhi::DX12Texture&>(t); };
-
   const uint32_t writeIdx = m_writeIndex;
   const uint32_t historyIdx = 1u - m_writeIndex;
   rhi::Texture& scatter = *m_scatter[writeIdx];
@@ -169,11 +164,8 @@ void FogSystem::execute(rhi::Device& device, rhi::CommandList& cmd, const FrameC
   cmd.transition(history, rhi::ResourceState::UnorderedAccess);
   cmd.transition(*m_integrated, rhi::ResourceState::UnorderedAccess);
 
-  D3D12_CPU_DESCRIPTOR_HANDLE uavs[3]{};
-  uavs[0] = asTex(scatter).uavCpu;
-  uavs[1] = asTex(history).uavCpu;
-  uavs[2] = asTex(*m_integrated).uavCpu;
-  cmd.setComputeRootUavTable(3, dx.writeUavTable(uavs, 3));
+  rhi::Texture* uavs[] = {&scatter, &history, m_integrated.get()};
+  cmd.setComputeRootUavTable(3, device.writeTextureUavTable(uavs));
 
   // The shadow map is read through the bindless heap, so the SRV table just needs the heap base.
   cmd.setComputeRootSrvTable(2, 0);

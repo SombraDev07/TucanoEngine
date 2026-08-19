@@ -18,22 +18,30 @@ cbuffer RainCB : register(b1) {
   float4 rainLight1;     // sun radiance rgb (premultiplied), weatherMapValid
   float4x4 invRainOccVP; // rain-space clip → world (particle ground collision)
   float4 rainMisc;       // dt, rainingAmount (0 while drying), particleRadius, wetnessExtent
+  uint4 texIds0;         // depth, src0, src1, src2
+  uint4 texIds1;         // puddle, spatter, flow, rippleA
+  uint4 texIds2;         // occ, bloom, ssr, gbufNormal
+  uint4 texIds3;         // weather, wetness, rippleB, _
 };
 
-Texture2D depthTex : register(t0);
-Texture2D src0Tex : register(t1);
-Texture2D src1Tex : register(t2);
-Texture2D src2Tex : register(t3);
-Texture2D puddleMaskTex : register(t4);
-Texture2D rainSpatterTex : register(t5);
-Texture2D surfaceFlowTex : register(t6);
-Texture2DArray rainRippleTex : register(t7);
-Texture2D rainOccTex : register(t8);
-Texture2D bloomTex : register(t9);
-Texture2D ssrTex : register(t10);
-Texture2D gbufNormalTex : register(t11); // scene normals (composite pass)
-Texture2D weatherTex : register(t12);    // cloud weather map (R = coverage), camera-centered ±4 km
-Texture2D wetnessTex : register(t13);    // accumulated wetness, world-tiled (extent = rainMisc.w)
+Texture2D bindlessHeap[] : register(t0, space0);
+
+uint rainSafeId(uint i) { return (i < 8192u) ? i : 0u; }
+Texture2D DepthTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds0.x))]; }
+Texture2D Src0Tex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds0.y))]; }
+Texture2D Src1Tex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds0.z))]; }
+Texture2D Src2Tex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds0.w))]; }
+Texture2D PuddleMaskTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds1.x))]; }
+Texture2D RainSpatterTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds1.y))]; }
+Texture2D SurfaceFlowTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds1.z))]; }
+Texture2D RainRippleATex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds1.w))]; }
+Texture2D RainOccTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds2.x))]; }
+Texture2D BloomTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds2.y))]; }
+Texture2D SsrTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds2.z))]; }
+Texture2D GbufNormalTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds2.w))]; }
+Texture2D WeatherTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds3.x))]; }
+Texture2D WetnessTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds3.y))]; }
+Texture2D RainRippleBTex() { return bindlessHeap[NonUniformResourceIndex(rainSafeId(texIds3.z))]; }
 
 SamplerState linearSamp : register(s0);
 SamplerState wrapSamp : register(s1);
@@ -86,7 +94,7 @@ float2 unpackXYNormal(float4 n) {
 // Accumulated wetness at a world position (world-tiled map, wrap-sampled).
 float wetnessAt(float2 worldXZ) {
   float ext = max(rainMisc.w, 1.0);
-  return wetnessTex.SampleLevel(wrapSamp, worldXZ / ext, 0).r;
+  return WetnessTex().SampleLevel(wrapSamp, worldXZ / ext, 0).r;
 }
 
 float volumeAttenuation(float3 world) {
@@ -97,9 +105,9 @@ float volumeAttenuation(float3 world) {
 
 // Shared puddle island mask (localized, not full-floor wash)
 float puddleIsland(float2 xz, float puddleAmt) {
-  float a = puddleMaskTex.Sample(wrapSamp, xz * 0.045).r;
-  float b = puddleMaskTex.Sample(wrapSamp, xz * 0.012 + 9.1).r;
-  float c = rainSpatterTex.Sample(wrapSamp, xz * 0.09).r;
+  float a = PuddleMaskTex().Sample(wrapSamp, xz * 0.045).r;
+  float b = PuddleMaskTex().Sample(wrapSamp, xz * 0.012 + 9.1).r;
+  float c = RainSpatterTex().Sample(wrapSamp, xz * 0.09).r;
   float mask = a * 0.5 + b * 0.35 + (1.0 - c) * 0.15;
   // Threshold → clear islands; puddleAmt widens them
   float lo = lerp(0.55, 0.28, saturate(puddleAmt * 0.5));
@@ -108,9 +116,9 @@ float puddleIsland(float2 xz, float puddleAmt) {
 }
 
 float puddleIslandLevel(float2 xz, float puddleAmt) {
-  float a = puddleMaskTex.SampleLevel(wrapSamp, xz * 0.045, 0).r;
-  float b = puddleMaskTex.SampleLevel(wrapSamp, xz * 0.012 + 9.1, 0).r;
-  float c = rainSpatterTex.SampleLevel(wrapSamp, xz * 0.09, 0).r;
+  float a = PuddleMaskTex().SampleLevel(wrapSamp, xz * 0.045, 0).r;
+  float b = PuddleMaskTex().SampleLevel(wrapSamp, xz * 0.012 + 9.1, 0).r;
+  float c = RainSpatterTex().SampleLevel(wrapSamp, xz * 0.09, 0).r;
   float mask = a * 0.5 + b * 0.35 + (1.0 - c) * 0.15;
   float lo = lerp(0.55, 0.28, saturate(puddleAmt * 0.5));
   float hi = lerp(0.78, 0.5, saturate(puddleAmt * 0.5));
@@ -118,12 +126,12 @@ float puddleIslandLevel(float2 xz, float puddleAmt) {
 }
 
 float4 PSCopy(VSOut input) : SV_Target {
-  return src0Tex.SampleLevel(pointSamp, input.uv, 0);
+  return Src0Tex().SampleLevel(pointSamp, input.uv, 0);
 }
 
 // Cry rain-space occluder: compare against depth map rendered along rain direction
 float4 PSOcclusion(VSOut input) : SV_Target {
-  float depth = depthTex.SampleLevel(pointSamp, input.uv, 0).r;
+  float depth = DepthTex().SampleLevel(pointSamp, input.uv, 0).r;
   if (depth <= 1e-4) { // sky (DepthColor clears to 0)
     return 1.0;
   }
@@ -136,7 +144,7 @@ float4 PSOcclusion(VSOut input) : SV_Target {
   if (any(uv < 0.001) || any(uv > 0.999)) {
     return 1.0;
   }
-  float mapD = src0Tex.SampleLevel(pointSamp, uv, 0).r;
+  float mapD = Src0Tex().SampleLevel(pointSamp, uv, 0).r;
   float pointZ = saturate(clip.z / clip.w);
   // Geometry closer to sky than this surface blocks rain
   float blocked = (mapD + 0.002 < pointZ) ? 1.0 : 0.0;
@@ -151,14 +159,14 @@ float4 PSOcclusion(VSOut input) : SV_Target {
 // ---------------------------------------------------------------------------
 GBufferOut PSDeferredGBuffer(VSOut input) {
   GBufferOut o;
-  float4 albedo = src0Tex.SampleLevel(pointSamp, input.uv, 0);
-  float4 nEnc = src1Tex.SampleLevel(pointSamp, input.uv, 0);
-  float4 orm = src2Tex.SampleLevel(pointSamp, input.uv, 0);
+  float4 albedo = Src0Tex().SampleLevel(pointSamp, input.uv, 0);
+  float4 nEnc = Src1Tex().SampleLevel(pointSamp, input.uv, 0);
+  float4 orm = Src2Tex().SampleLevel(pointSamp, input.uv, 0);
   o.albedo = albedo;
   o.normal = nEnc;
   o.orm = orm;
 
-  float depth = depthTex.SampleLevel(pointSamp, input.uv, 0).r;
+  float depth = DepthTex().SampleLevel(pointSamp, input.uv, 0).r;
   if (depth <= 1e-4) {
     return o;
   }
@@ -171,7 +179,7 @@ GBufferOut PSDeferredGBuffer(VSOut input) {
     return o;
   }
   float atten = volumeAttenuation(world) * amt;
-  float occ = rainOccTex.SampleLevel(linearSamp, input.uv, 0).r;
+  float occ = RainOccTex().SampleLevel(linearSamp, input.uv, 0).r;
   atten *= lerp(0.55, 1.0, occ);
   if (atten < 0.001) {
     return o;
@@ -193,15 +201,14 @@ GBufferOut PSDeferredGBuffer(VSOut input) {
   // Ripples — strong only inside islands
   float rippleFrame = floor(rainAnim.z);
   float2 rippleUV = xz * 0.18 + wind * cameraPos.w * -0.08;
-  float2 rippleN = unpackXYNormal(rainRippleTex.SampleLevel(wrapSamp, float3(rippleUV, rippleFrame), 0));
+  float2 rippleN = unpackXYNormal(RainRippleATex().SampleLevel(wrapSamp, rippleUV, 0));
   float2 rippleUV2 = xz * 0.31 - wind * cameraPos.w * 0.05;
-  float2 rippleN2 = unpackXYNormal(
-      rainRippleTex.SampleLevel(wrapSamp, float3(rippleUV2, (rippleFrame + 8) % 24), 0));
+  float2 rippleN2 = unpackXYNormal(RainRippleBTex().SampleLevel(wrapSamp, rippleUV2, 0));
   float2 rip = normalize(rippleN + rippleN2 * 0.65 + 1e-5);
   // Ripples only while drops are actually falling; still puddles stay mirror-like after rain.
   n.xy = lerp(n.xy, rip * 0.9, puddle * 0.75 * rainWet.z * saturate(0.15 + rainMisc.y));
 
-  float2 flowN = unpackXYNormal(surfaceFlowTex.Sample(wrapSamp, xz * 0.4 + wind * 0.02));
+  float2 flowN = unpackXYNormal(SurfaceFlowTex().Sample(wrapSamp, xz * 0.4 + wind * 0.02));
   n.xy += flowN * puddle * 0.18;
   n = normalize(n);
 
@@ -265,7 +272,7 @@ float rainWeatherAt(float2 worldXZ) {
   if (any(uv < 0.0) || any(uv > 1.0)) {
     return max(floorRain, 0.5);
   }
-  float cov = weatherTex.SampleLevel(linearSamp, uv, 0).r;
+  float cov = WeatherTex().SampleLevel(linearSamp, uv, 0).r;
   // Clear sky → no rain; dense deck → full rain.
   return max(smoothstep(0.12, 0.5, cov), floorRain);
 }
@@ -288,7 +295,7 @@ float3 rainSpaceSurface(float3 probe) {
   if (any(uv < 0.001) || any(uv > 0.999)) {
     return float3(probe.x, -1e5, probe.z);
   }
-  float mapD = src1Tex.SampleLevel(pointSamp, uv, 0).r;
+  float mapD = Src1Tex().SampleLevel(pointSamp, uv, 0).r;
   float2 ndc = uv * float2(2.0, -2.0) + float2(-1.0, 1.0);
   float4 w = mul(invRainOccVP, float4(ndc, mapD, 1.0));
   return w.xyz / max(w.w, 1e-4);
@@ -298,7 +305,7 @@ float3 rainSpaceSurface(float3 probe) {
 // t1 = previous wetness, t2 = rain-space depth (unused here), t12 = weather map.
 float4 PSWetnessUpdate(VSOut input) : SV_Target {
   float ext = max(rainMisc.w, 1.0);
-  float prev = src0Tex.SampleLevel(pointSamp, input.uv, 0).r;
+  float prev = Src0Tex().SampleLevel(pointSamp, input.uv, 0).r;
   // Texel world position: pick the tile instance nearest the camera (for the weather lookup).
   float2 cand = input.uv * ext;
   cand -= ext * round((cand - cameraPos.xz) / ext);
@@ -318,10 +325,10 @@ float texturedRainLayerVS(float3 viewP, float t, float layer, float2 wind) {
   tc.y = -viewP.y * scale * 1.2 - t * speed;
   tc.x += (-viewP.y) * wind.x * 0.08; // mild slant, not wall stretch
 
-  float rain = src1Tex.Sample(wrapSamp, tc * 0.28).r;
-  float rain2 = src1Tex.Sample(wrapSamp, tc * 0.48 + 0.27).r;
+  float rain = Src1Tex().Sample(wrapSamp, tc * 0.28).r;
+  float rain2 = Src1Tex().Sample(wrapSamp, tc * 0.48 + 0.27).r;
   float a = saturate(rain * 0.65 + rain2 * 0.4);
-  float2 nxy = unpackXYNormal(src2Tex.Sample(wrapSamp, tc * 0.28));
+  float2 nxy = unpackXYNormal(Src2Tex().Sample(wrapSamp, tc * 0.28));
   a *= lerp(0.45, 1.2, saturate(length(nxy)));
   a *= lerp(1.0, 0.4, layer / 3.0);
   return a;
@@ -360,7 +367,7 @@ float3 applyStreaks(float3 hdr, float2 uv, float depth, float3 V, float wcov) {
     return hdr;
   }
 
-  float occ = rainOccTex.SampleLevel(linearSamp, input_uv, 0).r;
+  float occ = RainOccTex().SampleLevel(linearSamp, input_uv, 0).r;
   float t = cameraPos.w;
   float2 wind = clampWind();
   int layers = (int)clamp(rainColor.w, 1.0, 3.0);
@@ -396,7 +403,7 @@ float3 applyStreaks(float3 hdr, float2 uv, float depth, float3 V, float wcov) {
 
   // Backlit rain: bright toward the sun (HG backscatter), faint front-lit.
   float3 col = rainStreakLight(V);
-  float3 bloom = bloomTex.SampleLevel(linearSamp, input_uv, 0).rgb;
+  float3 bloom = BloomTex().SampleLevel(linearSamp, input_uv, 0).rgb;
   hdr += col * texRain * 0.45;
   hdr += col * streaks * 0.85;
   hdr += col * streaks * streaks * 0.3;
@@ -416,7 +423,7 @@ float3 applyPuddleSpec(float3 hdr, float2 input_uv, float depth) {
   if (amt < 0.001) {
     return hdr;
   }
-  float3 n = normalize(gbufNormalTex.SampleLevel(pointSamp, input_uv, 0).xyz * 2.0 - 1.0);
+  float3 n = normalize(GbufNormalTex().SampleLevel(pointSamp, input_uv, 0).xyz * 2.0 - 1.0);
   float isUp = saturate(n.y * 5.0 - 3.6);
   float island = puddleIsland(world.xz, saturate(rainWet.y));
   float puddle = saturate(isUp * island * amt);
@@ -433,7 +440,7 @@ float3 applyPuddleSpec(float3 hdr, float2 input_uv, float depth) {
   float3 R = reflect(-V, n);
   float gloss = saturate(rainWet.z);
 
-  float4 ssr = ssrTex.SampleLevel(linearSamp, input_uv, 0);
+  float4 ssr = SsrTex().SampleLevel(linearSamp, input_uv, 0);
   float3 refl = ssr.rgb;
   float conf = saturate(ssr.a * 1.35);
 
@@ -457,9 +464,9 @@ float3 applyPuddleSpec(float3 hdr, float2 input_uv, float depth) {
         if (any(uv < 0.01) || any(uv > 0.99)) {
           break;
         }
-        float d = depthTex.SampleLevel(pointSamp, uv, 0).r;
+        float d = DepthTex().SampleLevel(pointSamp, uv, 0).r;
         if (d > 1e-4 && d < depth - 0.002 && d < prevD - 0.001) {
-          marchCol = min(src0Tex.SampleLevel(linearSamp, uv, 0).rgb, 6.0);
+          marchCol = min(Src0Tex().SampleLevel(linearSamp, uv, 0).rgb, 6.0);
           float edge = saturate(1.0 - max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0);
           marchHit = edge * saturate(1.0 - float(i) / float(steps));
           break;
@@ -475,10 +482,10 @@ float3 applyPuddleSpec(float3 hdr, float2 input_uv, float depth) {
 
   float2 texel = screenSize.zw;
   float3 soft = 0;
-  soft += src0Tex.SampleLevel(linearSamp, input_uv + float2(4, 0) * texel, 0).rgb;
-  soft += src0Tex.SampleLevel(linearSamp, input_uv + float2(-4, 0) * texel, 0).rgb;
-  soft += src0Tex.SampleLevel(linearSamp, input_uv + float2(0, 4) * texel, 0).rgb;
-  soft += src0Tex.SampleLevel(linearSamp, input_uv + float2(0, -4) * texel, 0).rgb;
+  soft += Src0Tex().SampleLevel(linearSamp, input_uv + float2(4, 0) * texel, 0).rgb;
+  soft += Src0Tex().SampleLevel(linearSamp, input_uv + float2(-4, 0) * texel, 0).rgb;
+  soft += Src0Tex().SampleLevel(linearSamp, input_uv + float2(0, 4) * texel, 0).rgb;
+  soft += Src0Tex().SampleLevel(linearSamp, input_uv + float2(0, -4) * texel, 0).rgb;
   soft *= 0.25;
   refl = lerp(soft * 0.65 + rainColor.rgb * 0.08, refl, saturate(conf + 0.2));
 
@@ -498,7 +505,7 @@ float3 applyMist(float3 hdr, float2 input_uv, float depth, float3 V, float wcov)
     float3 world = reconstructWorld(input_uv, depth);
     float dist = length(cameraPos.xyz - world);
     fog = saturate(dist / max(sceneRain1.w, 1.0)) * mistAmt * 0.22;
-    fog *= lerp(0.7, 1.0, rainOccTex.SampleLevel(linearSamp, input_uv, 0).r);
+    fog *= lerp(0.7, 1.0, RainOccTex().SampleLevel(linearSamp, input_uv, 0).r);
   }
   // Mist picks up sun backscatter like the streaks do (rain veil glows toward the sun).
   float3 tint = rainColor.rgb * float3(0.85, 0.92, 1.05) * 0.14 + rainStreakLight(V) * 0.12;
@@ -508,8 +515,8 @@ float3 applyMist(float3 hdr, float2 input_uv, float depth, float3 V, float wcov)
 // Merged rain post: puddle reflections + mist + lit streaks in a single full-res pass.
 // No early-out on rain amount: puddle reflections must persist while the ground dries.
 float4 PSRainComposite(VSOut input) : SV_Target {
-  float3 hdr = src0Tex.Sample(linearSamp, input.uv).rgb;
-  float depth = depthTex.SampleLevel(pointSamp, input.uv, 0).r;
+  float3 hdr = Src0Tex().Sample(linearSamp, input.uv).rgb;
+  float depth = DepthTex().SampleLevel(pointSamp, input.uv, 0).r;
   float3 V = normalize(reconstructWorld(input.uv, 1.0) - cameraPos.xyz);
   float3 world = cameraPos.xyz + V * 1500.0; // sky: probe the weather map along the ray
   if (depth > 1e-4) {
@@ -524,7 +531,7 @@ float4 PSRainComposite(VSOut input) : SV_Target {
 }
 
 float4 PSDrops(VSOut input) : SV_Target {
-  float3 hdr = src0Tex.Sample(linearSamp, input.uv).rgb;
+  float3 hdr = Src0Tex().Sample(linearSamp, input.uv).rgb;
   float amount = rainAmount.y * saturate(rainAmount.x);
   if (amount < 0.001) {
     return float4(hdr, 1);
@@ -556,7 +563,7 @@ float4 PSDrops(VSOut input) : SV_Target {
   }
 
   drops = saturate(drops * amount * 0.9);
-  float3 refr = src0Tex.Sample(linearSamp, uv + refrOffset * amount * 0.012).rgb;
+  float3 refr = Src0Tex().Sample(linearSamp, uv + refrOffset * amount * 0.012).rgb;
   float3 highlight = rainColor.rgb * 0.06 * rainAmount.w + 0.04;
   hdr = lerp(hdr, refr * 1.03 + highlight, drops);
   return float4(hdr, 1);
@@ -610,7 +617,7 @@ float4 PSSceneRain(SceneVSOut IN) : SV_Target {
     discard;
   }
 
-  float sceneD = depthTex.SampleLevel(pointSamp, uv, 0).r;
+  float sceneD = DepthTex().SampleLevel(pointSamp, uv, 0).r;
   float rainD = saturate(IN.clip.z / max(IN.clip.w, 1e-4));
   // Soft clip: keep rain in front of opaque surfaces (sky = 0 → no clip)
   float soft = 1.0;
@@ -618,12 +625,12 @@ float4 PSSceneRain(SceneVSOut IN) : SV_Target {
     soft = saturate((sceneD - rainD) * 80.0 + 0.5);
     soft = smoothstep(0.0, 1.0, soft);
   }
-  float occ = rainOccTex.SampleLevel(linearSamp, uv, 0).r;
+  float occ = RainOccTex().SampleLevel(linearSamp, uv, 0).r;
 
-  float rain = src1Tex.Sample(wrapSamp, IN.uv * float2(2.5, 4.0)).r;
-  float rain2 = src1Tex.Sample(wrapSamp, IN.uv * float2(3.8, 6.0) + 0.31).r;
+  float rain = Src1Tex().Sample(wrapSamp, IN.uv * float2(2.5, 4.0)).r;
+  float rain2 = Src1Tex().Sample(wrapSamp, IN.uv * float2(3.8, 6.0) + 0.31).r;
   float a = saturate(rain * 0.55 + rain2 * 0.45);
-  float2 nxy = unpackXYNormal(src2Tex.Sample(wrapSamp, IN.uv * 2.5));
+  float2 nxy = unpackXYNormal(Src2Tex().Sample(wrapSamp, IN.uv * 2.5));
   a *= lerp(0.5, 1.15, saturate(length(nxy)));
   a *= soft * lerp(0.7, 1.0, occ) * inten;
 
@@ -749,7 +756,7 @@ float4 PSRainDrops(DropVSOut IN) : SV_Target {
   // Soft clip against opaque scene (same convention as SceneRain cones).
   float2 ndc = IN.clip.xy / max(IN.clip.w, 1e-4);
   float2 suv = ndc * float2(0.5, -0.5) + 0.5;
-  float sceneD = depthTex.SampleLevel(pointSamp, saturate(suv), 0).r;
+  float sceneD = DepthTex().SampleLevel(pointSamp, saturate(suv), 0).r;
   float rainD = saturate(IN.clip.z / max(IN.clip.w, 1e-4));
   float soft = 1.0;
   if (sceneD > 1e-4) {
@@ -809,7 +816,7 @@ float4 PSSplash(SplashVSOut IN) : SV_Target {
   float ring = smoothstep(0.95, 0.55, r) * smoothstep(0.15, 0.45, r);
   float fill = exp(-r * r * 4.0) * 0.35;
   float a = (ring + fill) * IN.life * saturate(rainWet.w) * 0.6;
-  float spat = rainSpatterTex.Sample(wrapSamp, IN.uv * 0.5 + IN.centerUV).r;
+  float spat = RainSpatterTex().Sample(wrapSamp, IN.uv * 0.5 + IN.centerUV).r;
   a *= lerp(0.6, 1.2, spat);
   if (a < 0.01) {
     discard;

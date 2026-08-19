@@ -1,14 +1,7 @@
 #include "RHI/DX12/DX12Device.h"
 #include "RHI/DX12/PipelineCache.h"
-#include "Platform/FileSystem.h"
 
 namespace tucano::rhi {
-
-ShaderBytecode ShaderBytecode::loadFromFile(const std::string& path) {
-  ShaderBytecode bc;
-  bc.data = tucano::readFileBytes(path);
-  return bc;
-}
 
 std::shared_ptr<RootSignature> DX12Device::createRootSignature(bool allowInputLayout) {
   // Root layout (1.1):

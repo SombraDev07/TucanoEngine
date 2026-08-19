@@ -1,6 +1,4 @@
 #include "Renderer/Deferred/LightingPass.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <cstring>
 #include <span>
@@ -8,7 +6,6 @@
 namespace tucano {
 namespace {
 
-::tucano::rhi::DX12Sampler& asDxS(rhi::Sampler& s) { return static_cast<::tucano::rhi::DX12Sampler&>(s); }
 uint32_t bindlessOf(rhi::Texture& t) { return t.bindlessIndex(); }
 
 void updateCB(rhi::Buffer& buffer, const void* data, size_t size) {
@@ -52,8 +49,6 @@ struct LightingCB {
 } // namespace
 
 void executeLightingPass(LightingPassContext& ctx) {
-  auto& dx = static_cast<rhi::DX12Device&>(ctx.device);
-
   LightingCB lcb{};
   lcb.invViewProj = ctx.invViewProj;
   lcb.cameraPos = ctx.cameraPos;
@@ -126,9 +121,9 @@ void executeLightingPass(LightingPassContext& ctx) {
   ctx.cmd.setGraphicsRootCBV(1, ctx.frameCB);
   ctx.cmd.setGraphicsRootCBV(2, ctx.lightCB);
 
-  D3D12_CPU_DESCRIPTOR_HANDLE lightSamp[] = {asDxS(ctx.linearSamp).cpu, asDxS(ctx.shadowSamp).cpu};
+  rhi::Sampler* lightSamp[] = {&ctx.linearSamp, &ctx.shadowSamp};
   ctx.cmd.setGraphicsRootSrvTable(3, 0);
-  ctx.cmd.setGraphicsRootSamplerTable(4, dx.writeSamplerTable(lightSamp, 2));
+  ctx.cmd.setGraphicsRootSamplerTable(4, ctx.device.writeSamplerTable(lightSamp));
   ctx.cmd.draw(3);
   if (ctx.drawCalls) {
     ++(*ctx.drawCalls);

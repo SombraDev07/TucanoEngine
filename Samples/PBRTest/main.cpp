@@ -69,6 +69,20 @@ int main(int argc, char** argv) {
     auto swapChain = device->createSwapChain(window.nativeHandle(), window.width(), window.height(), true);
     std::cout << "SwapChain OK\n" << std::flush;
     Renderer renderer(*device, window.width(), window.height());
+#if TUCANO_RHI_VULKAN
+    auto& rs = renderer.settings();
+    rs.enableShadows = false;
+    rs.enableContactShadows = false;
+    rs.enableSSR = false;
+    rs.enableVoxelGI = false;
+    rs.giTier = GITier::Off;
+    rs.enableMeshlets = false;
+    rs.enableVisibilityBuffer = false;
+    rs.enableHiZOcclusion = false;
+    rs.postFx.enableAO = false;
+    rs.postFx.enableBloom = false;
+    rs.postFx.enableAutoExposure = false;
+#endif
     std::cout << "Renderer OK\n" << std::flush;
     Input input(window.handle());
 
@@ -162,6 +176,7 @@ int main(int argc, char** argv) {
       if (maxFrames >= 0 && frame >= maxFrames) break;
     }
     device->waitIdle();
+    std::cout << "PBRTest OK (" << frame << " frames)\n";
     return 0;
   } catch (const std::exception& ex) {
     std::cerr << "Fatal: " << ex.what() << "\n";

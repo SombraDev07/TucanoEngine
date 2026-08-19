@@ -9,8 +9,10 @@
 #endif
 
 #include <GLFW/glfw3.h>
+#ifdef _WIN32
 #define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3native.h>
+#endif
 
 #include <stdexcept>
 
@@ -97,7 +99,14 @@ void Window::pollEventsEmbedded() {
 
 void Window::setTitle(const std::string& title) { glfwSetWindowTitle(m_window, title.c_str()); }
 
-void* Window::nativeHandle() const { return glfwGetWin32Window(m_window); }
+void* Window::nativeHandle() const {
+#ifdef _WIN32
+  return glfwGetWin32Window(m_window);
+#else
+  // Vulkan swapchain takes the GLFWwindow* and calls glfwCreateWindowSurface.
+  return m_window;
+#endif
+}
 
 float Window::aspect() const {
   return m_height > 0 ? static_cast<float>(m_width) / static_cast<float>(m_height) : 1.0f;

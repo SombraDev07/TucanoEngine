@@ -79,6 +79,7 @@ struct DX12Texture final : Texture {
   Format format() const override { return desc.format; }
   // Missing SRV → permanent null bindless slot 0 (safe for GBuffer/Lighting sampling).
   uint32_t bindlessIndex() const override { return hasSrv ? srvIndex : 0u; }
+  uint32_t bindlessUavIndex() const override { return hasUav ? uavIndex : 0u; }
   ID3D12Resource* get() const { return resource.Get(); }
 
   uint32_t subresourceCount() const {

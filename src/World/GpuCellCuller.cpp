@@ -1,8 +1,5 @@
 #include "World/GpuCellCuller.h"
 
-#include "RHI/DX12/DX12CommandList.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <cstring>
 
@@ -33,7 +30,6 @@ struct CullCB {
   float maxDistance;
 };
 
-rhi::DX12Buffer& dxBuf(rhi::Buffer& b) { return static_cast<rhi::DX12Buffer&>(b); }
 
 } // namespace
 
@@ -107,7 +103,6 @@ std::vector<VisibleCell> GpuCellCuller::cull(const std::vector<CellId>& ids,
 
   ensureCapacity(cellCount);
 
-  auto& dev = static_cast<rhi::DX12Device&>(m_device);
   // beginFrame rotates dynamic upload buffers (the constant buffer is one). The CPU-visible pointer
   // it returns only points at the current backing AFTER the rotation, so every mapped() write must
   // come after this call — writing before it lands in a backing the GPU will not read.
@@ -154,11 +149,10 @@ std::vector<VisibleCell> GpuCellCuller::cull(const std::vector<CellId>& ids,
     cmd->setPipeline(m_cullPso);
     cmd->setComputeRootCBV(1, *m_cb);
 
-    D3D12_CPU_DESCRIPTOR_HANDLE srvs[] = {dxBuf(*m_cellBuffer).srvCpu};
-    D3D12_CPU_DESCRIPTOR_HANDLE uavs[] = {dxBuf(*m_visibleBuffer).uavCpu,
-                                          dxBuf(*m_counterBuffer).uavCpu};
-    cmd->setComputeRootSrvTable(2, dev.writeSrvTable(srvs, 1));
-    cmd->setComputeRootUavTable(3, dev.writeUavTable(uavs, 2));
+    rhi::Buffer* srvs[] = {m_cellBuffer.get()};
+    rhi::Buffer* uavs[] = {m_visibleBuffer.get(), m_counterBuffer.get()};
+    cmd->setComputeRootSrvTable(2, m_device.writeBufferSrvTable(srvs));
+    cmd->setComputeRootUavTable(3, m_device.writeBufferUavTable(uavs));
     cmd->dispatch((cellCount + 63u) / 64u, 1, 1);
 
     // Copy both UAVs down to readback heaps. copyBuffer transitions them to CopySrc for us.

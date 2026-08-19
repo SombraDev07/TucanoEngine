@@ -1,21 +1,35 @@
-add_library(TucanoRuntime STATIC
+set(TUCANO_RUNTIME_SOURCES
   Platform/Window.cpp
   Platform/Input.cpp
   Platform/FileSystem.cpp
-  RHI/DX12/DX12Common.cpp
-  RHI/DX12/DX12Device.cpp
-  RHI/DX12/DX12CommandList.cpp
-  RHI/DX12/DX12SwapChain.cpp
-  RHI/DX12/DX12DescriptorHeap.cpp
-  RHI/DX12/DX12Pipeline.cpp
-  RHI/DX12/DX12Upload.cpp
-  RHI/DX12/BarrierBatcher.cpp
-  RHI/DX12/BindlessManager.cpp
-  RHI/DX12/PipelineCache.cpp
-  RHI/DX12/GpuCrashRecovery.cpp
-  RHI/DX12/SplitTransitionTracker.cpp
-  RHI/DX12/DX12ReadBack.cpp
+  RHI/RHI.cpp
+  RHI/BindlessManager.cpp
   RHI/Null/NullDevice.cpp
+)
+if(TUCANO_RHI STREQUAL "dx12")
+  list(APPEND TUCANO_RUNTIME_SOURCES
+    RHI/DX12/DX12Common.cpp
+    RHI/DX12/DX12Device.cpp
+    RHI/DX12/DX12CommandList.cpp
+    RHI/DX12/DX12SwapChain.cpp
+    RHI/DX12/DX12DescriptorHeap.cpp
+    RHI/DX12/DX12Pipeline.cpp
+    RHI/DX12/DX12Upload.cpp
+    RHI/DX12/BarrierBatcher.cpp
+    RHI/DX12/PipelineCache.cpp
+    RHI/DX12/GpuCrashRecovery.cpp
+    RHI/DX12/SplitTransitionTracker.cpp
+    RHI/DX12/DX12ReadBack.cpp
+  )
+elseif(TUCANO_RHI STREQUAL "vulkan")
+  list(APPEND TUCANO_RUNTIME_SOURCES
+    RHI/Vulkan/VulkanDevice.cpp
+    RHI/Vulkan/VulkanVma.cpp
+  )
+endif()
+
+add_library(TucanoRuntime STATIC
+  ${TUCANO_RUNTIME_SOURCES}
   Editor/EditorShell.cpp
   Editor/EditorTool.cpp
   Editor/ToolHost.cpp
@@ -163,6 +177,7 @@ add_library(TucanoRuntime STATIC
 target_include_directories(TucanoRuntime
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_BINARY_DIR}
     ${draco_SOURCE_DIR}/src
     ${draco_BINARY_DIR}
     ${zstd_SOURCE_DIR}/lib
@@ -182,16 +197,20 @@ target_link_libraries(TucanoRuntime
     imgui_node_editor
     openfbx
     rpmalloc
-    draco
+    draco::draco
     tracy_stub
     Jolt
     lua
     libcurl
-    d3d12
-    dxgi
-    dxguid
-    d3dcompiler
 )
+if(TUCANO_RHI STREQUAL "dx12")
+  target_link_libraries(TucanoRuntime PUBLIC d3d12 dxgi dxguid d3dcompiler)
+elseif(TUCANO_RHI STREQUAL "vulkan")
+  target_link_libraries(TucanoRuntime PUBLIC Vulkan::Vulkan vma_headers)
+endif()
+if(UNIX)
+  target_link_libraries(TucanoRuntime PUBLIC pthread dl)
+endif()
 
 if(TUCANO_HAS_AFTERMATH)
   target_compile_definitions(TucanoRuntime PUBLIC TUCANO_AFTERMATH=1)
@@ -202,8 +221,16 @@ target_compile_definitions(TucanoRuntime
   PUBLIC
     TUCANO_SHADER_DIR="${CMAKE_BINARY_DIR}/shaders"
     TUCANO_ENGINE_ASSETS_DIR="${CMAKE_SOURCE_DIR}/EngineAssets"
+    TUCANO_SHADER_EXT="${TUCANO_SHADER_EXT}"
     GLM_FORCE_DEPTH_ZERO_TO_ONE
     GLM_FORCE_LEFT_HANDED
 )
+if(TUCANO_RHI STREQUAL "dx12")
+  target_compile_definitions(TucanoRuntime PUBLIC TUCANO_RHI_DX12=1 TUCANO_RHI_VULKAN=0 TUCANO_RHI_NULL=0)
+elseif(TUCANO_RHI STREQUAL "vulkan")
+  target_compile_definitions(TucanoRuntime PUBLIC TUCANO_RHI_DX12=0 TUCANO_RHI_VULKAN=1 TUCANO_RHI_NULL=0)
+else()
+  target_compile_definitions(TucanoRuntime PUBLIC TUCANO_RHI_DX12=0 TUCANO_RHI_VULKAN=0 TUCANO_RHI_NULL=1)
+endif()
 
 # Editor is now native ImGui (src/Editor/EditorShell.cpp) — no C ABI bridge needed

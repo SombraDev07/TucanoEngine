@@ -125,7 +125,7 @@ void ReflectionProbes::init(rhi::Device& device) {
   m_faceAtlas = device.createTexture(faceDesc, nullptr, 0);
 
   rhi::TextureDesc depthDesc{};
-  depthDesc.width = kFaceSize;
+  depthDesc.width = kFaceSize * kFaces;
   depthDesc.height = kFaceSize;
   depthDesc.format = rhi::Format::D32_FLOAT;
   depthDesc.usage = rhi::TextureUsage::DepthStencil;

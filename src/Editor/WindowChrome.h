@@ -42,10 +42,12 @@ public:
 	void requestClose();
 
 private:
+#ifdef _WIN32
 	static long long __stdcall wndProc(void* hwnd, unsigned int msg, unsigned long long wParam,
 	                                   long long lParam);
 	long long handle(void* hwnd, unsigned int msg, unsigned long long wParam, long long lParam,
 	                 bool& handled);
+#endif
 
 	void* m_hwnd = nullptr;
 	void* m_originalProc = nullptr;

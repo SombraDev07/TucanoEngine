@@ -4,7 +4,7 @@
 #include "RHI/DX12/DX12DescriptorHeap.h"
 #include "RHI/DX12/DX12Resource.h"
 #include "RHI/DX12/DX12Upload.h"
-#include "RHI/DX12/BindlessManager.h"
+#include "RHI/BindlessManager.h"
 #include "RHI/DX12/PipelineCache.h"
 #include "RHI/DX12/SplitTransitionTracker.h"
 #include "RHI/DX12/GpuCrashRecovery.h"
@@ -80,6 +80,11 @@ public:
   void createBufferSrv(DX12Buffer& buf);
   void createBufferUav(DX12Buffer& buf);
 
+  // Backend-neutral entry points (RHI.h). Engine code uses these; the raw-handle overloads below
+  // stay for the DX12 internals that already hold descriptor handles.
+  uint32_t writeResourceTable(std::span<const ResourceView> views) override;
+  uint32_t writeSamplerTable(std::span<Sampler* const> samplers) override;
+
   // Allocate contiguous SRV table entries and copy source SRVs; returns heap index of first.
   // Prefer bindless indices + table base 0; transient tables kept for legacy/fallback paths.
   uint32_t writeSrvTable(const D3D12_CPU_DESCRIPTOR_HANDLE* srcCpu, uint32_t count);
@@ -96,6 +101,10 @@ public:
   std::shared_ptr<Buffer> createAccelerationStructureBuffer(uint64_t sizeBytes,
                                                             const std::string& debugName) override;
   uint32_t createAccelerationStructureSrv(Buffer& asBuffer) override;
+  uint32_t raytracingInstanceDescSize() const override {
+    return static_cast<uint32_t>(sizeof(D3D12_RAYTRACING_INSTANCE_DESC));
+  }
+  void writeRaytracingInstanceDescs(std::span<const TlasInstance> instances, void* dst) override;
   void getRaytracingPrebuildInfo(uint32_t triangleCount, uint32_t vertexCount, uint64_t* resultSize,
                                  uint64_t* scratchSize) override;
   void getRaytracingTopLevelPrebuildInfo(uint32_t instanceCount, uint64_t* resultSize,

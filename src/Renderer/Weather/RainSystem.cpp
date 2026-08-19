@@ -2,8 +2,6 @@
 #include "AssetPipeline/DdsLoader.h"
 #include "AssetPipeline/ImageLoader.h"
 #include "Platform/FileSystem.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 #include "Renderer/Mesh.h"
 
 #include <cmath>
@@ -45,16 +43,31 @@ struct RainCBData {
   glm::vec4 rainLight1; // premultiplied sun radiance, weatherMapValid
   glm::mat4 invRainOccVP; // rain-space clip → world (particle ground collision)
   glm::vec4 rainMisc;     // dt, rainingAmount, particleRadius, wetnessExtent
+  glm::uvec4 texIds0;
+  glm::uvec4 texIds1;
+  glm::uvec4 texIds2;
+  glm::uvec4 texIds3;
 };
-static_assert(sizeof(RainCBData) <= 512, "RainCB too large");
+static_assert(sizeof(RainCBData) <= 768, "RainCB too large");
+
+uint32_t rainId(rhi::Texture* t) { return t ? t->bindlessIndex() : 0u; }
+
+void patchRainIds(rhi::Buffer& rainCB, rhi::Texture* slots[14], uint32_t rippleB = 0) {
+  auto* mapped = reinterpret_cast<RainCBData*>(rainCB.mapped());
+  if (!mapped) {
+    throw std::runtime_error("RainCB is not CPU-mapped (texIds)");
+  }
+  mapped->texIds0 = {rainId(slots[0]), rainId(slots[1]), rainId(slots[2]), rainId(slots[3])};
+  mapped->texIds1 = {rainId(slots[4]), rainId(slots[5]), rainId(slots[6]), rainId(slots[7])};
+  mapped->texIds2 = {rainId(slots[8]), rainId(slots[9]), rainId(slots[10]), rainId(slots[11])};
+  mapped->texIds3 = {rainId(slots[12]), rainId(slots[13]), rippleB, 0};
+}
 
 struct RootXform {
   glm::mat4 viewProj;
   glm::mat4 world;
 };
 
-rhi::DX12Texture& dxTex(rhi::Texture& t) { return static_cast<rhi::DX12Texture&>(t); }
-rhi::DX12Sampler& dxSamp(rhi::Sampler& s) { return static_cast<rhi::DX12Sampler&>(s); }
 
 } // namespace
 
@@ -95,23 +108,21 @@ void RainSystem::loadTextures(rhi::Device& device) {
   ensure(m_rainfallN, "RainfallNFallback");
   ensure(m_moisture, "MoistureFallback");
 
-  // 24-frame ripple array (DDS BC5)
-  ImageData first = loadDdsRGBA8(assetPath("Textures/Rain/Ripple/ripple1_ddn.dds"));
-  rhi::TextureDesc arr{};
-  arr.width = first.width;
-  arr.height = first.height;
-  arr.arraySize = kRippleCount;
-  arr.format = rhi::Format::R8G8B8A8_UNORM;
-  arr.usage = rhi::TextureUsage::ShaderResource;
-  arr.debugName = "RainRipples";
-  m_ripples = device.createTexture(arr, nullptr, 0);
+  // 24 ripple frames as individual 2D textures (bindless). A Texture2DArray would
+  // need a second descriptor set; the CPU already picks the frame in rainAnim.z.
   for (int i = 0; i < kRippleCount; ++i) {
     const std::string rel = "Textures/Rain/Ripple/ripple" + std::to_string(i + 1) + "_ddn.dds";
-    const std::string path = assetPath(rel.c_str());
-    ImageData img = (i == 0) ? first : loadDdsRGBA8(path);
-    device.uploadTexture(*m_ripples, img.pixels.data(), img.width, img.height, img.width * 4, 0,
-                         static_cast<uint32_t>(i));
+    m_rippleFrames[i] = tryLoad(rel.c_str(), false);
+    ensure(m_rippleFrames[i], "RainRippleFallback");
   }
+}
+
+rhi::Texture* RainSystem::rippleFrame(float frame) const {
+  int i = static_cast<int>(std::floor(frame)) % kRippleCount;
+  if (i < 0) {
+    i += kRippleCount;
+  }
+  return m_rippleFrames[i] ? &m_rippleFrames[i]->resource() : nullptr;
 }
 
 void RainSystem::buildRainMesh(rhi::Device& device) {
@@ -418,7 +429,6 @@ void RainSystem::renderOccluderMap(rhi::CommandList& cmd, rhi::Device& device, S
 
 void RainSystem::runOcclusion(rhi::CommandList& cmd, rhi::Device& device, rhi::Texture& depthColor,
                               rhi::Buffer& rainCB, uint32_t sampTable, uint32_t width, uint32_t height) {
-  auto& dx = static_cast<rhi::DX12Device&>(device);
   cmd.transition(*m_occlusion, rhi::ResourceState::RenderTarget);
   cmd.transition(depthColor, rhi::ResourceState::ShaderResource);
   cmd.transition(*m_rainSpaceDepth, rhi::ResourceState::ShaderResource);
@@ -426,10 +436,12 @@ void RainSystem::runOcclusion(rhi::CommandList& cmd, rhi::Device& device, rhi::T
   cmd.setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
   cmd.setRootSignature(*m_rootFS);
   cmd.setPipeline(*m_occPSO);
+  rhi::Texture* srv[14] = {};
+  srv[0] = &depthColor;
+  srv[1] = m_rainSpaceDepth.get();
+  patchRainIds(rainCB, srv);
   cmd.setGraphicsRootCBV(1, rainCB);
-  // t0 = scene depth, t1 = rain-space occluder depth
-  D3D12_CPU_DESCRIPTOR_HANDLE srv[] = {dxTex(depthColor).srvCpu, dxTex(*m_rainSpaceDepth).srvCpu};
-  cmd.setGraphicsRootSrvTable(3, dx.writeSrvTable(srv, 2));
+  cmd.setGraphicsRootSrvTable(3, 0);
   cmd.setGraphicsRootSamplerTable(4, sampTable);
   cmd.setViewport({0, 0, float(width), float(height), 0, 1});
   cmd.setScissor({0, 0, int(width), int(height)});
@@ -453,7 +465,6 @@ void RainSystem::executeDeferredGBuffer(rhi::CommandList& cmd, rhi::Device& devi
     return;
   }
 
-  auto& dx = static_cast<rhi::DX12Device&>(device);
   const glm::vec2 wind = glm::clamp(glm::vec2(m_params.wind.x, m_params.wind.z), -1.0f, 1.0f);
   // Occluder map is camera-centered but stable over small moves: re-render only when the camera
   // strays >2 m from the cached center or every 16 frames (scene may animate).
@@ -467,9 +478,8 @@ void RainSystem::executeDeferredGBuffer(rhi::CommandList& cmd, rhi::Device& devi
   }
   updateCB(rainCB, invViewProj, viewProj, view, m_rainOccVP, cameraPos, timeSeconds, width, height, 1.0f);
 
-  D3D12_CPU_DESCRIPTOR_HANDLE sampCpu[] = {dxSamp(linearSamp).cpu, dxSamp(*m_wrapSamp).cpu,
-                                           dxSamp(*m_pointSamp).cpu};
-  const uint32_t sampTable = dx.writeSamplerTable(sampCpu, 3);
+  rhi::Sampler* sampCpu[] = {&linearSamp, m_wrapSamp.get(), m_pointSamp.get()};
+  const uint32_t sampTable = device.writeSamplerTable(sampCpu);
 
   runOcclusion(cmd, device, depthColor, rainCB, sampTable, width, height);
 
@@ -486,15 +496,14 @@ void RainSystem::executeDeferredGBuffer(rhi::CommandList& cmd, rhi::Device& devi
     cmd.setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
     cmd.setRootSignature(*m_rootFS);
     cmd.setPipeline(*m_wetnessPSO);
-    cmd.setGraphicsRootCBV(1, rainCB);
     rhi::Texture& weatherTex = m_weatherMap ? *m_weatherMap : m_moisture->resource();
-    D3D12_CPU_DESCRIPTOR_HANDLE wsrv[13] = {};
-    for (int i = 0; i < 13; ++i) {
-      wsrv[i] = dxTex(depthColor).srvCpu;
-    }
-    wsrv[1] = dxTex(*wetPrev).srvCpu;
-    wsrv[12] = dxTex(weatherTex).srvCpu;
-    cmd.setGraphicsRootSrvTable(3, dx.writeSrvTable(wsrv, 13));
+    rhi::Texture* wsrv[14] = {};
+    wsrv[0] = &depthColor;
+    wsrv[1] = wetPrev;
+    wsrv[12] = &weatherTex;
+    patchRainIds(rainCB, wsrv);
+    cmd.setGraphicsRootCBV(1, rainCB);
+    cmd.setGraphicsRootSrvTable(3, 0);
     cmd.setGraphicsRootSamplerTable(4, sampTable);
     cmd.setViewport({0, 0, float(kWetnessSize), float(kWetnessSize), 0, 1});
     cmd.setScissor({0, 0, int(kWetnessSize), int(kWetnessSize)});
@@ -510,9 +519,12 @@ void RainSystem::executeDeferredGBuffer(rhi::CommandList& cmd, rhi::Device& devi
     cmd.setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
     cmd.setRootSignature(*m_rootFS);
     cmd.setPipeline(pso);
+    rhi::Texture* srv2[14] = {};
+    srv2[0] = &depthColor;
+    srv2[1] = &src;
+    patchRainIds(rainCB, srv2);
     cmd.setGraphicsRootCBV(1, rainCB);
-    D3D12_CPU_DESCRIPTOR_HANDLE srv2[] = {dxTex(depthColor).srvCpu, dxTex(src).srvCpu};
-    cmd.setGraphicsRootSrvTable(3, dx.writeSrvTable(srv2, 2));
+    cmd.setGraphicsRootSrvTable(3, 0);
     cmd.setGraphicsRootSamplerTable(4, sampTable);
     cmd.setViewport({0, 0, float(width), float(height), 0, 1});
     cmd.setScissor({0, 0, int(width), int(height)});
@@ -534,21 +546,23 @@ void RainSystem::executeDeferredGBuffer(rhi::CommandList& cmd, rhi::Device& devi
   cmd.setRenderTargets(std::span<rhi::Texture*>(rts, 3), nullptr);
   cmd.setRootSignature(*m_rootFS);
   cmd.setPipeline(*m_gbufferPSO);
-  cmd.setGraphicsRootCBV(1, rainCB);
 
-  D3D12_CPU_DESCRIPTOR_HANDLE srv[14] = {};
-  srv[0] = dxTex(depthColor).srvCpu;
-  srv[1] = dxTex(*m_albedoCopy).srvCpu;
-  srv[2] = dxTex(*m_normalCopy).srvCpu;
-  srv[3] = dxTex(*m_ormCopy).srvCpu;
-  srv[4] = dxTex(m_puddleMask->resource()).srvCpu;
-  srv[5] = dxTex(m_rainSpatter->resource()).srvCpu;
-  srv[6] = dxTex(m_surfaceFlow->resource()).srvCpu;
-  srv[7] = dxTex(*m_ripples).srvCpu;
-  srv[8] = dxTex(*m_occlusion).srvCpu;
-  srv[9] = srv[10] = srv[11] = srv[12] = dxTex(depthColor).srvCpu; // unused slots
-  srv[13] = dxTex(*wetCurr).srvCpu;                                // wetnessTex (t13)
-  cmd.setGraphicsRootSrvTable(3, dx.writeSrvTable(srv, 14));
+  rhi::Texture* srv[14] = {};
+  srv[0] = &depthColor;
+  srv[1] = m_albedoCopy.get();
+  srv[2] = m_normalCopy.get();
+  srv[3] = m_ormCopy.get();
+  srv[4] = &m_puddleMask->resource();
+  srv[5] = &m_rainSpatter->resource();
+  srv[6] = &m_surfaceFlow->resource();
+  srv[7] = rippleFrame(std::fmod(timeSeconds * 12.0f, float(kRippleCount)));
+  srv[8] = m_occlusion.get();
+  srv[13] = wetCurr;
+  const uint32_t rippleB =
+      rainId(rippleFrame(std::fmod(timeSeconds * 12.0f + 8.0f, float(kRippleCount))));
+  patchRainIds(rainCB, srv, rippleB);
+  cmd.setGraphicsRootCBV(1, rainCB);
+  cmd.setGraphicsRootSrvTable(3, 0);
   cmd.setGraphicsRootSamplerTable(4, sampTable);
   cmd.setViewport({0, 0, float(width), float(height), 0, 1});
   cmd.setScissor({0, 0, int(width), int(height)});
@@ -569,10 +583,8 @@ rhi::Texture* RainSystem::executePost(rhi::CommandList& cmd, rhi::Device& device
     return &hdrIn;
   }
 
-  auto& dx = static_cast<rhi::DX12Device&>(device);
-  D3D12_CPU_DESCRIPTOR_HANDLE sampCpu[] = {dxSamp(linearSamp).cpu, dxSamp(*m_wrapSamp).cpu,
-                                           dxSamp(*m_pointSamp).cpu};
-  const uint32_t sampTable = dx.writeSamplerTable(sampCpu, 3);
+  rhi::Sampler* sampCpu[] = {&linearSamp, m_wrapSamp.get(), m_pointSamp.get()};
+  const uint32_t sampTable = device.writeSamplerTable(sampCpu);
 
   auto pushCB = [&]() {
     updateCB(rainCB, invViewProj, viewProj, view, m_rainOccVP, cameraPos, timeSeconds, width, height, 1.0f);
@@ -606,30 +618,33 @@ rhi::Texture* RainSystem::executePost(rhi::CommandList& cmd, rhi::Device& device
     cmd.setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
     cmd.setRootSignature(*m_rootFS);
     cmd.setPipeline(pso);
-    cmd.setGraphicsRootCBV(1, rainCB);
     rhi::Texture& weatherTex = m_weatherMap ? *m_weatherMap : m_moisture->resource();
     cmd.transition(m_wetFlip ? *m_wetnessB : *m_wetnessA, rhi::ResourceState::ShaderResource);
-    D3D12_CPU_DESCRIPTOR_HANDLE srv[14] = {};
-    srv[0] = dxTex(depthColor).srvCpu;
-    srv[1] = dxTex(inTex).srvCpu;
+    rhi::Texture* srv[14] = {};
+    srv[0] = &depthColor;
+    srv[1] = &inTex;
     if (kind == PassKind::Composite) {
-      srv[2] = dxTex(m_rainfall->resource()).srvCpu;
-      srv[3] = dxTex(m_rainfallN->resource()).srvCpu;
+      srv[2] = &m_rainfall->resource();
+      srv[3] = &m_rainfallN->resource();
     } else {
-      srv[2] = dxTex(m_moisture->resource()).srvCpu;
-      srv[3] = dxTex(m_moisture->resource()).srvCpu;
+      srv[2] = &m_moisture->resource();
+      srv[3] = &m_moisture->resource();
     }
-    srv[4] = dxTex(m_puddleMask->resource()).srvCpu;
-    srv[5] = dxTex(m_rainSpatter->resource()).srvCpu;
-    srv[6] = dxTex(m_surfaceFlow->resource()).srvCpu;
-    srv[7] = dxTex(*m_ripples).srvCpu;
-    srv[8] = dxTex(*m_occlusion).srvCpu;
-    srv[9] = dxTex(bloomOrHdr).srvCpu;
-    srv[10] = dxTex(*ssrTex).srvCpu;
-    srv[11] = dxTex(normals).srvCpu;
-    srv[12] = dxTex(weatherTex).srvCpu;
-    srv[13] = dxTex(m_wetFlip ? *m_wetnessB : *m_wetnessA).srvCpu; // latest wetness
-    cmd.setGraphicsRootSrvTable(3, dx.writeSrvTable(srv, 14));
+    srv[4] = &m_puddleMask->resource();
+    srv[5] = &m_rainSpatter->resource();
+    srv[6] = &m_surfaceFlow->resource();
+    srv[7] = rippleFrame(std::fmod(timeSeconds * 12.0f, float(kRippleCount)));
+    srv[8] = m_occlusion.get();
+    srv[9] = &bloomOrHdr;
+    srv[10] = ssrTex;
+    srv[11] = &normals;
+    srv[12] = &weatherTex;
+    srv[13] = m_wetFlip ? m_wetnessB.get() : m_wetnessA.get();
+    const uint32_t rippleB =
+        rainId(rippleFrame(std::fmod(timeSeconds * 12.0f + 8.0f, float(kRippleCount))));
+    patchRainIds(rainCB, srv, rippleB);
+    cmd.setGraphicsRootCBV(1, rainCB);
+    cmd.setGraphicsRootSrvTable(3, 0);
     cmd.setGraphicsRootSamplerTable(4, sampTable);
     cmd.setViewport({0, 0, float(width), float(height), 0, 1});
     cmd.setScissor({0, 0, int(width), int(height)});
@@ -641,33 +656,37 @@ rhi::Texture* RainSystem::executePost(rhi::CommandList& cmd, rhi::Device& device
   fullscreen(*m_compositePSO, *src, *dst, PassKind::Composite);
   std::swap(src, dst);
 
-  // SceneRain volumetric cones (additive) — copy then draw to avoid read/write hazard
-  if (m_params.enableSceneRain && m_sceneRainPSO && m_rainVB && m_params.sceneRainIntensity > 0.001f) {
+  // SceneRain volumetric cones: additive in place on src. PSSceneRain does not sample the HDR
+  // target — the old copyTextureRegion + srv[1]=src / srv[9]=bloomOrHdr aliased the RT (Renderer
+  // passes rainSrc as bloomOrHdr). That path MODE1'd RADV 2026-08-18 08:58. Stay gated on Vulkan
+  // until --frames 8 then 90 pass after a clean reboot. GPU particles (VS-sampled occluder)
+  // GPUVM'd 2026-08-17 and stay gated separately.
+#if TUCANO_RHI_VULKAN
+  const bool allowSceneCones = false;   // MODE1 2026-08-18 08:58
+  const bool allowGpuParticles = false; // GPUVM 2026-08-17 VS sample
+#else
+  const bool allowSceneCones = true;
+  const bool allowGpuParticles = true;
+#endif
+  if (allowSceneCones && m_params.enableSceneRain && m_sceneRainPSO && m_rainVB &&
+      m_params.sceneRainIntensity > 0.001f) {
     pushCB();
-    cmd.transition(*src, rhi::ResourceState::CopySrc);
-    cmd.transition(*dst, rhi::ResourceState::CopyDst);
-    cmd.copyTextureRegion(*dst, 0, 0, *src, 0, 0, width, height);
-    cmd.transition(*dst, rhi::ResourceState::RenderTarget);
+    cmd.transition(*src, rhi::ResourceState::RenderTarget);
     cmd.transition(depthColor, rhi::ResourceState::ShaderResource);
     cmd.transition(*m_occlusion, rhi::ResourceState::ShaderResource);
-    rhi::Texture* rt = dst;
+    cmd.transition(m_rainfall->resource(), rhi::ResourceState::ShaderResource);
+    cmd.transition(m_rainfallN->resource(), rhi::ResourceState::ShaderResource);
+    rhi::Texture* rt = src;
     cmd.setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
     cmd.setRootSignature(*m_rootMesh);
     cmd.setPipeline(*m_sceneRainPSO);
-    cmd.setGraphicsRootCBV(1, rainCB);
-    D3D12_CPU_DESCRIPTOR_HANDLE srv[] = {
-        dxTex(depthColor).srvCpu,
-        dxTex(*dst).srvCpu,
-        dxTex(m_rainfall->resource()).srvCpu,
-        dxTex(m_rainfallN->resource()).srvCpu,
-        dxTex(m_puddleMask->resource()).srvCpu,
-        dxTex(m_rainSpatter->resource()).srvCpu,
-        dxTex(m_surfaceFlow->resource()).srvCpu,
-        dxTex(*m_ripples).srvCpu,
-        dxTex(*m_occlusion).srvCpu,
-        dxTex(bloomOrHdr).srvCpu,
-    };
-    cmd.setGraphicsRootSrvTable(3, dx.writeSrvTable(srv, 10));
+    rhi::Texture* srv[14] = {};
+    srv[0] = &depthColor;
+    srv[2] = &m_rainfall->resource();
+    srv[3] = &m_rainfallN->resource();
+    srv[8] = m_occlusion.get();
+    patchRainIds(rainCB, srv);
+    cmd.setGraphicsRootSrvTable(3, 0);
     cmd.setGraphicsRootSamplerTable(4, sampTable);
     cmd.setViewport({0, 0, float(width), float(height), 0, 1});
     cmd.setScissor({0, 0, int(width), int(height)});
@@ -683,6 +702,7 @@ rhi::Texture* RainSystem::executePost(rhi::CommandList& cmd, rhi::Device& device
         throw std::runtime_error("RainCB is not CPU-mapped (scene rain)");
       }
       mapped->sceneRain1.z = float(layer);
+      cmd.setGraphicsRootCBV(1, rainCB);
       glm::mat4 world(1.0f);
       world[0][0] = scales[layer];
       world[1][1] = heights[layer];
@@ -695,13 +715,12 @@ rhi::Texture* RainSystem::executePost(rhi::CommandList& cmd, rhi::Device& device
       cmd.setGraphicsRootConstants(0, &xform, 32);
       cmd.draw(m_rainVertexCount);
     }
-    cmd.transition(*dst, rhi::ResourceState::ShaderResource);
-    std::swap(src, dst);
+    cmd.transition(*src, rhi::ResourceState::ShaderResource);
   }
 
   // Stateless GPU rain drops + impact splashes — additive, drawn in place on src (no copy).
   const bool raining = m_params.enabled && m_params.amount > 0.001f;
-  if (raining && m_rainDropsPSO) {
+  if (allowGpuParticles && raining && m_rainDropsPSO) {
     pushCB();
     cmd.transition(*src, rhi::ResourceState::RenderTarget);
     cmd.transition(depthColor, rhi::ResourceState::ShaderResource);
@@ -712,16 +731,15 @@ rhi::Texture* RainSystem::executePost(rhi::CommandList& cmd, rhi::Device& device
     rhi::Texture* rt = src;
     cmd.setRenderTargets(std::span<rhi::Texture*>(&rt, 1), nullptr);
     cmd.setRootSignature(*m_rootFS);
-    cmd.setGraphicsRootCBV(1, rainCB);
     rhi::Texture& weatherTex = m_weatherMap ? *m_weatherMap : m_moisture->resource();
-    D3D12_CPU_DESCRIPTOR_HANDLE psrv[13] = {};
-    for (int i = 0; i < 13; ++i) {
-      psrv[i] = dxTex(depthColor).srvCpu;
-    }
-    psrv[2] = dxTex(*m_rainSpaceDepth).srvCpu;      // src1Tex → ground collision
-    psrv[5] = dxTex(m_rainSpatter->resource()).srvCpu;
-    psrv[12] = dxTex(weatherTex).srvCpu;
-    cmd.setGraphicsRootSrvTable(3, dx.writeSrvTable(psrv, 13));
+    rhi::Texture* psrv[14] = {};
+    psrv[0] = &depthColor;
+    psrv[2] = m_rainSpaceDepth.get();
+    psrv[5] = &m_rainSpatter->resource();
+    psrv[12] = &weatherTex;
+    patchRainIds(rainCB, psrv);
+    cmd.setGraphicsRootCBV(1, rainCB);
+    cmd.setGraphicsRootSrvTable(3, 0);
     cmd.setGraphicsRootSamplerTable(4, sampTable);
     cmd.setViewport({0, 0, float(width), float(height), 0, 1});
     cmd.setScissor({0, 0, int(width), int(height)});

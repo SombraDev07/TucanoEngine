@@ -4,6 +4,7 @@
 #include <d3d12sdklayers.h>
 
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -15,7 +16,7 @@ UINT calcSubresource(UINT mip, UINT item, UINT plane, UINT mipLevels, UINT array
 
 namespace tucano::rhi {
 
-std::unique_ptr<Device> Device::create(bool enableDebugLayer) {
+std::unique_ptr<Device> createDX12Device(bool enableDebugLayer) {
   return std::make_unique<DX12Device>(enableDebugLayer);
 }
 
@@ -1189,6 +1190,61 @@ uint32_t DX12Device::writeUavTable(const D3D12_CPU_DESCRIPTOR_HANDLE* srcCpu, ui
   return writeSrvTable(srcCpu, count);
 }
 
+namespace {
+// A resource with no view of the requested kind falls back to the heap's null descriptor rather
+// than to garbage: createHeaps() initialises every slot to a valid null SRV precisely so an
+// unbound entry in an unbounded table is legal under Tier-1 rules.
+D3D12_CPU_DESCRIPTOR_HANDLE viewCpuHandle(const ResourceView& view, D3D12_CPU_DESCRIPTOR_HANDLE nullSrv) {
+  switch (view.kind) {
+    case ResourceView::Kind::TextureSrv: {
+      auto* t = static_cast<DX12Texture*>(view.texture);
+      return (t && t->hasSrv) ? t->srvCpu : nullSrv;
+    }
+    case ResourceView::Kind::TextureUav: {
+      auto* t = static_cast<DX12Texture*>(view.texture);
+      return (t && t->hasUav) ? t->uavCpu : nullSrv;
+    }
+    case ResourceView::Kind::BufferSrv: {
+      auto* b = static_cast<DX12Buffer*>(view.buffer);
+      return (b && b->hasSrv) ? b->srvCpu : nullSrv;
+    }
+    case ResourceView::Kind::BufferUav: {
+      auto* b = static_cast<DX12Buffer*>(view.buffer);
+      return (b && b->hasUav) ? b->uavCpu : nullSrv;
+    }
+  }
+  return nullSrv;
+}
+} // namespace
+
+uint32_t DX12Device::writeResourceTable(std::span<const ResourceView> views) {
+  const uint32_t count = static_cast<uint32_t>(std::min(views.size(), kMaxTransientTableEntries));
+  if (count == 0) {
+    return 0;
+  }
+  const D3D12_CPU_DESCRIPTOR_HANDLE nullSrv = m_srvHeap.cpuHandle(0);
+  D3D12_CPU_DESCRIPTOR_HANDLE handles[kMaxTransientTableEntries]{};
+  for (uint32_t i = 0; i < count; ++i) {
+    handles[i] = viewCpuHandle(views[i], nullSrv);
+  }
+  return writeSrvTable(handles, count);
+}
+
+uint32_t DX12Device::writeSamplerTable(std::span<Sampler* const> samplers) {
+  const D3D12_CPU_DESCRIPTOR_HANDLE nullSamp = m_samplerHeap.cpuHandle(0);
+  D3D12_CPU_DESCRIPTOR_HANDLE handles[kMaxTransientTableEntries]{};
+  const uint32_t count = static_cast<uint32_t>(std::min(samplers.size(), kMaxTransientTableEntries));
+  for (uint32_t i = 0; i < count; ++i) {
+    auto* s = static_cast<DX12Sampler*>(samplers[i]);
+    handles[i] = s ? s->cpu : nullSamp;
+  }
+  if (count == 0) {
+    handles[0] = nullSamp;
+    return writeSamplerTable(handles, 1);
+  }
+  return writeSamplerTable(handles, count);
+}
+
 ID3D12CommandSignature* DX12Device::drawIndexedIndirectSig() {
   if (!m_drawIndexedIndirectSig) {
     D3D12_INDIRECT_ARGUMENT_DESC arg{};
@@ -1247,6 +1303,21 @@ std::shared_ptr<Buffer> DX12Device::createAccelerationStructureBuffer(uint64_t s
   desc.usage = BufferUsage::UnorderedAccess | BufferUsage::AccelerationStructure;
   desc.debugName = debugName.empty() ? "ASBuffer" : debugName;
   return createBuffer(desc, nullptr);
+}
+
+void DX12Device::writeRaytracingInstanceDescs(std::span<const TlasInstance> instances, void* dst) {
+  auto* out = static_cast<D3D12_RAYTRACING_INSTANCE_DESC*>(dst);
+  for (size_t i = 0; i < instances.size(); ++i) {
+    const TlasInstance& in = instances[i];
+    D3D12_RAYTRACING_INSTANCE_DESC desc{};
+    std::memcpy(desc.Transform, in.transform, sizeof(desc.Transform));
+    desc.InstanceID = in.instanceId & 0xFFFFFFu;
+    desc.InstanceMask = in.mask;
+    desc.InstanceContributionToHitGroupIndex = 0;
+    desc.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
+    desc.AccelerationStructure = in.blas ? static_cast<DX12Buffer*>(in.blas)->gpuAddress : 0;
+    out[i] = desc;
+  }
 }
 
 uint32_t DX12Device::createAccelerationStructureSrv(Buffer& asBuffer) {

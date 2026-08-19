@@ -47,11 +47,14 @@ public:
                             rhi::Texture* ssr = nullptr);
 
 private:
+  static constexpr int kRippleCount = 24;
+
   void loadTextures(rhi::Device& device);
   void buildRainMesh(rhi::Device& device);
   void updateCB(rhi::Buffer& rainCB, const glm::mat4& invViewProj, const glm::mat4& viewProj,
                 const glm::mat4& view, const glm::mat4& rainOccVP, const glm::vec3& cameraPos,
                 float timeSeconds, uint32_t width, uint32_t height, float amountScale);
+  rhi::Texture* rippleFrame(float frame) const;
   void renderOccluderMap(rhi::CommandList& cmd, rhi::Device& device, Scene& scene, const glm::vec3& cameraPos,
                          const glm::vec2& wind);
   void runOcclusion(rhi::CommandList& cmd, rhi::Device& device, rhi::Texture& depthColor, rhi::Buffer& rainCB,
@@ -79,7 +82,7 @@ private:
   std::shared_ptr<Texture> m_rainfall;
   std::shared_ptr<Texture> m_rainfallN;
   std::shared_ptr<Texture> m_moisture;
-  std::shared_ptr<rhi::Texture> m_ripples;
+  std::shared_ptr<Texture> m_rippleFrames[kRippleCount];
 
   std::shared_ptr<rhi::Texture> m_albedoCopy;
   std::shared_ptr<rhi::Texture> m_normalCopy;
@@ -109,7 +112,6 @@ private:
   float m_dt = 0.0f;
   bool m_wetFlip = false;
   bool m_ready = false;
-  static constexpr int kRippleCount = 24;
   static constexpr int kSlices = 12;
   static constexpr uint32_t kOccSize = 512;
   static constexpr uint32_t kWetnessSize = 512;

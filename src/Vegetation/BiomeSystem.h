@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <algorithm>
 #include <functional>
+#include <memory>
 #include <random>
 #include <string>
 #include <unordered_map>

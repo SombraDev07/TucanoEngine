@@ -14,6 +14,9 @@
 #include "Renderer/Renderer.h"
 #include "Runtime/DebugUI.h"
 #include "Runtime/Screenshot.h"
+#include "RHI/RHIBackend.h"
+#include "Editor/SystemDialogs.h"
+#include "Editor/UI/Notifications.h"
 
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -90,7 +93,14 @@ int main(int argc, char** argv) {
 		ctx.settings = &renderer->settings();
 		ctx.camera = &scene.camera;
 		ctx.logInfo("Tucano Editor started.");
+#if TUCANO_RHI_VULKAN
+		ctx.logInfo("Renderer: Vulkan, " + std::to_string(window.width()) + "x" + std::to_string(window.height()));
+		if (maxFrames < 0) {
+			std::cerr << "[TestEditor] WARNING: unbounded Vulkan run. Prefer --frames N.\n";
+		}
+#else
 		ctx.logInfo("Renderer: Direct3D 12, " + std::to_string(window.width()) + "x" + std::to_string(window.height()));
+#endif
 
 		editor::OutlinerPanel outliner;
 		editor::InspectorPanel inspector;
@@ -102,9 +112,32 @@ int main(int argc, char** argv) {
 	// editor::AnimationPanel animation;  // FIXME: crash on startup
 
 		shell.onNewScene = [&]() { ctx.logInfo("New Scene (not implemented)."); };
-		shell.onOpenScene = [&]() { ctx.logInfo("Open Scene (not implemented)."); };
-		shell.onSaveScene = [&]() { ctx.logInfo("Save Scene (not implemented)."); };
-		shell.onImportAsset = [&]() { ctx.logInfo("Import Asset (not implemented)."); };
+		shell.onOpenScene = [&]() {
+			const std::string path =
+			    editor::openFileDialog("Open Scene", {{"Scenes", "*.gltf;*.glb;*.scn;*.tuscene"}});
+			if (path.empty()) {
+				editor::ui::notifyInfo("Open cancelled.");
+			} else {
+				ctx.logInfo("Selected: " + path);
+				editor::ui::notifySuccess("Selected: %s", path.c_str());
+			}
+		};
+		shell.onSaveScene = [&]() {
+			const std::string path =
+			    editor::saveFileDialog("Save Scene", {{"Scenes", "*.tuscene"}}, "Untitled.tuscene");
+			if (!path.empty()) {
+				ctx.logInfo("Would save to: " + path);
+				editor::ui::notifySuccess("Would save to: %s", path.c_str());
+			}
+		};
+		shell.onImportAsset = [&]() {
+			const std::vector<std::string> paths = editor::openFilesDialog(
+			    "Import Assets", {{"Models", "*.gltf;*.glb;*.fbx"}, {"Textures", "*.png;*.dds;*.exr"}});
+			if (!paths.empty()) {
+				ctx.logInfo("Selected " + std::to_string(paths.size()) + " asset(s)");
+				editor::ui::notifySuccess("%zu asset(s) selected", paths.size());
+			}
+		};
 
 		// ── TDR recovery ──
 		device->setDeviceLostCallback([&]() {
@@ -149,6 +182,8 @@ int main(int argc, char** argv) {
 
 			window.pollEvents();
 			input.beginFrame();
+			ctx.frameMs = renderer->lastFrameMs();
+			ctx.drawCalls = renderer->drawCalls();
 			ui.beginFrame();
 
 			// ── Editor UI ──
@@ -187,6 +222,7 @@ int main(int argc, char** argv) {
 			*/
 
 			shell.endFrame();
+			editor::ui::drawNotifications();
 
 			// ── Viewport object picking ──
 			if (!ImGui::GetIO().WantCaptureMouse && !ui.gizmoHovered()) {

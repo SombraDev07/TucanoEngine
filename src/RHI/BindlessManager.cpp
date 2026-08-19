@@ -1,6 +1,7 @@
-#include "RHI/DX12/BindlessManager.h"
+#include "RHI/BindlessManager.h"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace tucano::rhi {
 

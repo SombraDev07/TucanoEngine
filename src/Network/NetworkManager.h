@@ -1,7 +1,19 @@
 #pragma once
 
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+#else
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+using SOCKET = int;
+inline constexpr SOCKET INVALID_SOCKET = -1;
+inline int closesocket(SOCKET s) { return ::close(s); }
+#endif
 
 #include <functional>
 #include <string>
@@ -12,8 +24,8 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
-
-#pragma comment(lib, "ws2_32.lib")
+#include <chrono>
+#include <cstring>
 
 namespace tucano::net {
 
@@ -105,7 +117,9 @@ public:
 		if (m_sendThread.joinable()) m_sendThread.join();
 		if (m_recvThread.joinable()) m_recvThread.join();
 		if (m_socket != INVALID_SOCKET) { closesocket(m_socket); m_socket = INVALID_SOCKET; }
+#ifdef _WIN32
 		WSACleanup();
+#endif
 		m_clients.clear();
 	}
 
@@ -164,14 +178,21 @@ private:
 	enum class Mode { None, Server, Client };
 
 	bool initSocket() {
+#ifdef _WIN32
 		WSADATA wsa;
 		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+#endif
 
 		m_socket = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 		if (m_socket == INVALID_SOCKET) return false;
 
+#ifdef _WIN32
 		u_long mode = 1;
 		ioctlsocket(m_socket, FIONBIO, &mode);
+#else
+		const int flags = fcntl(m_socket, F_GETFL, 0);
+		fcntl(m_socket, F_SETFL, flags | O_NONBLOCK);
+#endif
 
 		sockaddr_in addr{};
 		addr.sin_family = AF_INET;
@@ -270,8 +291,13 @@ private:
 		uint8_t buf[4096];
 		while (m_running) {
 			sockaddr_in from{};
+#ifdef _WIN32
 			int fromLen = sizeof(from);
 			int bytes = recvfrom(m_socket, (char*)buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen);
+#else
+			socklen_t fromLen = sizeof(from);
+			int bytes = static_cast<int>(recvfrom(m_socket, buf, sizeof(buf), 0, (sockaddr*)&from, &fromLen));
+#endif
 			if (bytes <= 0) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); continue; }
 
 			if (bytes < (int)sizeof(PacketHeader)) continue;

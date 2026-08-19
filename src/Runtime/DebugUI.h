@@ -65,10 +65,12 @@ public:
 
 private:
   bool m_ready = false;
-  void* m_srvHeap = nullptr; // ID3D12DescriptorHeap*
+  void* m_srvHeap = nullptr; // ID3D12DescriptorHeap* (DX12) or unused (Vulkan)
+  void* m_sceneSampler = nullptr; // VkSampler for ImGui::Image of the viewport
   uint64_t m_fence = 0;
   // Slot 0 of the heap is the font atlas; the scene rotates through the ones after it.
   uint32_t m_sceneSlotCursor = 0;
+  uint64_t m_sceneSets[4]{}; // VkDescriptorSet, one per in-flight frame
 };
 
 } // namespace tucano

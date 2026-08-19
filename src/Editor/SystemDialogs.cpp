@@ -1,5 +1,6 @@
 #include "Editor/SystemDialogs.h"
 
+#ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
@@ -219,3 +220,281 @@ void showErrorBox(const char* title, const char* message) {
 }
 
 } // namespace tucano::editor
+
+#else
+
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <sstream>
+#include <sys/wait.h>
+
+namespace tucano::editor {
+namespace {
+
+std::string shellQuote(const std::string& s) {
+	std::string out = "'";
+	for (char c : s) {
+		if (c == '\'') {
+			out += "'\\''";
+		} else {
+			out += c;
+		}
+	}
+	out += "'";
+	return out;
+}
+
+std::string trimTrailingNewlines(std::string s) {
+	while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) {
+		s.pop_back();
+	}
+	return s;
+}
+
+std::string runProcess(const std::string& cmd, int& exitCode) {
+	FILE* pipe = popen(cmd.c_str(), "r");
+	if (!pipe) {
+		exitCode = -1;
+		return {};
+	}
+	std::string out;
+	char buf[4096];
+	while (fgets(buf, sizeof(buf), pipe) != nullptr) {
+		out += buf;
+	}
+	const int status = pclose(pipe);
+	if (status == -1) {
+		exitCode = -1;
+	} else if (WIFEXITED(status)) {
+		exitCode = WEXITSTATUS(status);
+	} else {
+		exitCode = -1;
+	}
+	return trimTrailingNewlines(std::move(out));
+}
+
+std::string which(const char* name) {
+	int code = 0;
+	const std::string path = runProcess(std::string("command -v ") + name + " 2>/dev/null", code);
+	return code == 0 ? path : std::string{};
+}
+
+enum class DialogTool { None, Zenity, Kdialog };
+
+DialogTool detectTool() {
+	static DialogTool tool = DialogTool::None;
+	static bool once = false;
+	if (once) {
+		return tool;
+	}
+	once = true;
+	if (!which("zenity").empty()) {
+		tool = DialogTool::Zenity;
+	} else if (!which("kdialog").empty()) {
+		tool = DialogTool::Kdialog;
+	} else {
+		std::cerr << "[SystemDialogs] neither zenity nor kdialog found; File dialogs return cancel\n";
+	}
+	return tool;
+}
+
+std::string patternsAsSpaces(const char* pattern) {
+	std::string p = pattern != nullptr ? pattern : "*.*";
+	for (char& c : p) {
+		if (c == ';') {
+			c = ' ';
+		}
+	}
+	return p;
+}
+
+std::string firstExtension(const std::vector<FileFilter>& filters) {
+	if (filters.empty() || filters.front().pattern == nullptr) {
+		return {};
+	}
+	const std::string pattern = filters.front().pattern;
+	const size_t dot = pattern.find('.');
+	if (dot == std::string::npos) {
+		return {};
+	}
+	const size_t end = pattern.find(';', dot);
+	return pattern.substr(dot, end == std::string::npos ? std::string::npos : end - dot);
+}
+
+std::string appendDefaultExtension(std::string path, const std::vector<FileFilter>& filters) {
+	if (path.empty()) {
+		return path;
+	}
+	const std::string ext = firstExtension(filters);
+	if (ext.empty() || ext == ".*") {
+		return path;
+	}
+	const size_t slash = path.find_last_of('/');
+	const size_t name = slash == std::string::npos ? 0 : slash + 1;
+	if (path.find('.', name) == std::string::npos) {
+		path += ext;
+	}
+	return path;
+}
+
+std::vector<std::string> splitLines(const std::string& s) {
+	std::vector<std::string> out;
+	std::string line;
+	std::istringstream in(s);
+	while (std::getline(in, line)) {
+		line = trimTrailingNewlines(std::move(line));
+		if (!line.empty()) {
+			out.push_back(std::move(line));
+		}
+	}
+	return out;
+}
+
+std::string zenityFilters(const std::vector<FileFilter>& filters) {
+	std::string args;
+	for (const FileFilter& f : filters) {
+		const std::string label = f.label != nullptr ? f.label : "Files";
+		args += " --file-filter=" + shellQuote(label + " | " + patternsAsSpaces(f.pattern));
+	}
+	args += " --file-filter=" + shellQuote("All files | *");
+	return args;
+}
+
+std::string kdialogFilter(const std::vector<FileFilter>& filters) {
+	if (filters.empty()) {
+		return shellQuote("*|All files");
+	}
+	std::string spec;
+	for (size_t i = 0; i < filters.size(); ++i) {
+		if (i > 0) {
+			spec += '\n';
+		}
+		const std::string label = filters[i].label != nullptr ? filters[i].label : "Files";
+		spec += patternsAsSpaces(filters[i].pattern);
+		spec += '|';
+		spec += label;
+	}
+	spec += "\n*|All files";
+	return shellQuote(spec);
+}
+
+std::string startFilename(const std::string& startDirectory, const std::string& defaultName, bool directoryHint) {
+	if (!defaultName.empty()) {
+		if (!startDirectory.empty()) {
+			return startDirectory.back() == '/' ? startDirectory + defaultName : startDirectory + "/" + defaultName;
+		}
+		return defaultName;
+	}
+	if (startDirectory.empty()) {
+		return {};
+	}
+	if (directoryHint && startDirectory.back() != '/') {
+		return startDirectory + "/";
+	}
+	return startDirectory;
+}
+
+std::vector<std::string> runOpen(const char* title, const std::vector<FileFilter>& filters,
+                                 const std::string& startDirectory, bool allowMultiple, bool foldersOnly) {
+	const DialogTool tool = detectTool();
+	const std::string titleArg = title != nullptr ? title : "Open";
+	int code = 0;
+	std::string out;
+	if (tool == DialogTool::Zenity) {
+		std::string cmd = "zenity --file-selection --title=" + shellQuote(titleArg);
+		const std::string start = startFilename(startDirectory, {}, true);
+		if (!start.empty()) {
+			cmd += " --filename=" + shellQuote(start);
+		}
+		if (foldersOnly) {
+			cmd += " --directory";
+		} else {
+			cmd += zenityFilters(filters);
+		}
+		if (allowMultiple) {
+			cmd += " --multiple --separator='\n'";
+		}
+		out = runProcess(cmd, code);
+	} else if (tool == DialogTool::Kdialog) {
+		std::string cmd = "kdialog --title=" + shellQuote(titleArg);
+		const std::string start = startDirectory.empty() ? std::string(".") : startDirectory;
+		if (foldersOnly) {
+			cmd += " --getexistingdirectory " + shellQuote(start);
+		} else {
+			cmd += " --getopenfilename " + shellQuote(start) + " " + kdialogFilter(filters);
+			if (allowMultiple) {
+				cmd += " --multiple --separate-output";
+			}
+		}
+		out = runProcess(cmd, code);
+	}
+	if (code != 0 || out.empty()) {
+		return {};
+	}
+	return allowMultiple ? splitLines(out) : std::vector<std::string>{out};
+}
+
+} // namespace
+
+std::string openFileDialog(const char* title, const std::vector<FileFilter>& filters,
+                           const std::string& startDirectory) {
+	const std::vector<std::string> paths = runOpen(title, filters, startDirectory, false, false);
+	return paths.empty() ? std::string{} : paths.front();
+}
+
+std::vector<std::string> openFilesDialog(const char* title, const std::vector<FileFilter>& filters,
+                                         const std::string& startDirectory) {
+	return runOpen(title, filters, startDirectory, true, false);
+}
+
+std::string pickFolderDialog(const char* title, const std::string& startDirectory) {
+	const std::vector<std::string> paths = runOpen(title, {}, startDirectory, false, true);
+	return paths.empty() ? std::string{} : paths.front();
+}
+
+std::string saveFileDialog(const char* title, const std::vector<FileFilter>& filters,
+                           const std::string& defaultName, const std::string& startDirectory) {
+	const DialogTool tool = detectTool();
+	const std::string titleArg = title != nullptr ? title : "Save";
+	int code = 0;
+	std::string out;
+	if (tool == DialogTool::Zenity) {
+		std::string cmd = "zenity --file-selection --save --confirm-overwrite --title=" + shellQuote(titleArg);
+		const std::string start = startFilename(startDirectory, defaultName, true);
+		if (!start.empty()) {
+			cmd += " --filename=" + shellQuote(start);
+		}
+		cmd += zenityFilters(filters);
+		out = runProcess(cmd, code);
+	} else if (tool == DialogTool::Kdialog) {
+		const std::string start = startFilename(startDirectory, defaultName.empty() ? std::string("Untitled") : defaultName, false);
+		std::string cmd = "kdialog --title=" + shellQuote(titleArg) + " --getsavefilename " +
+		                  shellQuote(start.empty() ? "." : start) + " " + kdialogFilter(filters);
+		out = runProcess(cmd, code);
+	}
+	if (code != 0 || out.empty()) {
+		return {};
+	}
+	return appendDefaultExtension(out, filters);
+}
+
+void showErrorBox(const char* title, const char* message) {
+	const DialogTool tool = detectTool();
+	const std::string titleArg = title != nullptr ? title : "Error";
+	const std::string msg = message != nullptr ? message : "";
+	int code = 0;
+	if (tool == DialogTool::Zenity) {
+		runProcess("zenity --error --title=" + shellQuote(titleArg) + " --text=" + shellQuote(msg), code);
+		return;
+	}
+	if (tool == DialogTool::Kdialog) {
+		runProcess("kdialog --title=" + shellQuote(titleArg) + " --error " + shellQuote(msg), code);
+		return;
+	}
+	std::cerr << '[' << titleArg << "] " << msg << std::endl;
+}
+
+} // namespace tucano::editor
+
+#endif // _WIN32

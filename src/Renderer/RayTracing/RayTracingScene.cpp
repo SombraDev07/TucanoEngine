@@ -1,6 +1,4 @@
 #include "Renderer/RayTracing/RayTracingScene.h"
-#include "RHI/DX12/DX12Common.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -10,7 +8,7 @@ namespace tucano {
 namespace {
 
 void writeInstanceTransform(float out[3][4], const glm::mat4& world) {
-  // D3D12 wants row-major 3x4; glm is column-major.
+  // Acceleration structures want a row-major 3x4; glm is column-major.
   for (int r = 0; r < 3; ++r) {
     for (int c = 0; c < 4; ++c) {
       out[r][c] = world[c][r];
@@ -93,7 +91,7 @@ bool RayTracingScene::ensureBlas(rhi::Device& device, rhi::CommandList& cmd, Mes
 }
 
 void RayTracingScene::rebuildTlas(rhi::Device& device, rhi::CommandList& cmd, Scene& scene) {
-  std::vector<D3D12_RAYTRACING_INSTANCE_DESC> instances;
+  std::vector<rhi::TlasInstance> instances;
   instances.reserve(scene.objects.size());
 
   for (size_t i = 0; i < scene.objects.size(); ++i) {
@@ -105,14 +103,12 @@ void RayTracingScene::rebuildTlas(rhi::Device& device, rhi::CommandList& cmd, Sc
     if (it == m_blas.end() || !it->second.blas) {
       continue;
     }
-    D3D12_RAYTRACING_INSTANCE_DESC desc{};
-    writeInstanceTransform(desc.Transform, obj.worldMatrix);
-    desc.InstanceID = static_cast<UINT>(i) & 0xFFFFFFu;
-    desc.InstanceMask = 0xFF;
-    desc.InstanceContributionToHitGroupIndex = 0;
-    desc.Flags = D3D12_RAYTRACING_INSTANCE_FLAG_TRIANGLE_CULL_DISABLE;
-    desc.AccelerationStructure = static_cast<rhi::DX12Buffer&>(*it->second.blas).gpuAddress;
-    instances.push_back(desc);
+    rhi::TlasInstance inst{};
+    writeInstanceTransform(inst.transform, obj.worldMatrix);
+    inst.instanceId = static_cast<uint32_t>(i);
+    inst.mask = 0xFF;
+    inst.blas = it->second.blas.get();
+    instances.push_back(inst);
   }
 
   m_instanceCount = static_cast<uint32_t>(instances.size());
@@ -129,7 +125,7 @@ void RayTracingScene::rebuildTlas(rhi::Device& device, rhi::CommandList& cmd, Sc
     return;
   }
 
-  const uint64_t instBytes = sizeof(D3D12_RAYTRACING_INSTANCE_DESC) * m_instanceCount;
+  const uint64_t instBytes = uint64_t(device.raytracingInstanceDescSize()) * m_instanceCount;
   if (!m_instanceDescs || m_instanceDescs->size() < instBytes) {
     rhi::BufferDesc bd{};
     bd.size = instBytes;
@@ -137,7 +133,7 @@ void RayTracingScene::rebuildTlas(rhi::Device& device, rhi::CommandList& cmd, Sc
     bd.debugName = "TLASInstances";
     m_instanceDescs = device.createBuffer(bd, nullptr);
   }
-  std::memcpy(m_instanceDescs->mapped(), instances.data(), static_cast<size_t>(instBytes));
+  device.writeRaytracingInstanceDescs(instances, m_instanceDescs->mapped());
 
   if (!m_tlas || m_tlas->size() < resultSize) {
     m_tlas = device.createAccelerationStructureBuffer(resultSize, "TLAS");

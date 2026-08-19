@@ -1,6 +1,4 @@
 #include "Renderer/PostFX/BloomPass.h"
-#include "RHI/DX12/DX12Device.h"
-#include "RHI/DX12/DX12Resource.h"
 
 #include <algorithm>
 #include <cstring>
@@ -9,7 +7,6 @@
 namespace tucano {
 namespace {
 
-::tucano::rhi::DX12Sampler& asDxS(rhi::Sampler& s) { return static_cast<::tucano::rhi::DX12Sampler&>(s); }
 uint32_t bindlessOf(rhi::Texture& t) { return t.bindlessIndex(); }
 
 struct PostCB {
@@ -49,9 +46,8 @@ void drawFS(BloomPassContext& ctx, uint32_t sampTable, rhi::PipelineState& pso, 
 } // namespace
 
 void executeBloomPass(BloomPassContext& ctx) {
-  auto& dx = static_cast<rhi::DX12Device&>(ctx.device);
-  D3D12_CPU_DESCRIPTOR_HANDLE sampCpu[] = {asDxS(ctx.linearSamp).cpu};
-  const uint32_t sampTable = dx.writeSamplerTable(sampCpu, 1);
+  rhi::Sampler* samplers[] = {&ctx.linearSamp};
+  const uint32_t sampTable = ctx.device.writeSamplerTable(samplers);
   const uint32_t levels = std::min(ctx.levels, static_cast<uint32_t>(ctx.mips.size()));
 
   ctx.cmd.setRootSignature(ctx.rootFS);

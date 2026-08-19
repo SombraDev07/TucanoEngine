@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>

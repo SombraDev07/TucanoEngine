@@ -35,7 +35,5 @@ D3D12_CULL_MODE toD3D(CullMode mode);
 D3D12_COMPARISON_FUNC toD3D(CompareOp op);
 D3D12_PRIMITIVE_TOPOLOGY toD3D(PrimitiveTopology topology);
 D3D12_PRIMITIVE_TOPOLOGY_TYPE toD3DType(PrimitiveTopology topology);
-uint32_t formatStride(Format format);
-uint32_t formatRowPitch(Format format, uint32_t width);
 
 } // namespace tucano::rhi

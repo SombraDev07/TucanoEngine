@@ -19,11 +19,7 @@
 // Not for rendering: it draws nothing. See MASTER_ROADMAP.md Track A.
 // -----------------------------------------------------------------------------
 
-namespace tucano::rhi {
-
-// Factory mirroring Device::create(), but for the headless Null backend.
-// Kept separate from Device::create() so selecting the backend is an explicit
-// call site decision (later this becomes a RHIBackend enum passed to create()).
-std::unique_ptr<Device> createNullDevice();
-
-} // namespace tucano::rhi
+// createNullDevice() is declared in RHI/RHIBackend.h alongside the other backend factories, so a
+// caller that only wants the headless device does not have to pick it out of a backend header.
+// Device::create() returns it when the build selected TUCANO_RHI_NULL; Tools/RHITest calls it
+// directly in every build.

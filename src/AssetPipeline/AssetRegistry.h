@@ -59,7 +59,11 @@ public:
 	};
 
 	// Returns how many entries the registry holds afterwards.
-	size_t scanProject(const std::string& rootDir, const ScanOptions& options = {});
+	size_t scanProject(const std::string& rootDir) {
+		ScanOptions options;
+		return scanProject(rootDir, options);
+	}
+	size_t scanProject(const std::string& rootDir, const ScanOptions& options);
 
 	// Entries of one kind, for a picker that only wants meshes.
 	std::vector<const RegistryEntry*> byType(AssetType type) const;

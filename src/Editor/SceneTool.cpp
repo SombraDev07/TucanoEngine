@@ -492,7 +492,7 @@ asset::AssetGuid SceneTool::importTexture(const std::string& sourcePath) {
 	std::filesystem::path target = source;
 	const std::filesystem::path root(m_assetRoot);
 	const std::filesystem::path relative = std::filesystem::relative(source, root, ec);
-	const bool inside = !ec && !relative.empty() && relative.native().rfind(L"..", 0) != 0;
+	const bool inside = !ec && !relative.empty() && relative.generic_string().rfind("..", 0) != 0;
 	if (!inside) {
 		const std::filesystem::path folder = root / "Textures";
 		std::filesystem::create_directories(folder, ec);

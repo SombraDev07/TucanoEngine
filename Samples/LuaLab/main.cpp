@@ -13,7 +13,6 @@
 #include "Vegetation/VegetationInteraction.h"
 #include "Vegetation/VegetationEditor.h"
 #include "Vegetation/LODManager.h"
-#include "RHI/DX12/DX12Device.h"
 
 #include <GLFW/glfw3.h>
 #include <iostream>
